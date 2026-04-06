@@ -221,39 +221,39 @@ def _render_screen_assumptions() -> None:
 
     c3, c4 = st.columns(2)
     c3.number_input("Gross Building Area (SF)", min_value=0.0, step=100.0, format="%.0f", key="gba_sf")
-    c4.number_input("Year Built", min_value=1800, max_value=2030, step=1, key="year_built", value=1960)
+    c4.number_input("Year Built", min_value=1800, max_value=2030, step=1, key="year_built")
 
     # ── Hold & Financing ──────────────────────────────────────────
     st.subheader("Hold Period & Financing")
     c5, c6, c7 = st.columns(3)
-    c5.number_input("Hold Period (years)", min_value=1, max_value=30, step=1, key="hold_period", value=10)
-    c6.number_input("LTV %", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="ltv_pct", value=0.70)
-    c7.number_input("Interest Rate %", min_value=0.0, max_value=1.0, step=0.001, format="%.4f", key="interest_rate", value=0.065)
+    c5.number_input("Hold Period (years)", min_value=1, max_value=30, step=1, key="hold_period")
+    c6.number_input("LTV %", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="ltv_pct")
+    c7.number_input("Interest Rate %", min_value=0.0, max_value=1.0, step=0.001, format="%.4f", key="interest_rate")
 
     c8, c9 = st.columns(2)
-    c8.number_input("Amortization (years)", min_value=0, max_value=40, step=1, key="amort_years", value=30)
-    c9.number_input("Target LP IRR %", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="target_lp_irr", value=0.15)
+    c8.number_input("Amortization (years)", min_value=0, max_value=40, step=1, key="amort_years")
+    c9.number_input("Target LP IRR %", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="target_lp_irr")
 
     # ── Income & Growth ───────────────────────────────────────────
     st.subheader("Income & Growth")
     c10, c11 = st.columns(2)
     c10.number_input("Monthly Gross Rent — Year 1 ($)", min_value=0.0, step=500.0, format="%.2f", key="monthly_gross_rent")
-    c11.number_input("Vacancy Rate %", min_value=0.0, max_value=1.0, step=0.005, format="%.3f", key="vacancy_rate", value=0.075)
+    c11.number_input("Vacancy Rate %", min_value=0.0, max_value=1.0, step=0.005, format="%.3f", key="vacancy_rate")
 
     c12, c13 = st.columns(2)
-    c12.number_input("Annual Rent Growth %", min_value=0.0, max_value=1.0, step=0.005, format="%.3f", key="annual_rent_growth", value=0.03)
-    c13.number_input("Expense Growth %", min_value=0.0, max_value=1.0, step=0.005, format="%.3f", key="expense_growth_rate", value=0.03)
+    c12.number_input("Annual Rent Growth %", min_value=0.0, max_value=1.0, step=0.005, format="%.3f", key="annual_rent_growth")
+    c13.number_input("Expense Growth %", min_value=0.0, max_value=1.0, step=0.005, format="%.3f", key="expense_growth_rate")
 
     # ── Expenses ──────────────────────────────────────────────────
     st.subheader("Operating Expenses")
     c14, c15, c16 = st.columns(3)
-    c14.number_input("Management Fee %", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="mgmt_fee_pct", value=0.06)
-    c15.number_input("RE Taxes (annual $)", min_value=0.0, step=1000.0, format="%.2f", key="re_taxes", value=45000.0)
-    c16.number_input("Insurance (annual $)", min_value=0.0, step=500.0, format="%.2f", key="insurance", value=18000.0)
+    c14.number_input("Management Fee %", min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key="mgmt_fee_pct")
+    c15.number_input("RE Taxes (annual $)", min_value=0.0, step=1000.0, format="%.2f", key="re_taxes")
+    c16.number_input("Insurance (annual $)", min_value=0.0, step=500.0, format="%.2f", key="insurance")
 
     # ── Exit ──────────────────────────────────────────────────────
     st.subheader("Exit")
-    st.number_input("Exit Cap Rate %", min_value=0.0, max_value=1.0, step=0.005, format="%.3f", key="exit_cap_rate", value=0.07)
+    st.number_input("Exit Cap Rate %", min_value=0.0, max_value=1.0, step=0.005, format="%.3f", key="exit_cap_rate")
 
 
 # ── Session state defaults ───────────────────────────────────────────────
