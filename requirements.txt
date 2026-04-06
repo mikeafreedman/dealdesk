@@ -11,6 +11,7 @@ click==8.3.2
 colorama==0.4.6
 distro==1.9.0
 docstring_parser==0.17.0
+docxtpl==0.20.2
 et_xmlfile==2.0.0
 flatbuffers==25.12.19
 gitdb==4.0.12
@@ -44,8 +45,10 @@ pymupdf-layout==1.27.2.2
 pymupdf4llm==1.27.2.2
 python-dateutil==2.9.0.post0
 python-docx==1.2.0
+python-pptx==1.0.2
 PyYAML==6.0.3
 referencing==0.37.0
+reportlab==4.4.10
 requests==2.33.1
 rpds-py==0.30.0
 six==1.17.0
@@ -62,3 +65,4 @@ typing_extensions==4.15.0
 tzdata==2026.1
 urllib3==2.6.3
 watchdog==6.0.0
+xlsxwriter==3.2.9

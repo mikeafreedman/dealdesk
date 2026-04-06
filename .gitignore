@@ -1,6 +1,22 @@
+# Virtual environment
 venv/
+
+# Secrets — NEVER commit
 .streamlit/secrets.toml
+.env
+
+# Python compiled files
 __pycache__/
 *.pyc
-.env
+*.pyo
+
+# Generated deal outputs (PDFs, Excel, HTML reports)
+outputs/
 data/output/
+
+# Mac system files
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
