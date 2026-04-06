@@ -1,18 +1,49 @@
 import streamlit as st
+import subprocess
+import os
+import tempfile
 
-st.set_page_config(
-    page_title='Deal Desk — AUS',
-    page_icon='🏢',
-    layout='wide'
-)
+st.set_page_config(page_title='FP AUS — LibreOffice Test', layout='wide')
+st.title('LibreOffice Headless Compatibility Test')
+st.write('Upload a .docx file below. The system will convert it to PDF on the server.')
 
-st.title('Deal Desk')
-st.subheader('Automated Underwriting System')
-st.write('System is online. Ready for underwriting.')
+result = subprocess.run(['which', 'libreoffice'], capture_output=True, text=True)
+if result.returncode == 0:
+    st.success(f'LibreOffice found at: {result.stdout.strip()}')
+else:
+    st.error('LibreOffice NOT found. Check packages.txt is committed to GitHub.')
 
-# Test API key access
-try:
-    key = st.secrets['ANTHROPIC_API_KEY']
-    st.success(f'API key loaded. First 10 chars: {key[:10]}...')
-except Exception as e:
-    st.error(f'Could not load API key: {e}')
+ver = subprocess.run(['libreoffice', '--version'], capture_output=True, text=True)
+st.info(f'Version: {ver.stdout.strip()}')
+
+uploaded = st.file_uploader('Upload a .docx file to test conversion', type=['docx'])
+
+if uploaded is not None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, 'input.docx')
+        with open(input_path, 'wb') as f:
+            f.write(uploaded.read())
+
+        st.write('Running LibreOffice conversion...')
+        proc = subprocess.run(
+            ['libreoffice', '--headless', '--convert-to', 'pdf', input_path, '--outdir', tmpdir],
+            capture_output=True, text=True, timeout=60
+        )
+
+        st.write(f'Return code: {proc.returncode}')
+        st.write(f'STDOUT: {proc.stdout}')
+        if proc.stderr:
+            st.warning(f'STDERR: {proc.stderr}')
+
+        pdf_path = os.path.join(tmpdir, 'input.pdf')
+        if os.path.exists(pdf_path):
+            st.success('PDF conversion SUCCESSFUL!')
+            with open(pdf_path, 'rb') as f:
+                st.download_button(
+                    label='Download Converted PDF',
+                    data=f.read(),
+                    file_name='converted.pdf',
+                    mime='application/pdf'
+                )
+        else:
+            st.error('PDF file was NOT created. Conversion failed.')
