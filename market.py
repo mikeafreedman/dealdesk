@@ -3,22 +3,17 @@ market.py — Market Data & Zoning Analysis Module
 =================================================
 Enriches DealData with external market data, zoning analysis, and debt market context.
 
-Data sources (all free, no API keys except FRED):
-    1. Census ACS 5-Year  — demographics (population, income, renter %)
-    2. FRED               — DGS10, SOFR, MORTGAGE30US, CPIAUCSL
-    3. HUD FMR            — Fair Market Rents by ZIP
-    4. FEMA NFHL          — flood zone by lat/lon
-    5. EPA EnviroFacts    — environmental flags by ZIP
+Pipeline position: called after deal_data.py, before risk.py.
 
-Local data:
-    6. Municipal registry CSV — zoning code URL, chapter reference, code platform
-    7. Zoning code scrape   — HTML → text from municipal code URL
-
-AI prompts (FINAL_APPROVED_Prompt_Catalog_v4.md):
-    Prompt 3A — Zoning Parameter Extraction  (Haiku)
-    Prompt 3B — Buildable Capacity Analysis  (Sonnet)
-    Prompt 3C — Highest & Best Use Opinion   (Sonnet)
-    Prompt 5B — Debt Market Snapshot         (Sonnet)
+Steps run IN ORDER:
+    1. Municipal Registry Lookup  (local CSV via pandas)
+    2. Census Geocoder            (tract + Opportunity Zone)
+    3. Census ACS API             (demographics)
+    4. FRED API                   (interest rates)
+    5. Prompt 5B                  (Debt Market Snapshot Narrative — Sonnet)
+    6. HUD Fair Market Rents      (by county FIPS)
+    7. FEMA Flood Zone            (by lat/lon)
+    8–10. Zoning code scrape + Prompts 3A / 3B / 3C
 
 Every external call is wrapped in try/except — failures log warnings and
 return None, never crash the pipeline.
@@ -26,19 +21,21 @@ return None, never crash the pipeline.
 
 from __future__ import annotations
 
-import csv
 import json
 import logging
 import re
 from datetime import datetime
+from io import StringIO
 from typing import Any, Dict, List, Optional
 
 import anthropic
+import pandas as pd
 import requests
 import streamlit as st
 
 from config import (
     ANTHROPIC_SECRET_KEY,
+    HUD_API_KEY,
     MODEL_HAIKU,
     MODEL_SONNET,
     MUNICIPAL_REGISTRY_CSV,
@@ -51,86 +48,531 @@ _REQUEST_TIMEOUT = 30  # seconds for all HTTP calls
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 1. CENSUS ACS — Demographics
-# ════════════════════���═════════════════════════════��════════════════════════
+# US STATE FIPS MAPPING
+# ═══════════════════════════════════════════════════════════════════════════
 
-_CENSUS_BASE = "https://api.census.gov/data/2022/acs/acs5"
-
-# ACS variable codes
-_ACS_VARS = {
-    "B01003_001E": "total_population",
-    "B19013_001E": "median_hh_income",
-    "B25003_001E": "total_tenure",       # total occupied units
-    "B25003_003E": "renter_occupied",     # renter-occupied units
+STATE_FIPS = {
+    "AL": "01", "AK": "02", "AZ": "04", "AR": "05", "CA": "06",
+    "CO": "08", "CT": "09", "DE": "10", "DC": "11", "FL": "12",
+    "GA": "13", "HI": "15", "ID": "16", "IL": "17", "IN": "18",
+    "IA": "19", "KS": "20", "KY": "21", "LA": "22", "ME": "23",
+    "MD": "24", "MA": "25", "MI": "26", "MN": "27", "MS": "28",
+    "MO": "29", "MT": "30", "NE": "31", "NV": "32", "NH": "33",
+    "NJ": "34", "NM": "35", "NY": "36", "NC": "37", "ND": "38",
+    "OH": "39", "OK": "40", "OR": "41", "PA": "42", "RI": "44",
+    "SC": "45", "SD": "46", "TN": "47", "TX": "48", "UT": "49",
+    "VT": "50", "VA": "51", "WA": "53", "WV": "54", "WI": "55",
+    "WY": "56",
 }
 
+NEW_ENGLAND_STATES = {"CT", "MA", "RI"}
 
-def _fetch_census_tract(state_fips: str, county_fips: str, tract: str) -> Optional[Dict[str, Any]]:
-    """Fetch ACS demographics for a specific census tract."""
-    var_list = ",".join(_ACS_VARS.keys())
-    params = {
-        "get": f"NAME,{var_list}",
-        "for": f"tract:{tract}",
-        "in": f"state:{state_fips} county:{county_fips}",
-    }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NUMERIC HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _safe_int(val: Any) -> Optional[int]:
+    """Convert to int, returning None on failure or Census suppression codes."""
     try:
-        resp = requests.get(_CENSUS_BASE, params=params, timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        if len(data) < 2:
-            return None
-        header, row = data[0], data[1]
-        result = dict(zip(header, row))
-        return {
-            "population": _safe_int(result.get("B01003_001E")),
-            "median_hh_income": _safe_float(result.get("B19013_001E")),
-            "pct_renter_occupied": _pct_renter(
-                result.get("B25003_003E"), result.get("B25003_001E")
-            ),
-        }
-    except Exception as exc:
-        logger.warning("Census ACS fetch failed (tract %s): %s", tract, exc)
+        v = int(val)
+        return v if v >= 0 else None
+    except (TypeError, ValueError):
         return None
 
 
-def _fetch_census_by_zip(zip_code: str) -> Optional[Dict[str, Any]]:
-    """Fallback: fetch ACS demographics by ZCTA (ZIP Code Tabulation Area)."""
-    var_list = ",".join(_ACS_VARS.keys())
-    params = {
-        "get": f"NAME,{var_list}",
-        "for": f"zip code tabulation area:{zip_code}",
-    }
+def _safe_float(val: Any) -> Optional[float]:
+    """Convert to float, returning None on failure or missing indicators."""
+    if val is None or val == "." or val == "":
+        return None
     try:
-        resp = requests.get(_CENSUS_BASE, params=params, timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        if len(data) < 2:
-            return None
-        header, row = data[0], data[1]
-        result = dict(zip(header, row))
-        return {
-            "population": _safe_int(result.get("B01003_001E")),
-            "median_hh_income": _safe_float(result.get("B19013_001E")),
-            "pct_renter_occupied": _pct_renter(
-                result.get("B25003_003E"), result.get("B25003_001E")
-            ),
-        }
-    except Exception as exc:
-        logger.warning("Census ACS fetch failed (ZIP %s): %s", zip_code, exc)
+        v = float(val)
+        return v if v >= -999999 else None
+    except (TypeError, ValueError):
         return None
 
 
-def _pct_renter(renter: Any, total: Any) -> Optional[float]:
-    """Calculate renter percentage from raw Census values."""
-    r, t = _safe_float(renter), _safe_float(total)
-    if r is not None and t and t > 0:
-        return round(r / t, 4)
+def _fmt_rate(val: Optional[float]) -> str:
+    """Format a decimal rate as a percentage string for prompt injection, or 'data unavailable'."""
+    if val is None:
+        return "data unavailable"
+    return f"{val * 100:.2f}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NAME-MATCHING HELPERS (from registry_acs_enricher.py)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _clean_name(raw: str) -> str:
+    """Strip state/county suffix from Census name. 'Abington township, ...' -> 'abington township'"""
+    return re.sub(r",.*$", "", raw).strip().lower()
+
+
+def _norm(name: str) -> str:
+    """Strip common type suffixes for fuzzy name matching."""
+    n = str(name).lower().strip()
+    for suffix in [" township", " borough", " city", " town", " village",
+                   " county", " municipality", " cdp", " (balance)", " (pt.)"]:
+        if n.endswith(suffix):
+            return n[:-len(suffix)].strip()
+    return n
+
+
+def _match_acs(mname: str, mtype: str, state: str,
+               places: dict, subdivisions: dict) -> dict:
+    """
+    Tiered ACS lookup for a municipality name.
+    Mirrors the proven match logic from registry_acs_enricher.py.
+    Returns dict with keys from the ACS data dicts (any may be None).
+    """
+    empty = {k: None for k in ["population", "median_hh_income", "median_gross_rent",
+                                "owner_occupied", "renter_occupied",
+                                "unemployed", "labor_force", "fips_place"]}
+
+    name_lc = str(mname).lower().strip()
+    mtype_lc = str(mtype).lower() if mtype else ""
+    state_uc = str(state).upper().strip()
+
+    if "(unincorporated)" in name_lc:
+        name_lc = name_lc.replace("(unincorporated)", "").strip()
+
+    norm = _norm(name_lc)
+
+    # 1. Exact match in places
+    if name_lc in places:
+        return places[name_lc]
+
+    # 2. Township / town / borough / village -> subdivisions first
+    if any(t in mtype_lc for t in ["township", "town", "borough", "village"]):
+        for key in [name_lc, norm]:
+            if key in subdivisions:
+                return subdivisions[key]
+
+    # 3. New England towns (MA / CT / RI) — plain name against subdivisions
+    if state_uc in NEW_ENGLAND_STATES:
+        for key in [name_lc, norm, name_lc + " town", norm + " town"]:
+            if key in subdivisions:
+                return subdivisions[key]
+
+    # 4. Normalized name across both dicts
+    for lookup in [places, subdivisions]:
+        if norm in lookup:
+            return lookup[norm]
+
+    # 5. Partial match in places
+    for key, d in places.items():
+        if key.startswith(norm + " ") or key == norm:
+            return d
+
+    return empty
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 1 — MUNICIPAL REGISTRY LOOKUP
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _lookup_municipal_registry(deal: DealData) -> Optional[pd.Series]:
+    """
+    Load municipal_registry.csv and match by:
+      primary key:  fips_county
+      fallback key: municipality_name + state (case-insensitive exact match)
+
+    Returns the matched row as a pandas Series, or None.
+    """
+    try:
+        df = pd.read_csv(MUNICIPAL_REGISTRY_CSV, dtype=str)
+    except Exception as exc:
+        logger.warning("Failed to load municipal registry: %s", exc)
+        return None
+
+    fips_county = deal.address.fips_code
+    city = deal.address.city
+    state = deal.address.state
+
+    # Primary key: fips_county
+    if fips_county:
+        fips_match = df[df["fips_county"].str.strip() == fips_county.strip()]
+        if len(fips_match) > 0:
+            logger.info("Municipal registry: matched by fips_county=%s", fips_county)
+            return fips_match.iloc[0]
+
+    # Fallback: municipality_name + state (case-insensitive)
+    if city and state:
+        city_lower = city.strip().lower()
+        state_upper = state.strip().upper()
+        mask = (
+            df["municipality_name"].str.strip().str.lower() == city_lower
+        ) & (
+            df["state"].str.strip().str.upper() == state_upper
+        )
+        name_match = df[mask]
+        if len(name_match) > 0:
+            logger.info("Municipal registry: matched by name=%s, state=%s", city, state)
+            return name_match.iloc[0]
+
+    logger.warning("Municipal registry: no match for fips=%s, city=%s, state=%s",
+                    fips_county, city, state)
     return None
 
 
-# ══���═════════════════════════════════════════════════════��══════════════════
-# 2. FRED — Macro Rates
-# ════════���═════════════════════════════════════════��════════════════════════
+def _apply_registry(row: pd.Series, deal: DealData) -> None:
+    """Write matched registry fields to DealData."""
+
+    def _get(field: str) -> Optional[str]:
+        val = row.get(field)
+        if pd.isna(val) or str(val).strip() == "":
+            return None
+        return str(val).strip()
+
+    # Zoning URLs
+    deal.zoning.municipal_code_url = _get("zoning_chapter_url") or _get("code_base_url")
+    deal.zoning.zoning_code_chapter = _get("zoning_chapter_ref")
+
+    # Store additional registry fields in provenance for downstream use
+    prov = deal.provenance.field_sources
+    for field in ["code_platform", "code_base_url", "zoning_chapter_url",
+                  "assessor_url", "gis_parcel_url", "recorder_of_deeds_url",
+                  "tax_collector_url"]:
+        val = _get(field)
+        if val:
+            prov[field] = val
+
+    # Population (write to market_data if available)
+    pop = _safe_int(_get("population"))
+    if pop:
+        deal.market_data.population_3mi = pop
+        prov["population_source"] = "municipal_registry"
+
+    # Median household income
+    income = _safe_float(_get("median_household_income"))
+    if income:
+        deal.market_data.median_hh_income_3mi = income
+        prov["median_hh_income_source"] = "municipal_registry"
+
+    # Median gross rent — store in provenance (no direct model field)
+    rent = _safe_float(_get("median_gross_rent"))
+    if rent:
+        prov["median_gross_rent"] = str(rent)
+
+    # School district
+    sd = _get("school_district")
+    if sd:
+        prov["school_district"] = sd
+
+    # FIPS place
+    fp = _get("fips_place")
+    if fp:
+        prov["fips_place"] = fp
+
+    prov["municipal_registry"] = "matched"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 2 — CENSUS GEOCODER (tract + OZ lookup)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_GEOCODER_URL = "https://geocoding.geo.census.gov/geocoder/geographies/address"
+
+# Module-level OZ cache (downloaded once per session)
+_oz_tracts_cache: Optional[set] = None
+
+_HUD_OZ_URL = (
+    "https://hudgis-hud.opendata.arcgis.com/api/download/v1/items/"
+    "ef143299845841f8abb95969c01f88b5/csv?layers=13"
+)
+
+
+def _census_geocode(deal: DealData) -> None:
+    """
+    Call the Census Bureau Geocoder to get census tract GEOID,
+    school district, and lat/lon from the property address.
+    Then check Opportunity Zone status.
+    """
+    addr = deal.address
+    full = addr.full_address
+    if not full:
+        logger.warning("Census Geocoder: no address — skipping")
+        return
+
+    # Parse address components for the geocoder
+    params = {
+        "address": full,
+        "benchmark": "Public_AR_Current",
+        "vintage": "Current_Current",
+        "format": "json",
+    }
+
+    try:
+        resp = requests.get(_GEOCODER_URL, params=params, timeout=_REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("Census Geocoder failed: %s", exc)
+        return
+
+    matches = data.get("result", {}).get("addressMatches", [])
+    if not matches:
+        logger.warning("Census Geocoder: no address matches for '%s'", full)
+        return
+
+    match = matches[0]
+
+    # Extract coordinates
+    coords = match.get("coordinates", {})
+    lat = _safe_float(coords.get("y"))
+    lon = _safe_float(coords.get("x"))
+    if lat is not None:
+        addr.latitude = lat
+    if lon is not None:
+        addr.longitude = lon
+
+    # Extract census tract GEOID
+    geos = match.get("geographies", {})
+    tracts = geos.get("Census Tracts", [])
+    if tracts:
+        geoid = tracts[0].get("GEOID", "")
+        if geoid:
+            addr.census_tract = geoid
+            logger.info("Census Geocoder: tract=%s, lat=%.4f, lon=%.4f",
+                        geoid, lat or 0, lon or 0)
+
+    # Extract school district (only if not already set from registry)
+    if not deal.provenance.field_sources.get("school_district"):
+        unified_sds = geos.get("Unified School Districts", [])
+        if unified_sds:
+            sd_name = unified_sds[0].get("NAME", "")
+            if sd_name:
+                deal.provenance.field_sources["school_district"] = sd_name
+
+    # Extract FIPS code from matched address if not already set
+    if not addr.fips_code:
+        address_components = match.get("addressComponents", {})
+        state_fips = tracts[0].get("STATE", "") if tracts else ""
+        county_fips = tracts[0].get("COUNTY", "") if tracts else ""
+        if state_fips and county_fips:
+            addr.fips_code = state_fips + county_fips
+
+    # Opportunity Zone check
+    _check_opportunity_zone(deal)
+
+    deal.provenance.field_sources["census_geocoder"] = "census_geocoder_current"
+
+
+def _load_oz_tracts() -> set:
+    """Download the HUD Opportunity Zone tract list (cached per session)."""
+    global _oz_tracts_cache
+    if _oz_tracts_cache is not None:
+        return _oz_tracts_cache
+
+    logger.info("Downloading HUD Opportunity Zone tract list...")
+    try:
+        resp = requests.get(_HUD_OZ_URL, timeout=60)
+        resp.raise_for_status()
+        df = pd.read_csv(StringIO(resp.text), dtype=str)
+
+        # Find GEOID column
+        geoid_col = None
+        for candidate in ["GEOID", "geoid", "TRACTCE", "GEOID10", "GEOID20", "tract_geoid"]:
+            if candidate in df.columns:
+                geoid_col = candidate
+                break
+        if geoid_col is None:
+            for col in df.columns:
+                sample = df[col].dropna().iloc[0] if df[col].notna().any() else ""
+                if re.match(r"^\d{11}$", str(sample)):
+                    geoid_col = col
+                    break
+
+        if geoid_col:
+            _oz_tracts_cache = set(df[geoid_col].dropna().str.strip().str.zfill(11).tolist())
+            logger.info("OZ tracts loaded: %d", len(_oz_tracts_cache))
+        else:
+            logger.warning("OZ dataset: could not identify GEOID column")
+            _oz_tracts_cache = set()
+    except Exception as exc:
+        logger.warning("OZ tract download failed: %s", exc)
+        _oz_tracts_cache = set()
+
+    return _oz_tracts_cache
+
+
+def _check_opportunity_zone(deal: DealData) -> None:
+    """Check if the deal's census tract is in an Opportunity Zone."""
+    tract = deal.address.census_tract
+    if not tract:
+        return
+
+    oz_tracts = _load_oz_tracts()
+    if not oz_tracts:
+        return
+
+    ct = str(tract).strip().zfill(11)
+    is_oz = ct in oz_tracts
+    deal.provenance.field_sources["opportunity_zone"] = str(is_oz)
+    logger.info("Opportunity Zone: tract=%s, is_oz=%s", ct, is_oz)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 3 — CENSUS ACS API (demographics)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_ACS_BASE = "https://api.census.gov/data/2022/acs/acs5"
+
+_ACS_VARS = "NAME,B01003_001E,B19013_001E,B25064_001E,B25003_002E,B25003_003E,B23025_005E,B23025_003E"
+
+
+def _fetch_acs_places(state_fips: str) -> dict:
+    """Fetch ACS demographics for all places in a state. Returns dict keyed by cleaned name."""
+    try:
+        resp = requests.get(_ACS_BASE, params={
+            "get": _ACS_VARS,
+            "for": "place:*",
+            "in": f"state:{state_fips}",
+        }, timeout=_REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("ACS places fetch failed (state %s): %s", state_fips, exc)
+        return {}
+
+    result = {}
+    for row in data[1:]:  # skip header
+        name = _clean_name(row[0])
+        result[name] = {
+            "population":      _safe_int(row[1]),
+            "median_hh_income": _safe_float(row[2]),
+            "median_gross_rent": _safe_float(row[3]),
+            "owner_occupied":  _safe_int(row[4]),
+            "renter_occupied": _safe_int(row[5]),
+            "unemployed":      _safe_int(row[6]),
+            "labor_force":     _safe_int(row[7]),
+            "fips_place":      row[8] + row[9],  # state + place
+        }
+    return result
+
+
+def _fetch_acs_subdivisions(state_fips: str) -> dict:
+    """Fetch ACS demographics for all county subdivisions in a state."""
+    try:
+        resp = requests.get(_ACS_BASE, params={
+            "get": _ACS_VARS,
+            "for": "county subdivision:*",
+            "in": f"state:{state_fips}",
+        }, timeout=_REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("ACS subdivisions fetch failed (state %s): %s", state_fips, exc)
+        return {}
+
+    result = {}
+    for row in data[1:]:
+        name = _clean_name(row[0])
+        result[name] = {
+            "population":      _safe_int(row[1]),
+            "median_hh_income": _safe_float(row[2]),
+            "median_gross_rent": _safe_float(row[3]),
+            "owner_occupied":  _safe_int(row[4]),
+            "renter_occupied": _safe_int(row[5]),
+            "unemployed":      _safe_int(row[6]),
+            "labor_force":     _safe_int(row[7]),
+            "fips_place":      None,
+        }
+    return result
+
+
+def _apply_acs(deal: DealData, acs: dict) -> None:
+    """Write ACS demographic data to DealData. Only overwrites None fields."""
+    md = deal.market_data
+    prov = deal.provenance.field_sources
+
+    # Population — only write if still None
+    pop = acs.get("population")
+    if pop and md.population_3mi is None:
+        md.population_3mi = pop
+        prov["population_source"] = "census_acs_2022"
+
+    # Median household income — only if still None
+    income = acs.get("median_hh_income")
+    if income and md.median_hh_income_3mi is None:
+        md.median_hh_income_3mi = income
+        prov["median_hh_income_source"] = "census_acs_2022"
+
+    # Median gross rent — only if still None
+    rent = acs.get("median_gross_rent")
+    if rent and not prov.get("median_gross_rent"):
+        prov["median_gross_rent"] = str(rent)
+
+    # Derived rates
+    owner = acs.get("owner_occupied")
+    renter = acs.get("renter_occupied")
+    if owner is not None and renter is not None and (owner + renter) > 0:
+        total_occ = owner + renter
+        owner_rate = round(owner / total_occ, 4)
+        renter_rate = round(renter / total_occ, 4)
+        prov["owner_occupancy_rate"] = str(owner_rate)
+        if md.pct_renter_occ_3mi is None:
+            md.pct_renter_occ_3mi = renter_rate
+            prov["renter_occupancy_source"] = "census_acs_2022"
+
+    unemployed = acs.get("unemployed")
+    labor_force = acs.get("labor_force")
+    if unemployed is not None and labor_force is not None and labor_force > 0:
+        unemp_rate = round(unemployed / labor_force, 4)
+        if md.unemployment_rate is None:
+            md.unemployment_rate = unemp_rate
+            prov["unemployment_source"] = "census_acs_2022"
+
+    # FIPS place
+    fp = acs.get("fips_place")
+    if fp and not prov.get("fips_place"):
+        prov["fips_place"] = fp
+
+    prov["census_demographics"] = "census_acs_2022"
+
+
+def _fetch_acs_demographics(deal: DealData) -> None:
+    """
+    Step 3: Fetch Census ACS demographics for the deal's municipality.
+    Uses state + place/subdivision matching from registry_acs_enricher.py.
+    """
+    state = deal.address.state
+    city = deal.address.city
+    if not state or not city:
+        logger.warning("ACS demographics: missing state or city — skipping")
+        return
+
+    state_fips = STATE_FIPS.get(state.strip().upper())
+    if not state_fips:
+        logger.warning("ACS demographics: unknown state '%s' — skipping", state)
+        return
+
+    logger.info("Fetching ACS demographics for %s, %s (FIPS %s)...", city, state, state_fips)
+
+    places = _fetch_acs_places(state_fips)
+    subdivisions = _fetch_acs_subdivisions(state_fips)
+
+    if not places and not subdivisions:
+        logger.warning("ACS demographics: no data retrieved for state %s", state)
+        return
+
+    # Determine municipality type from registry if available
+    mtype = deal.provenance.field_sources.get("municipality_type", "")
+
+    acs = _match_acs(city, mtype, state, places, subdivisions)
+
+    if any(v is not None for v in acs.values()):
+        _apply_acs(deal, acs)
+        logger.info("ACS demographics: pop=%s, income=%s, unemp=%s",
+                     acs.get("population"), acs.get("median_hh_income"),
+                     acs.get("unemployed"))
+    else:
+        logger.warning("ACS demographics: no match for %s, %s", city, state)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 4 — FRED API (interest rates)
+# ═══════════════════════════════════════════════════════════════════════════
 
 _FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -142,13 +584,14 @@ _FRED_SERIES = {
 }
 
 
-def _fetch_fred(series_id: str) -> Optional[float]:
-    """Fetch the most recent observation for a FRED series."""
+def _fetch_fred_series(series_id: str) -> Optional[float]:
+    """Fetch the most recent observation for a FRED series (no API key required)."""
+    is_cpi = series_id == "CPIAUCSL"
     params = {
         "series_id": series_id,
         "file_type": "json",
         "sort_order": "desc",
-        "limit": 12 if series_id == "CPIAUCSL" else 1,
+        "limit": 13 if is_cpi else 1,
     }
     try:
         resp = requests.get(_FRED_BASE, params=params, timeout=_REQUEST_TIMEOUT)
@@ -157,8 +600,7 @@ def _fetch_fred(series_id: str) -> Optional[float]:
         if not obs:
             return None
 
-        if series_id == "CPIAUCSL":
-            # CPI YoY: compare latest to 12 months ago
+        if is_cpi:
             return _cpi_yoy(obs)
 
         val = obs[0].get("value", ".")
@@ -169,67 +611,226 @@ def _fetch_fred(series_id: str) -> Optional[float]:
 
 
 def _cpi_yoy(obs: List[dict]) -> Optional[float]:
-    """Calculate CPI year-over-year % change from 12 monthly observations."""
+    """Calculate CPI year-over-year % change from 13 monthly observations."""
     vals = []
     for o in obs:
         v = _safe_float(o.get("value", "."))
         if v is not None:
             vals.append(v)
-    if len(vals) >= 12 and vals[11] > 0:
-        return round((vals[0] - vals[11]) / vals[11], 4)
+    # latest = vals[0], 12 months ago = vals[12]
+    if len(vals) >= 13 and vals[12] > 0:
+        return round((vals[0] / vals[12] - 1) * 100, 2)
     if len(vals) >= 2 and vals[-1] > 0:
-        return round((vals[0] - vals[-1]) / vals[-1], 4)
+        return round((vals[0] / vals[-1] - 1) * 100, 2)
     return None
 
 
-def _fetch_all_fred() -> Dict[str, Optional[float]]:
-    """Fetch all four FRED series. Returns dict with DealData field names."""
+def _fetch_all_fred(deal: DealData) -> Dict[str, Optional[float]]:
+    """
+    Step 4: Fetch all four FRED series. Returns dict with MarketData field names.
+    CPI is returned as a percentage (e.g. 3.2 = 3.2%).
+    Rate series are returned as decimals (e.g. 0.0425 = 4.25%).
+    """
     results: Dict[str, Optional[float]] = {}
     for series_id, field_name in _FRED_SERIES.items():
-        val = _fetch_fred(series_id)
-        # FRED returns rates as percentages (e.g. 4.25); convert to decimal
-        if val is not None and field_name != "cpi_yoy":
-            val = round(val / 100.0, 6)
+        val = _fetch_fred_series(series_id)
+        if val is not None:
+            if field_name == "cpi_yoy":
+                # CPI is already computed as percentage by _cpi_yoy; convert to decimal
+                val = round(val / 100.0, 4)
+            else:
+                # FRED returns rates as percentages (4.25); convert to decimal
+                val = round(val / 100.0, 6)
         results[field_name] = val
+
     return results
 
 
-# ═══════��═══════════════��═════════════════════════════���═════════════════════
-# 3. HUD FMR �� Fair Market Rents
-# ═════════════════════════════���═══════════════════════════════��═════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 5 — PROMPT 5B: DEBT MARKET SNAPSHOT NARRATIVE (Sonnet)
+# ═══════════════════════════════════════════════════════════════════════════
 
-_HUD_FMR_BASE = "https://www.huduser.gov/hudapi/public/fmr/data"
+_SYSTEM_5B = (
+    "You are a senior CRE debt analyst writing a market context paragraph for a\n"
+    "formal investment underwriting report.\n"
+    "\n"
+    "RULES:\n"
+    "- Exactly one paragraph. No headers, no bullets.\n"
+    "- Cover: (a) current rate environment — always name 10-yr Treasury. Reference SOFR\n"
+    "  only if floating-rate or construction-to-perm loan. (b) proposed rate vs. market.\n"
+    "  (c) DSCR trajectory and refinance risk over hold period.\n"
+    "  (d) one sentence on CPI vs. underwritten expense growth assumption.\n"
+    "- Do not recommend whether to proceed. State facts and implications only.\n"
+    '- If a FRED field is "data unavailable": acknowledge and work around it.\n'
+    "- Tone: Precise, institutional, neutral. Length: 100–150 words. Output plain text only."
+)
+
+_USER_5B = (
+    "Property: {property_address} | Asset: {asset_type} | Hold: {hold_period} yrs\n"
+    "Data pull date: {data_pull_date}\n"
+    "Underwritten expense growth: {expense_growth_rate}%\n"
+    "\n"
+    "FRED live data:\n"
+    "  10-yr Treasury (DGS10): {dgs10_rate}% | SOFR: {sofr_rate}%\n"
+    "  30-yr mortgage: {mortgage30_rate}% | CPI YoY: {cpi_yoy}%\n"
+    "\n"
+    "Deal debt structure:\n"
+    "  Type: {loan_type} | Amount: ${loan_amount} | Rate: {loan_rate}%\n"
+    "  Rate type: {rate_type} | LTV: {ltv}% | DSCR Yr1: {dscr_yr1}x\n"
+    "  Amort: {amortization} yrs | Term: {loan_term} yrs\n"
+    "\n"
+    "Write the debt market context paragraph now. Output plain text only."
+)
 
 
-def _fetch_hud_fmr(zip_code: str, hud_api_token: str) -> Optional[Dict[str, float]]:
-    """Fetch Fair Market Rents by ZIP from HUD API."""
-    url = f"{_HUD_FMR_BASE}/{zip_code}"
-    headers = {"Authorization": f"Bearer {hud_api_token}"}
+def _generate_debt_market_narrative(deal: DealData, data_pull_date: str) -> None:
+    """Step 5: Generate Prompt 5B — Debt Market Snapshot Narrative."""
+    md = deal.market_data
+    assumptions = deal.assumptions
+    addr = deal.address
+
+    loan_amount = assumptions.purchase_price * assumptions.ltv_pct
+
+    user_msg = _USER_5B.format(
+        property_address=addr.full_address,
+        asset_type=deal.asset_type.value,
+        hold_period=assumptions.hold_period,
+        data_pull_date=data_pull_date,
+        expense_growth_rate=f"{assumptions.expense_growth_rate * 100:.1f}",
+        dgs10_rate=_fmt_rate(md.dgs10_rate),
+        sofr_rate=_fmt_rate(md.sofr_rate),
+        mortgage30_rate=_fmt_rate(md.mortgage30_rate),
+        cpi_yoy=_fmt_rate(md.cpi_yoy),
+        loan_type=getattr(assumptions, "loan_type", None) or "Permanent",
+        loan_amount=f"{loan_amount:,.0f}",
+        loan_rate=f"{assumptions.interest_rate * 100:.2f}",
+        rate_type=getattr(assumptions, "rate_type", None) or "fixed",
+        ltv=f"{assumptions.ltv_pct * 100:.0f}",
+        dscr_yr1="TBD",
+        amortization=assumptions.amort_years,
+        loan_term=assumptions.loan_term,
+    )
+
+    narrative = _call_llm_text(MODEL_SONNET, _SYSTEM_5B, user_msg)
+    if narrative:
+        md.debt_market_narrative = narrative
+        deal.narratives.debt_market_narrative = narrative
+        logger.info("Prompt 5B complete — debt market narrative written")
+    else:
+        logger.warning("Prompt 5B failed — continuing without debt market narrative")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 6 — HUD FAIR MARKET RENTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+_HUD_FMR_LIST_COUNTIES = "https://www.huduser.gov/hudapi/public/fmr/listCounties"
+_HUD_FMR_DATA = "https://www.huduser.gov/hudapi/public/fmr/data"
+
+
+def _get_hud_api_key() -> Optional[str]:
+    """Read HUD API key from st.secrets."""
     try:
-        resp = requests.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json().get("data", {})
-        basicdata = data.get("basicdata", {})
-        return {
-            "fmr_studio": _safe_float(basicdata.get("Efficiency")),
-            "fmr_1br":    _safe_float(basicdata.get("One-Bedroom")),
-            "fmr_2br":    _safe_float(basicdata.get("Two-Bedroom")),
-            "fmr_3br":    _safe_float(basicdata.get("Three-Bedroom")),
-        }
-    except Exception as exc:
-        logger.warning("HUD FMR fetch failed (ZIP %s): %s", zip_code, exc)
+        return st.secrets[HUD_API_KEY]["api_key"]
+    except (KeyError, FileNotFoundError):
+        logger.warning("HUD API key not configured in st.secrets['%s']", HUD_API_KEY)
         return None
 
 
-# ═════��═══════════════════════��═════════════════════════════════��═══════════
-# 4. FEMA NFHL — Flood Zone
-# ═��══════════════════════════��══════════════════════════════��═══════════════
+def _fetch_hud_fmr(deal: DealData) -> None:
+    """
+    Step 6: Fetch HUD Fair Market Rents by county FIPS.
+    1. GET /fmr/listCounties/{state_fips}
+    2. GET /fmr/data/{fips_county}
+    """
+    hud_key = _get_hud_api_key()
+    if not hud_key:
+        return
+
+    fips_county = deal.address.fips_code
+    state = deal.address.state
+    if not fips_county and not state:
+        logger.warning("HUD FMR: no FIPS county or state — skipping")
+        return
+
+    headers = {"Authorization": f"Bearer {hud_key}"}
+
+    # If we have a FIPS county code, try direct lookup
+    entity_id = None
+    if fips_county and len(fips_county) >= 5:
+        entity_id = fips_county
+
+    # If no FIPS county, try listCounties to find it
+    if not entity_id and state:
+        state_fips = STATE_FIPS.get(state.strip().upper())
+        if state_fips:
+            try:
+                resp = requests.get(
+                    f"{_HUD_FMR_LIST_COUNTIES}/{state_fips}",
+                    headers=headers,
+                    timeout=_REQUEST_TIMEOUT,
+                )
+                resp.raise_for_status()
+                counties = resp.json()
+                # Try to match by county name from registry
+                county_name = deal.provenance.field_sources.get("county")
+                if county_name and isinstance(counties, list):
+                    cn_lower = county_name.lower()
+                    for c in counties:
+                        if cn_lower in str(c.get("county_name", "")).lower():
+                            entity_id = c.get("fips_code") or c.get("county_code")
+                            break
+            except Exception as exc:
+                logger.warning("HUD FMR listCounties failed: %s", exc)
+
+    if not entity_id:
+        logger.warning("HUD FMR: could not determine county entity — skipping")
+        return
+
+    # Fetch FMR data
+    try:
+        resp = requests.get(
+            f"{_HUD_FMR_DATA}/{entity_id}",
+            headers=headers,
+            timeout=_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
+        basicdata = data.get("basicdata", data)
+
+        md = deal.market_data
+        # Map bedroom counts: 0BR=Efficiency, 1BR, 2BR, 3BR, 4BR
+        md.fmr_studio = _safe_float(basicdata.get("Efficiency")) or md.fmr_studio
+        md.fmr_1br = _safe_float(basicdata.get("One-Bedroom")) or md.fmr_1br
+        md.fmr_2br = _safe_float(basicdata.get("Two-Bedroom")) or md.fmr_2br
+        md.fmr_3br = _safe_float(basicdata.get("Three-Bedroom")) or md.fmr_3br
+        # 4BR stored in provenance (no model field)
+        fmr_4br = _safe_float(basicdata.get("Four-Bedroom"))
+        if fmr_4br:
+            deal.provenance.field_sources["fmr_4br"] = str(fmr_4br)
+
+        deal.provenance.field_sources["hud_fmr"] = f"hud_fmr_{datetime.utcnow().strftime('%Y-%m-%d')}"
+        logger.info("HUD FMR: studio=%s, 1BR=%s, 2BR=%s, 3BR=%s",
+                     md.fmr_studio, md.fmr_1br, md.fmr_2br, md.fmr_3br)
+    except Exception as exc:
+        logger.warning("HUD FMR data fetch failed (entity %s): %s", entity_id, exc)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 7 — FEMA FLOOD ZONE
+# ═══════════════════════════════════════════════════════════════════════════
 
 _FEMA_NFHL_URL = "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query"
 
 
-def _fetch_fema_flood(lat: float, lon: float) -> Optional[Dict[str, str]]:
-    """Query FEMA NFHL for flood zone at a lat/lon point."""
+def _fetch_fema_flood(deal: DealData) -> None:
+    """Step 7: Query FEMA NFHL for flood zone at the property's lat/lon."""
+    lat = deal.address.latitude
+    lon = deal.address.longitude
+    if lat is None or lon is None:
+        logger.warning("FEMA: no lat/lon — skipping flood zone lookup")
+        return
+
     params = {
         "geometry": f"{lon},{lat}",
         "geometryType": "esriGeometryPoint",
@@ -244,29 +845,28 @@ def _fetch_fema_flood(lat: float, lon: float) -> Optional[Dict[str, str]]:
         resp.raise_for_status()
         features = resp.json().get("features", [])
         if not features:
-            return None
+            logger.info("FEMA: no flood zone features at (%.4f, %.4f)", lat, lon)
+            return
+
         attrs = features[0].get("attributes", {})
-        return {
-            "fema_flood_zone":   attrs.get("FLD_ZONE"),
-            "fema_panel_number": attrs.get("DFIRM_ID"),
-        }
+        md = deal.market_data
+        md.fema_flood_zone = attrs.get("FLD_ZONE") or md.fema_flood_zone
+        md.fema_panel_number = attrs.get("DFIRM_ID") or md.fema_panel_number
+        deal.provenance.field_sources["fema_flood"] = f"fema_nfhl_{datetime.utcnow().strftime('%Y-%m-%d')}"
+        logger.info("FEMA: zone=%s, panel=%s", md.fema_flood_zone, md.fema_panel_number)
     except Exception as exc:
         logger.warning("FEMA NFHL fetch failed (%.4f, %.4f): %s", lat, lon, exc)
-        return None
 
 
-# ═══���════════════════════════════════════════════════════════════���══════════
-# 5. EPA EnviroFacts — Environmental Flags
-# ═════════════════════════════════════════════════════════════════════���═════
+# ═══════════════════════════════════════════════════════════════════════════
+# EPA ENVIROFACTS — ENVIRONMENTAL FLAGS
+# ═══════════════════════════════════════════════════════════════════════════
 
 _EPA_BASE = "https://enviro.epa.gov/enviro/efservice"
 
 
 def _fetch_epa_flags(zip_code: str) -> List[str]:
-    """
-    Query EPA EnviroFacts for environmental program flags near a ZIP code.
-    Returns list of program acronyms (e.g. ['RCRA', 'CERCLIS']).
-    """
+    """Query EPA EnviroFacts for environmental program flags near a ZIP code."""
     programs = [
         ("RCRA", f"{_EPA_BASE}/RCR_INFO/ZIP_CODE/BEGINNING/{zip_code}/json"),
         ("CERCLIS", f"{_EPA_BASE}/SEMS_ACTIVE_SITES/ZIP_CODE/{zip_code}/json"),
@@ -285,43 +885,12 @@ def _fetch_epa_flags(zip_code: str) -> List[str]:
     return flags
 
 
-# ═══════════════════════════════════════════════════════════════��═══════════
-# 6. MUNICIPAL REGISTRY CSV LOOKUP
-# ══════════════���════════════════════════════════════════════════════════════
-
-def _lookup_municipality(city: str, state: str) -> Optional[Dict[str, str]]:
-    """
-    Look up a municipality in the local CSV registry.
-    Returns dict with code_platform, zoning_chapter_url, zoning_chapter_ref, etc.
-    """
-    if not city or not state:
-        return None
-    try:
-        city_lower = city.strip().lower()
-        state_upper = state.strip().upper()
-        with open(MUNICIPAL_REGISTRY_CSV, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if (row.get("municipality_name", "").strip().lower() == city_lower
-                        and row.get("state", "").strip().upper() == state_upper):
-                    return row
-        logger.info("Municipality not found in registry: %s, %s", city, state)
-        return None
-    except Exception as exc:
-        logger.warning("Municipal registry lookup failed: %s", exc)
-        return None
-
-
-# ═════��═════════════════════════════════════════════════════════════════════
-# 7. ZONING CODE SCRAPER
-# ══���════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# ZONING CODE SCRAPER
+# ═══════════════════════════════════════════════════════════════════════════
 
 def _scrape_zoning_code(url: str) -> Optional[str]:
-    """
-    Fetch the zoning code page and extract text content.
-    Handles ecode360 and Municode platforms.
-    Returns plain text or None.
-    """
+    """Fetch zoning code page and extract text. Handles ecode360/Municode."""
     if not url:
         return None
     try:
@@ -332,7 +901,6 @@ def _scrape_zoning_code(url: str) -> Optional[str]:
         resp.raise_for_status()
         html = resp.text
 
-        # Strip HTML tags for a rough text extraction
         text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
         text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
         text = re.sub(r"<[^>]+>", " ", text)
@@ -342,19 +910,18 @@ def _scrape_zoning_code(url: str) -> Optional[str]:
             logger.warning("Zoning code scrape returned too little text (%d chars)", len(text))
             return None
 
-        # Truncate to ~12,000 chars to stay within Haiku token limits
         return text[:12000]
     except Exception as exc:
         logger.warning("Zoning code scrape failed (%s): %s", url, exc)
         return None
 
 
-# ═════════════════════════════��══════════════════════════��══════════════════
-# AI PROMPT HELPERS
-# ══════���════════════════════════════════════════════���═══════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# LLM HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
 
 def _call_llm(model: str, system: str, user_msg: str, max_tokens: int = 4096) -> Optional[dict]:
-    """Send a single Claude API call and parse the JSON response. Returns None on failure."""
+    """Send a Claude API call expecting JSON. Returns parsed dict or None."""
     client = anthropic.Anthropic(
         api_key=st.secrets[ANTHROPIC_SECRET_KEY]["api_key"],
     )
@@ -374,7 +941,7 @@ def _call_llm(model: str, system: str, user_msg: str, max_tokens: int = 4096) ->
 
 
 def _call_llm_text(model: str, system: str, user_msg: str, max_tokens: int = 2048) -> Optional[str]:
-    """Send a Claude API call expecting plain text (not JSON). Returns None on failure."""
+    """Send a Claude API call expecting plain text. Returns string or None."""
     client = anthropic.Anthropic(
         api_key=st.secrets[ANTHROPIC_SECRET_KEY]["api_key"],
     )
@@ -391,9 +958,9 @@ def _call_llm_text(model: str, system: str, user_msg: str, max_tokens: int = 204
         return None
 
 
-# ��═══════════════════════════════���═══════════════════════════════��══════════
+# ═══════════════════════════════════════════════════════════════════════════
 # PROMPT 3A — ZONING PARAMETER EXTRACTION (Haiku)
-# ══════════════════════════════════════���════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 
 _SYSTEM_3A = (
     "You are a zoning code analyst. Extract dimensional standards, permitted uses,\n"
@@ -449,15 +1016,14 @@ def _apply_3a(data: dict, deal: DealData) -> None:
     z.side_setback_ft     = data.get("side_setback_ft") or z.side_setback_ft
     z.min_parking_spaces  = data.get("min_parking_spaces_per_unit") or z.min_parking_spaces
 
-    # Source verification
     sv = data.get("source_verification") or {}
     z.source_verified = not sv.get("source_mismatch", False)
     z.source_notes    = sv.get("source_notes")
 
 
-# ═══════════════════════════��═══════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 # PROMPT 3B — BUILDABLE CAPACITY ANALYSIS (Sonnet)
-# ══════��══════════════════���═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 
 _SYSTEM_3B = (
     "You are a commercial real estate development analyst specializing in zoning capacity.\n"
@@ -495,9 +1061,9 @@ def _apply_3b(data: dict, deal: DealData) -> None:
     z.buildable_capacity_narrative = data.get("calculation_notes") or z.buildable_capacity_narrative
 
 
-# ═════��═════════════��══════════════════════════════════���════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 # PROMPT 3C — HIGHEST & BEST USE OPINION (Sonnet)
-# ═══��══════════════════════════════════════════════════════════════════���════
+# ═══════════════════════════════════════════════════════════════════════════
 
 _SYSTEM_3C = (
     "You are a licensed MAI appraiser writing a highest and best use analysis for\n"
@@ -510,7 +1076,7 @@ _SYSTEM_3C = (
     "RULES:\n"
     "- Write in formal MAI appraisal report language. State conclusions directly.\n"
     "- Base all conclusions on data provided. No speculation beyond the data.\n"
-    "- Acknowledge data limitations. Length: 3–4 paragraphs."
+    "- Acknowledge data limitations. Length: 3-4 paragraphs."
 )
 
 _USER_3C = (
@@ -536,78 +1102,13 @@ def _apply_3c(data: dict, deal: DealData) -> None:
     z.hbu_narrative  = data.get("hbu_narrative") or z.hbu_narrative
     z.hbu_conclusion = data.get("hbu_conclusion") or z.hbu_conclusion
 
-    # Also store in narratives for 4-MASTER consumption
     deal.narratives.buildable_capacity = z.buildable_capacity_narrative
     deal.narratives.highest_best_use   = z.hbu_narrative
 
 
-# ════��════════════════════════���═══════════════════════════════���═════════════
-# PROMPT 5B — DEBT MARKET SNAPSHOT NARRATIVE (Sonnet)
-# ══════════════════════════════��════════════════════════════════════════════
-
-_SYSTEM_5B = (
-    "You are a senior CRE debt analyst writing a market context paragraph for a\n"
-    "formal investment underwriting report.\n\n"
-    "RULES:\n"
-    "- Exactly one paragraph. No headers, no bullets.\n"
-    "- Cover: (a) current rate environment — always name 10-yr Treasury. Reference SOFR\n"
-    "  only if floating-rate or construction-to-perm loan. (b) proposed rate vs. market.\n"
-    "  (c) DSCR trajectory and refinance risk over hold period.\n"
-    "  (d) one sentence on CPI vs. underwritten expense growth assumption.\n"
-    "- Do not recommend whether to proceed. State facts and implications only.\n"
-    "- If a FRED field is \"data unavailable\": acknowledge and work around it.\n"
-    "- Tone: Precise, institutional, neutral. Length: 100–150 words. Output plain text only."
-)
-
-_USER_5B = (
-    "Property: {property_address} | Asset: {asset_type} | Hold: {hold_period} yrs\n"
-    "Data pull date: {data_pull_date}\n"
-    "Underwritten expense growth: {expense_growth_rate}%\n\n"
-    "FRED live data:\n"
-    "  10-yr Treasury (DGS10): {dgs10_rate}% | SOFR: {sofr_rate}%\n"
-    "  30-yr mortgage: {mortgage30_rate}% | CPI YoY: {cpi_yoy}%\n\n"
-    "Deal debt structure:\n"
-    "  Type: {loan_type} | Amount: ${loan_amount} | Rate: {loan_rate}%\n"
-    "  Rate type: {rate_type} | LTV: {ltv}% | DSCR Yr1: {dscr_yr1}x\n"
-    "  Amort: {amortization} yrs | Term: {loan_term} yrs\n\n"
-    "Write the debt market context paragraph now. Output plain text only."
-)
-
-
-# ═════��══════════════════════��══════════════════════════════════════════════
-# NUMERIC HELPERS
-# ═════��════════════════════════════════════════════��════════════════════════
-
-def _safe_int(val: Any) -> Optional[int]:
-    """Convert to int, returning None on failure or Census suppression codes."""
-    try:
-        v = int(val)
-        return v if v >= 0 else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_float(val: Any) -> Optional[float]:
-    """Convert to float, returning None on failure or missing indicators."""
-    if val is None or val == "." or val == "":
-        return None
-    try:
-        v = float(val)
-        return v if v >= -999999 else None  # Census uses large negatives for suppressed
-    except (TypeError, ValueError):
-        return None
-
-
-def _fmt_rate(val: Optional[float]) -> str:
-    """Format a decimal rate as a percentage string for prompt injection, or 'data unavailable'."""
-    if val is None:
-        return "data unavailable"
-    return f"{val * 100:.2f}"
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # MARKET CONTEXT SUMMARY (for Prompt 3C)
-# ═��═══════════════════════════════════════════���═════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 
 def _build_market_context(md: MarketData) -> str:
     """Build a concise market context string for Prompt 3C input."""
@@ -625,17 +1126,39 @@ def _build_market_context(md: MarketData) -> str:
     return " | ".join(parts) if parts else "Limited market data available"
 
 
-# ═════════════���═════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# SECRETS HELPER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _get_secret(section: str, key: str) -> Optional[str]:
+    """Safely retrieve a secret from st.secrets, returning None if not configured."""
+    try:
+        return st.secrets[section][key]
+    except (KeyError, FileNotFoundError):
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # PUBLIC API
-# ════════════════════════════════════════════════════════════��══════════════
+# ═══════════════════════════════════════════════════════════════════════════
 
 def enrich_market_data(deal: DealData) -> DealData:
     """
     Master market enrichment function — populates DealData with external
     market data, zoning analysis, and debt market narrative.
 
-    Runs all API calls and AI prompts. Any failure logs a warning and
-    continues — the pipeline never crashes here.
+    Steps run IN ORDER:
+        1. Municipal Registry Lookup
+        2. Census Geocoder (tract + OZ)
+        3. Census ACS API (demographics)
+        4. FRED API (interest rates)
+        5. Prompt 5B — Debt Market Snapshot
+        6. HUD Fair Market Rents
+        7. FEMA Flood Zone
+        8. EPA Environmental Flags
+        9–11. Zoning scrape + Prompts 3A / 3B / 3C
+
+    Any failure logs a warning and continues — the pipeline never crashes here.
 
     Args:
         deal: DealData with address, asset_type, assumptions already set.
@@ -648,29 +1171,29 @@ def enrich_market_data(deal: DealData) -> DealData:
     assumptions = deal.assumptions
     data_pull_date = datetime.utcnow().strftime("%Y-%m-%d")
 
-    # ── 1. Census ACS Demographics ──────��─────────────────────────
-    logger.info("Fetching Census ACS data...")
-    census = None
-    if addr.census_tract and addr.fips_code and len(addr.fips_code) >= 5:
-        state_fips = addr.fips_code[:2]
-        county_fips = addr.fips_code[2:5]
-        census = _fetch_census_tract(state_fips, county_fips, addr.census_tract)
-
-    if not census and addr.zip_code:
-        census = _fetch_census_by_zip(addr.zip_code)
-
-    if census:
-        md.population_3mi       = census.get("population") or md.population_3mi
-        md.median_hh_income_3mi = census.get("median_hh_income") or md.median_hh_income_3mi
-        md.pct_renter_occ_3mi   = census.get("pct_renter_occupied") or md.pct_renter_occ_3mi
-        deal.provenance.field_sources["census_demographics"] = "census_acs_2022"
-        logger.info("Census ACS: pop=%s, income=%s", md.population_3mi, md.median_hh_income_3mi)
+    # ── STEP 1: Municipal Registry Lookup ─────────────────────────
+    logger.info("Step 1: Municipal registry lookup...")
+    muni_row = _lookup_municipal_registry(deal)
+    if muni_row is not None:
+        # Store municipality_type for ACS matching
+        mtype = muni_row.get("municipality_type")
+        if pd.notna(mtype):
+            deal.provenance.field_sources["municipality_type"] = str(mtype).strip()
+        _apply_registry(muni_row, deal)
     else:
-        logger.warning("Census ACS: no data retrieved")
+        logger.info("Step 1: no registry match — continuing")
 
-    # ── 2. FRED Macro Rates ───────────────────────────────────────
-    logger.info("Fetching FRED macro rates...")
-    fred_data = _fetch_all_fred()
+    # ── STEP 2: Census Geocoder (tract + OZ) ─────────────────────
+    logger.info("Step 2: Census Geocoder...")
+    _census_geocode(deal)
+
+    # ── STEP 3: Census ACS API (demographics) ────────────────────
+    logger.info("Step 3: Census ACS demographics...")
+    _fetch_acs_demographics(deal)
+
+    # ── STEP 4: FRED API (interest rates) ─────────────────────────
+    logger.info("Step 4: FRED macro rates...")
+    fred_data = _fetch_all_fred(deal)
     md.dgs10_rate      = fred_data.get("dgs10_rate") or md.dgs10_rate
     md.sofr_rate       = fred_data.get("sofr_rate") or md.sofr_rate
     md.mortgage30_rate = fred_data.get("mortgage30_rate") or md.mortgage30_rate
@@ -678,38 +1201,22 @@ def enrich_market_data(deal: DealData) -> DealData:
     deal.provenance.field_sources["fred_rates"] = f"fred_{data_pull_date}"
     deal.provenance.fred_pull_date = data_pull_date
     logger.info("FRED: DGS10=%s, SOFR=%s, MTG30=%s, CPI=%s",
-                 md.dgs10_rate, md.sofr_rate, md.mortgage30_rate, md.cpi_yoy)
+                md.dgs10_rate, md.sofr_rate, md.mortgage30_rate, md.cpi_yoy)
 
-    # ─��� 3. HUD Fair Market Rents ─────��────────────────────────────
-    logger.info("Fetching HUD Fair Market Rents...")
-    hud_token = _get_secret("hud", "api_token")
-    if hud_token and addr.zip_code:
-        fmr = _fetch_hud_fmr(addr.zip_code, hud_token)
-        if fmr:
-            md.fmr_studio = fmr.get("fmr_studio") or md.fmr_studio
-            md.fmr_1br    = fmr.get("fmr_1br") or md.fmr_1br
-            md.fmr_2br    = fmr.get("fmr_2br") or md.fmr_2br
-            md.fmr_3br    = fmr.get("fmr_3br") or md.fmr_3br
-            deal.provenance.field_sources["hud_fmr"] = f"hud_fmr_{data_pull_date}"
-            logger.info("HUD FMR: studio=%s, 1BR=%s, 2BR=%s, 3BR=%s",
-                         md.fmr_studio, md.fmr_1br, md.fmr_2br, md.fmr_3br)
-    else:
-        logger.warning("HUD FMR: missing API token or ZIP — skipping")
+    # ── STEP 5: Prompt 5B — Debt Market Snapshot (immediately after FRED) ─
+    logger.info("Step 5: Prompt 5B — Debt Market Snapshot...")
+    _generate_debt_market_narrative(deal, data_pull_date)
 
-    # ── 4. FEMA Flood Zone ────��───────────────────────────────────
-    logger.info("Fetching FEMA flood zone...")
-    if addr.latitude and addr.longitude:
-        fema = _fetch_fema_flood(addr.latitude, addr.longitude)
-        if fema:
-            md.fema_flood_zone   = fema.get("fema_flood_zone") or md.fema_flood_zone
-            md.fema_panel_number = fema.get("fema_panel_number") or md.fema_panel_number
-            deal.provenance.field_sources["fema_flood"] = f"fema_nfhl_{data_pull_date}"
-            logger.info("FEMA: zone=%s, panel=%s", md.fema_flood_zone, md.fema_panel_number)
-    else:
-        logger.warning("FEMA: no lat/lon — skipping flood zone lookup")
+    # ── STEP 6: HUD Fair Market Rents ─────────────────────────────
+    logger.info("Step 6: HUD Fair Market Rents...")
+    _fetch_hud_fmr(deal)
 
-    # ─�� 5. EPA Environmental Flags ───────��────────────────────────
-    logger.info("Fetching EPA environmental flags...")
+    # ── STEP 7: FEMA Flood Zone ───────────────────────────────────
+    logger.info("Step 7: FEMA Flood Zone...")
+    _fetch_fema_flood(deal)
+
+    # ── STEP 8: EPA Environmental Flags ───────────────────────────
+    logger.info("Step 8: EPA environmental flags...")
     if addr.zip_code:
         epa_flags = _fetch_epa_flags(addr.zip_code)
         if epa_flags:
@@ -719,36 +1226,32 @@ def enrich_market_data(deal: DealData) -> DealData:
     else:
         logger.warning("EPA: no ZIP code — skipping")
 
-    # ── 6. Data pull date ��────────────────────────────────────────
+    # ── Data pull date ────────────────────────────────────────────
     md.data_pull_date = data_pull_date
 
-    # ── 7. Municipal Registry Lookup + Zoning Scrape ──────────────
-    logger.info("Looking up municipal registry...")
-    muni = _lookup_municipality(addr.city, addr.state)
+    # ── STEP 9: Zoning Code Scrape + Prompts 3A/3B/3C ────────────
+    logger.info("Step 9: Zoning code analysis...")
     zoning_code_text = None
 
-    if muni:
-        deal.zoning.municipal_code_url   = muni.get("zoning_chapter_url") or muni.get("code_base_url")
-        deal.zoning.zoning_code_chapter  = muni.get("zoning_chapter_ref")
-
-        scrape_url = muni.get("zoning_chapter_url") or muni.get("code_base_url")
-        if scrape_url:
-            logger.info("Scraping zoning code from %s...", scrape_url)
-            zoning_code_text = _scrape_zoning_code(scrape_url)
-            if zoning_code_text:
-                deal.provenance.field_sources["zoning_scrape"] = scrape_url
+    scrape_url = deal.zoning.municipal_code_url
+    if scrape_url:
+        logger.info("Scraping zoning code from %s...", scrape_url)
+        zoning_code_text = _scrape_zoning_code(scrape_url)
+        if zoning_code_text:
+            deal.provenance.field_sources["zoning_scrape"] = scrape_url
     else:
-        logger.info("Municipality not in registry — zoning prompts will have limited data")
+        logger.info("No zoning code URL — zoning prompts will have limited data")
 
-    # ── 8. Prompt 3A — Zoning Parameter Extraction (Haiku) ────────
+    # Prompt 3A — Zoning Parameter Extraction (Haiku)
     if zoning_code_text:
         logger.info("Running Prompt 3A — Zoning Parameter Extraction...")
+        code_platform = deal.provenance.field_sources.get("code_platform", "unknown")
         user_msg = _USER_3A.format(
             property_address=addr.full_address,
             expected_zoning_code=deal.zoning.zoning_code or "unknown",
             municipality_name=addr.city or "unknown",
             state=addr.state or "unknown",
-            code_platform=muni.get("code_platform", "unknown") if muni else "unknown",
+            code_platform=code_platform,
             chapter_reference=deal.zoning.zoning_code_chapter or "unknown",
             zoning_code_text=zoning_code_text,
         )
@@ -761,7 +1264,7 @@ def enrich_market_data(deal: DealData) -> DealData:
     else:
         logger.info("Skipping Prompt 3A — no zoning code text available")
 
-    # ── 9. Prompt 3B — Buildable Capacity Analysis (Sonnet) ───────
+    # Prompt 3B — Buildable Capacity Analysis (Sonnet)
     logger.info("Running Prompt 3B — Buildable Capacity Analysis...")
     zoning_json = deal.zoning.model_dump_json(indent=2)
     user_msg = _USER_3B.format(
@@ -780,7 +1283,7 @@ def enrich_market_data(deal: DealData) -> DealData:
     else:
         logger.warning("Prompt 3B failed — continuing without buildable capacity")
 
-    # ── 10. Prompt 3C — Highest & Best Use (Sonnet) ────────────��──
+    # Prompt 3C — Highest & Best Use (Sonnet)
     logger.info("Running Prompt 3C — Highest & Best Use Analysis...")
     buildable_json = json.dumps({
         "max_buildable_units": deal.zoning.max_buildable_units,
@@ -804,47 +1307,5 @@ def enrich_market_data(deal: DealData) -> DealData:
     else:
         logger.warning("Prompt 3C failed — continuing without HBU")
 
-    # ── 11. Prompt 5B — Debt Market Snapshot (Sonnet) ─────────────
-    logger.info("Running Prompt 5B — Debt Market Snapshot...")
-    loan_amount = assumptions.purchase_price * assumptions.ltv_pct
-    user_msg = _USER_5B.format(
-        loan_type=getattr(assumptions, "loan_type", None) or "Permanent",
-        rate_type=getattr(assumptions, "rate_type", None) or "fixed",
-        property_address=addr.full_address,
-        asset_type=deal.asset_type.value,
-        hold_period=assumptions.hold_period,
-        data_pull_date=data_pull_date,
-        expense_growth_rate=f"{assumptions.expense_growth_rate * 100:.1f}",
-        dgs10_rate=_fmt_rate(md.dgs10_rate),
-        sofr_rate=_fmt_rate(md.sofr_rate),
-        mortgage30_rate=_fmt_rate(md.mortgage30_rate),
-        cpi_yoy=_fmt_rate(md.cpi_yoy),
-        loan_amount=f"{loan_amount:,.0f}",
-        loan_rate=f"{assumptions.interest_rate * 100:.2f}",
-        ltv=f"{assumptions.ltv_pct * 100:.0f}",
-        dscr_yr1="TBD",
-        amortization=assumptions.amort_years,
-        loan_term=assumptions.loan_term,
-    )
-    narrative = _call_llm_text(MODEL_SONNET, _SYSTEM_5B, user_msg)
-    if narrative:
-        md.debt_market_narrative = narrative
-        deal.narratives.debt_market_narrative = narrative
-        logger.info("Prompt 5B complete — debt market narrative written")
-    else:
-        logger.warning("Prompt 5B failed — continuing without debt market narrative")
-
     logger.info("Market data enrichment complete for %s", deal.deal_id)
     return deal
-
-
-# ═══════════════════════════════════════════════════════���═══════════════════
-# SECRETS HELPER
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _get_secret(section: str, key: str) -> Optional[str]:
-    """Safely retrieve a secret from st.secrets, returning None if not configured."""
-    try:
-        return st.secrets[section][key]
-    except (KeyError, FileNotFoundError):
-        return None
