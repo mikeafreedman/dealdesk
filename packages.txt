@@ -1,2 +1,2 @@
-LibreOffice
-libgl1-mesa-glx
+libreoffice
+libgl1-mesa-dev
