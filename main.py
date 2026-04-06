@@ -256,11 +256,48 @@ def _render_screen_assumptions() -> None:
     st.number_input("Exit Cap Rate %", min_value=0.0, max_value=1.0, step=0.005, format="%.3f", key="exit_cap_rate", value=0.07)
 
 
+# ── Session state defaults ───────────────────────────────────────────────
+
+def _init_session_state() -> None:
+    """Initialize all session-state keys with default values if absent."""
+    defaults = {
+        "address": "",
+        "asset_type": "Multifamily",
+        "investment_strategy": "stabilized",
+        "deal_description": "",
+        "purchase_price": 0.0,
+        "num_units": 0,
+        "gba_sf": 0.0,
+        "year_built": 1960,
+        "hold_period": 10,
+        "ltv_pct": 0.70,
+        "interest_rate": 0.065,
+        "amort_years": 30,
+        "target_lp_irr": 0.15,
+        "monthly_gross_rent": 0.0,
+        "vacancy_rate": 0.075,
+        "annual_rent_growth": 0.03,
+        "expense_growth_rate": 0.03,
+        "exit_cap_rate": 0.07,
+        "mgmt_fee_pct": 0.06,
+        "re_taxes": 45000.0,
+        "insurance": 18000.0,
+        "om_pdf_path": None,
+        "rent_roll_pdf_path": None,
+        "financials_pdf_path": None,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
 # ── Streamlit page ────────────────────────────────────────────────────────
 
 def main() -> None:
     st.set_page_config(page_title="DealDesk CRE Underwriting", layout="wide")
     st.title("DealDesk CRE Underwriting")
+
+    _init_session_state()
 
     # Sidebar navigation
     screen = st.sidebar.radio(
