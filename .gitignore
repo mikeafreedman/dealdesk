@@ -20,3 +20,12 @@ data/output/
 # IDE files
 .vscode/
 .idea/
+
+# Claude Code session data
+.claude/
+
+# Temporary debug dump files
+*_dump.txt
+eb_export.py
+~$*.docx
+cd*.docx

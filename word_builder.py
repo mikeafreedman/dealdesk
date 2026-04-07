@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import platform
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -23,6 +25,7 @@ from typing import Optional
 import anthropic
 import streamlit as st
 from docxtpl import DocxTemplate
+from docx.oxml.ns import qn
 
 from config import (
     ANTHROPIC_SECRET_KEY,
@@ -84,6 +87,9 @@ _SYSTEM_4MASTER = (
     "proforma_narrative (100-130 words): 10-yr revenue trajectory, expense management, NOI growth.\n"
     "proforma_pullquote (15-25 words): Pro forma pull-quote (NOI growth or cash-on-cash).\n"
     "sensitivity_narrative (70-90 words): Sensitivity matrix — what passes/fails threshold.\n"
+    "  IMPORTANT: If sensitivity_matrix is empty or all zeros, write exactly:\n"
+    "  'Sensitivity analysis requires stabilized revenue data. Matrix will be populated\n"
+    "  following lease-up and rent roll stabilization.' Do not report zeros as results.\n"
     "exit_narrative (70-90 words): Exit cap assumption, terminal value, net proceeds.\n"
     "capital_stack_narrative (80-100 words): LTV, debt terms, equity split, structure rationale.\n"
     "capital_structure_pullquote (15-25 words): Capital structure pull-quote.\n"
@@ -106,7 +112,9 @@ _SYSTEM_4MASTER = (
     "bottom_line (40-60 words): The last word on the deal before next steps.\n"
     "next_step_1-6 (15-25 words each): Six prioritized next steps beginning with action verbs.\n"
     "methodology_notes (80-100 words): Data sources, extraction methods, API pull dates,\n"
-    "  DealDesk pipeline version.\n"
+    "  DealDesk pipeline version. Municipal data sourced from DealDesk Municipal Registry\n"
+    "  covering approximately 6,400 U.S. municipalities (data/municipal_registry.csv).\n"
+    "  Use exactly '6,400' — do not use any other number for the registry size.\n"
     "photo_gallery_intro (30-50 words): Gallery context sentence.\n"
     "maps_intro (30-50 words): Maps section context sentence.\n"
     "fema_flood_narrative (50-70 words): Flood zone interpretation.\n"
@@ -281,7 +289,7 @@ def _build_context(deal: DealData) -> dict:
     ctx["zip_code"] = deal.address.zip_code
     ctx["asset_type"] = deal.asset_type.value
     ctx["investment_strategy"] = deal.investment_strategy.value
-    ctx["asking_price"] = ext.asking_price
+    ctx["asking_price"] = f"${deal.assumptions.purchase_price:,.0f}" if deal.assumptions.purchase_price else "Not disclosed"
     ctx["purchase_price"] = a.purchase_price
     ctx["num_units"] = a.num_units
     ctx["building_sf"] = a.gba_sf
@@ -297,7 +305,7 @@ def _build_context(deal: DealData) -> dict:
         ctx["parcel_data"] = {}
 
     # Zoning
-    ctx["zoning"] = deal.zoning.model_dump()
+    ctx["zoning"] = deal.zoning.zoning_code or "Pending verification"
     ctx["zoning_code"] = deal.zoning.zoning_code or ""
 
     # Market data
@@ -329,8 +337,8 @@ def _build_context(deal: DealData) -> dict:
     ctx["insurance_narrative_p1"] = ins.insurance_narrative_p1 or ""
     ctx["insurance_narrative_p2"] = ins.insurance_narrative_p2 or ""
     ctx["insurance_narrative_p3"] = ins.insurance_narrative_p3 or ""
-    ctx["insurance_kpi_strip"] = ins.insurance_kpi_strip or {}
-    ctx["insurance_summary_table"] = ins.insurance_summary_table or []
+    ctx["insurance_kpi_strip"] = ""
+    ctx["insurance_summary_table"] = ""
 
     # DD Flags
     ctx["dd_flags"] = [f.model_dump() for f in deal.dd_flags]
@@ -367,6 +375,111 @@ def _build_context(deal: DealData) -> dict:
     # Investor mode flag
     ctx["investor_mode"] = deal.investor_mode
 
+    # ── Zoning standards table rows ───────────────────────────────
+    z = deal.zoning
+    ctx["zoning_standards_rows"] = [
+        {"parameter": "Zoning District",      "standard": z.zoning_code or "",         "proposed": "", "code_section": ""},
+        {"parameter": "District Name",         "standard": z.zoning_district or "",     "proposed": "", "code_section": ""},
+        {"parameter": "Max Height (ft)",       "standard": z.max_height_ft or "",       "proposed": "", "code_section": ""},
+        {"parameter": "Max Stories",           "standard": z.max_stories or "",         "proposed": "", "code_section": ""},
+        {"parameter": "Min Lot Area (SF)",     "standard": z.min_lot_area_sf or "",     "proposed": "", "code_section": ""},
+        {"parameter": "Max Lot Coverage",      "standard": f"{z.max_lot_coverage_pct:.0%}" if z.max_lot_coverage_pct else "", "proposed": "", "code_section": ""},
+        {"parameter": "Max FAR",               "standard": z.max_far or "",             "proposed": "", "code_section": ""},
+        {"parameter": "Front Setback (ft)",    "standard": z.front_setback_ft or "",   "proposed": "", "code_section": ""},
+        {"parameter": "Rear Setback (ft)",     "standard": z.rear_setback_ft or "",    "proposed": "", "code_section": ""},
+        {"parameter": "Side Setback (ft)",     "standard": z.side_setback_ft or "",    "proposed": "", "code_section": ""},
+        {"parameter": "Min Parking Spaces",    "standard": z.min_parking_spaces or "", "proposed": "", "code_section": ""},
+        {"parameter": "Permitted Uses",        "standard": ", ".join(z.permitted_uses) if z.permitted_uses else "", "proposed": "", "code_section": ""},
+    ]
+
+    # ── Pro forma table rows (formatted for report) ───────────────
+    pf_rows = []
+    for yr in (fo.pro_forma_years or []):
+        ds = yr.get("debt_service", 0) or 0
+        noi = yr.get("noi", 0) or 0
+        pf_rows.append({
+            "year":          yr.get("year", ""),
+            "gpr":           f"${yr.get('gpr', 0):,.0f}",
+            "egi":           f"${yr.get('egi', 0):,.0f}",
+            "opex":          f"${yr.get('opex', 0):,.0f}",
+            "noi":           f"${noi:,.0f}",
+            "debt_service":  f"${ds:,.0f}",
+            "cfbt":          f"${yr.get('fcf', 0):,.0f}",
+            "coc":           f"{yr.get('cash_on_cash', 0):.1%}",
+            "dscr":          f"{noi/ds:.2f}x" if ds > 0 else "N/A",
+        })
+    ctx["pro_forma_table_rows"] = pf_rows
+
+    # ── Sensitivity matrix rows (formatted for report) ────────────
+    sens_rows = []
+    rent_axis  = fo.sensitivity_axis_rent_growth or []
+    cap_axis   = fo.sensitivity_axis_exit_cap or []
+    matrix     = fo.sensitivity_matrix or []
+    for i, row in enumerate(matrix):
+        rg_label = f"{rent_axis[i]:.1%}" if i < len(rent_axis) else ""
+        sens_rows.append({
+            "rent_growth": rg_label,
+            "values": [f"{v:.1%}" if v else "—" for v in row],
+        })
+    ctx["sensitivity_rows"]      = sens_rows
+    ctx["sensitivity_cap_axis"]  = [f"{c:.1%}" for c in cap_axis]
+
+    # ── Monte Carlo results ───────────────────────────────────────
+    ctx["monte_carlo_results"] = fo.monte_carlo_results or {}
+
+    # ── Full market data object (for demographic table) ───────────
+    ctx["market_data"] = deal.market_data.model_dump() if deal.market_data else {}
+
+    # ── Waterfall formatted rows ──────────────────────────────────
+    wf_rows = []
+    tier_labels = ["Tier 1 — Pref Return + ROC", "Tier 2", "Tier 3", "Tier 4"]
+    for i, t in enumerate(a.waterfall_tiers):
+        wf_rows.append({
+            "tier":     tier_labels[i] if i < len(tier_labels) else f"Tier {i+1}",
+            "hurdle":   f"{t.hurdle_value:.1%}" if t.hurdle_value else "",
+            "lp_split": f"{t.lp_share:.0%}",
+            "gp_split": f"{1 - t.lp_share:.0%}",
+            "promote":  f"{1 - t.lp_share:.0%}",
+        })
+    if hasattr(a, "residual_tier") and a.residual_tier:
+        wf_rows.append({
+            "tier":     "Residual (above Tier 4)",
+            "hurdle":   "Above all hurdles",
+            "lp_split": f"{a.residual_tier.lp_share:.0%}",
+            "gp_split": f"{a.residual_tier.gp_share:.0%}",
+            "promote":  f"{a.residual_tier.gp_share:.0%}",
+        })
+    ctx["waterfall_tier_rows"] = wf_rows
+
+    # ── FRED rates (formatted for debt section) ───────────────────
+    md = deal.market_data
+    ctx["dgs10_rate"]      = f"{md.dgs10_rate:.2%}"      if md.dgs10_rate      else "N/A"
+    ctx["sofr_rate"]       = f"{md.sofr_rate:.2%}"       if md.sofr_rate       else "N/A"
+    ctx["mortgage30_rate"] = f"{md.mortgage30_rate:.2%}" if md.mortgage30_rate else "N/A"
+    ctx["cpi_yoy"]         = f"{md.cpi_yoy:.2%}"         if md.cpi_yoy         else "N/A"
+
+    # ── Opportunity zone flag ─────────────────────────────────────
+    ctx["is_opportunity_zone"] = (
+        deal.provenance.field_sources.get("opportunity_zone", "False") == "True"
+    )
+
+    # ── EPA environmental flags ───────────────────────────────────
+    ctx["epa_env_flags"] = md.epa_env_flags or []
+
+    # ── HUD Fair Market Rents ─────────────────────────────────────
+    ctx["fmr_studio"] = f"${md.fmr_studio:,.0f}" if md.fmr_studio else "N/A"
+    ctx["fmr_1br"]    = f"${md.fmr_1br:,.0f}"    if md.fmr_1br    else "N/A"
+    ctx["fmr_2br"]    = f"${md.fmr_2br:,.0f}"    if md.fmr_2br    else "N/A"
+    ctx["fmr_3br"]    = f"${md.fmr_3br:,.0f}"    if md.fmr_3br    else "N/A"
+
+    # ── Debt market narrative ─────────────────────────────────────
+    ctx["debt_market_narrative"] = md.debt_market_narrative or ""
+
+    # ── HBU and buildable capacity ────────────────────────────────
+    ctx["hbu_narrative"]           = z.hbu_narrative or ""
+    ctx["hbu_conclusion"]          = z.hbu_conclusion or ""
+    ctx["buildable_capacity_narrative"] = z.buildable_capacity_narrative or ""
+
     return ctx
 
 
@@ -374,12 +487,32 @@ def _build_context(deal: DealData) -> dict:
 # DOCX GENERATION & PDF CONVERSION
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _strip_highlight(doc):
+    """Remove yellow highlight formatting from all runs."""
+    for para in doc.paragraphs:
+        for run in para.runs:
+            rPr = run._r.get_or_add_rPr()
+            highlight = rPr.find(qn('w:highlight'))
+            if highlight is not None:
+                rPr.remove(highlight)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        rPr = run._r.get_or_add_rPr()
+                        highlight = rPr.find(qn('w:highlight'))
+                        if highlight is not None:
+                            rPr.remove(highlight)
+
+
 def _populate_docx(deal: DealData) -> Path:
     """Populate DealDesk_Report_Template_v4.docx with template context. Returns docx path."""
     ctx = _build_context(deal)
 
     tpl = DocxTemplate(str(WORD_TEMPLATE))
     tpl.render(ctx)
+    _strip_highlight(tpl.docx)
 
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     docx_path = OUTPUTS_DIR / f"{deal.deal_id}_report.docx"
@@ -388,13 +521,59 @@ def _populate_docx(deal: DealData) -> Path:
     return docx_path
 
 
+def _update_toc_fields(docx_path: Path) -> None:
+    """
+    Open the DOCX in a live Word instance via win32com, update all fields
+    (including the Table of Contents), save, and close.
+
+    This must run on Windows with Microsoft Word installed.  It is required
+    because docxtpl renders the template but cannot update Word fields — the
+    TOC field remains empty until Word recalculates it.
+
+    Falls back gracefully with a warning if win32com is unavailable (e.g.
+    on Streamlit Community Cloud) — the PDF will render with a blank TOC
+    but all other content will be correct.
+    """
+    try:
+        import win32com.client as win32
+    except ImportError:
+        logger.warning(
+            "win32com not available — TOC fields will not be updated. "
+            "Install pywin32 to enable automatic TOC generation."
+        )
+        return
+
+    try:
+        word = win32.Dispatch("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = False
+        try:
+            doc = word.Documents.Open(str(docx_path.resolve()))
+            doc.Fields.Update()          # updates all fields including TOC
+            doc.TablesOfContents(1).Update()  # explicitly refresh TOC entries + page numbers
+            doc.Save()
+            doc.Close()
+        finally:
+            word.Quit()
+        logger.info("TOC fields updated: %s", docx_path.name)
+    except Exception as exc:
+        logger.warning(
+            "win32com TOC update failed: %s — proceeding with blank TOC", exc
+        )
+
+
 def _convert_to_pdf(docx_path: Path) -> Path:
     """Convert DOCX to PDF via LibreOffice headless. Returns PDF path."""
+    if platform.system() == "Windows":
+        soffice = r"C:\Program Files\LibreOffice\program\soffice.exe"
+    else:
+        soffice = "soffice"
+
     output_dir = docx_path.parent
     try:
         subprocess.run(
             [
-                "soffice",
+                soffice,
                 "--headless",
                 "--convert-to", "pdf",
                 "--outdir", str(output_dir),
@@ -410,6 +589,11 @@ def _convert_to_pdf(docx_path: Path) -> Path:
         )
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"LibreOffice PDF conversion failed: {exc.stderr.decode()}")
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"LibreOffice not found at: {soffice}. "
+            "Please verify the installation path."
+        )
 
     pdf_path = output_dir / f"{docx_path.stem}.pdf"
     if not pdf_path.exists():
@@ -448,6 +632,9 @@ def generate_report(deal: DealData) -> DealData:
 
     # Stage 3: Populate DOCX template
     docx_path = _populate_docx(deal)
+
+    # Stage 3B: Update Word fields (TOC page numbers) before PDF conversion
+    _update_toc_fields(docx_path)
 
     # Stage 4: Convert to PDF
     pdf_path = _convert_to_pdf(docx_path)

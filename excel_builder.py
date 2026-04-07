@@ -19,7 +19,7 @@ from typing import Any, List, Tuple
 
 import openpyxl
 
-from config import TEMPLATES_DIR, OUTPUTS_DIR
+from config import get_excel_template, OUTPUTS_DIR
 from models.models import DealData, InvestmentStrategy
 
 
@@ -32,9 +32,7 @@ def populate_excel(deal: DealData) -> Path:
     Copy the correct Excel template and populate the Assumptions tab
     with all values from DealData.  Returns path to the output file.
     """
-    template_path = TEMPLATES_DIR / deal.excel_template_file
-    if not template_path.exists():
-        raise FileNotFoundError(f"Template not found: {template_path}")
+    template_path = get_excel_template(deal.strategy_key, deal.asset_type_key)
 
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     output_path = OUTPUTS_DIR / f"{deal.deal_id}_financial_model.xlsx"

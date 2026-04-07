@@ -190,8 +190,21 @@ def _apply_1a(data: dict, deal: DealData) -> None:
     ext.broker_name           = data.get("broker_name")
     ext.num_units_extracted   = data.get("total_units")
     ext.gba_sf_extracted      = data.get("total_sf")
-    ext.lot_sf_extracted      = data.get("lot_sf")
-    ext.year_built_extracted  = data.get("year_built")
+    ext.lot_sf_extracted  = data.get("lot_sf")
+
+    # Only accept year_built if not flagged as inferred — a guessed year
+    # is worse than no year because it populates the Excel model with false data.
+    year_built_raw        = data.get("year_built")
+    year_built_confidence = data.get("year_built_confidence", "").lower()
+    if year_built_raw is not None and year_built_confidence != "inferred":
+        ext.year_built_extracted = year_built_raw
+    else:
+        if year_built_confidence == "inferred":
+            logger.info(
+                "year_built suppressed — marked inferred by extractor (value was %s)",
+                year_built_raw,
+            )
+        ext.year_built_extracted = None
     ext.description_extracted = data.get("property_description")
     ext.image_placements      = {"images": data.get("images", [])}
 

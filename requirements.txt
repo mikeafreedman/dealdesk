@@ -13,6 +13,8 @@ distro==1.9.0
 docstring_parser==0.17.0
 docxtpl==0.20.2
 et_xmlfile==2.0.0
+fastapi==0.115.12
+
 flatbuffers==25.12.19
 gitdb==4.0.12
 GitPython==3.1.46
@@ -45,6 +47,7 @@ pymupdf-layout==1.27.2.2
 pymupdf4llm==1.27.2.2
 python-dateutil==2.9.0.post0
 python-docx==1.2.0
+python-multipart==0.0.20
 python-pptx==1.0.2
 PyYAML==6.0.3
 referencing==0.37.0
@@ -64,5 +67,6 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2026.1
 urllib3==2.6.3
+uvicorn==0.34.2
 watchdog==6.0.0
 xlsxwriter==3.2.9

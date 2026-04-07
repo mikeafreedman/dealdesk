@@ -895,14 +895,27 @@ def run_financials(deal: DealData) -> DealData:
     fo.gp_equity_multiple = round(wf["gp_em"], 2)
 
     # ── Sensitivity Matrix ────────────────────────────────────────
-    if not is_sale:
+    # Guard: skip if no rent income or no equity — matrix would be all zeros
+    # which the narrative module would report as a false finding.
+    _has_income = _gpr_yr1(deal) > 0
+    _has_equity = su["total_equity_required"] > 0
+
+    if not is_sale and _has_income and _has_equity:
         matrix, rent_axis, cap_axis = _build_sensitivity(deal, insurance, su)
         fo.sensitivity_matrix = matrix
         fo.sensitivity_axis_rent_growth = rent_axis
         fo.sensitivity_axis_exit_cap = cap_axis
+        logger.info("Sensitivity matrix built: %dx%d",
+                    len(matrix), len(matrix[0]) if matrix else 0)
+    elif not is_sale:
+        logger.warning(
+            "Sensitivity matrix skipped — gpr_yr1=%.0f, equity=%.0f. "
+            "Matrix will be empty; report will suppress Section 12.5.",
+            _gpr_yr1(deal), su["total_equity_required"]
+        )
 
     # ── Monte Carlo ───────────────────────────────────────────────
-    if not is_sale:
+    if not is_sale and _has_income and _has_equity:
         mc = _run_monte_carlo(deal, insurance, su)
         fo.monte_carlo_results = mc
 
@@ -918,6 +931,12 @@ def run_financials(deal: DealData) -> DealData:
                 logger.warning("Prompt 5A failed — narrative remains None")
         else:
             logger.warning("Monte Carlo produced no valid results — skipping Prompt 5A")
+    elif not is_sale:
+        logger.warning(
+            "Monte Carlo skipped — gpr_yr1=%.0f, equity=%.0f. "
+            "Simulation requires positive income and equity.",
+            _gpr_yr1(deal), su["total_equity_required"]
+        )
 
     logger.info("Financials module complete")
     return deal

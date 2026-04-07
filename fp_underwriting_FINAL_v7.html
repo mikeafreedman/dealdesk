@@ -1,0 +1,2277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DealDesk — CRE Underwriting</title>
+<link href="https://fonts.googleapis.com/css2?family=:ital,wght@0,400;0,600;1,400&family=Century+Gothic:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* ═══════════════════════════════════════════════════════════
+     DEALDESK MASTER COLOR SYSTEM v1.0
+     ─────────────────────────────────────────────────────────
+     Sage Deep    #4A6E50  Primary green, section headers, active
+     Sage Light   #B2C9B4  Secondary green, borders, row tints
+     Earth Light  #C4A882  Tertiary accents, callout highlights
+     Dark Walnut  #2C1F14  Sidebar bg, table headers, dark text
+     Parchment    #F5EFE4  Page/card backgrounds, light surfaces
+     Earth        #8B7355  Body text, labels, borders, dividers
+     Earth Mid    #5C3D26  Subheadings, medium-weight labels
+     Sage         #7A9E7E  Hover states, progress, success
+  ═══════════════════════════════════════════════════════════ */
+
+  /* — Master Palette — */
+  --sage-deep:    #4A6E50;
+  --sage-light:   #B2C9B4;
+  --earth-light:  #C4A882;
+  --dark-walnut:  #2C1F14;
+  --parchment:    #F5EFE4;
+  --earth:        #8B7355;
+  --earth-mid:    #5C3D26;
+  --sage-hover:   #7A9E7E;
+
+  /* — Semantic Aliases (mapped to master palette) — */
+  --sage:         #4A6E50;   /* Sage Deep */
+  --sage-dk:      #4A6E50;   /* Sage Deep */
+  --sage-lt:      #B2C9B4;   /* Sage Light */
+  --sage-mid:     #B2C9B4;   /* Sage Light */
+  --parch:        #F5EFE4;   /* Parchment */
+  --parch-dk:     #F5EFE4;   /* Parchment */
+  --near-black:   #2C1F14;   /* Dark Walnut */
+  --body:         #8B7355;   /* Earth */
+  --muted:        #8B7355;   /* Earth */
+  --ghost:        #8B7355;   /* Earth */
+  --rule:         #B2C9B4;   /* Sage Light */
+  --rule-dk:      #8B7355;   /* Earth */
+  --sidebar-bg:   #2C1F14;   /* Dark Walnut */
+  --sidebar-txt:  #F5EFE4;   /* Parchment */
+  --sidebar-mut:  #B2C9B4;   /* Sage Light */
+  --input-bg:     #F5EFE4;   /* Parchment */
+  --input-bd:     #8B7355;   /* Earth */
+  --card-bg:      #F5EFE4;   /* Parchment */
+  --green:        #4A6E50;   /* Sage Deep */
+  --green-lt:     #B2C9B4;   /* Sage Light */
+
+  /* — Functional Colors (Status Indicators — approved exceptions to master palette) — */
+  --white:        #FFFFFF;   /* Pure white — browser engine use only */
+  --pass:         #B2C9B4;   /* PASS status — Sage Light */
+  --pass-lt:      rgba(178,201,180,0.18); /* PASS tint */
+  --watch:        #5C3D26;   /* WATCH status — Earth Mid */
+  --watch-lt:     rgba(92,61,38,0.10);  /* WATCH tint */
+  --red:          #8B2020;   /* FAIL/error/danger states */
+  --red-lt:       #FDECEA;   /* FAIL tint */
+  /* Legacy aliases kept for compat */
+  --amber:        #5C3D26;   /* remapped → Earth Mid (Watch) */
+  --amber-lt:     rgba(92,61,38,0.10); /* remapped → Watch tint */
+
+  /* — Typography — */
+  --font-display: 'Century Gothic', 'Gill Sans', sans-serif;
+  --font-ui:      'Century Gothic', 'Gill Sans', sans-serif;
+  --font-mono:    'DM Mono', monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-ui);background:var(--parch);color:var(--body);display:flex;height:100vh;overflow:hidden}
+
+/* SIDEBAR */
+.sidebar{width:230px;min-width:230px;background:var(--sidebar-bg);display:flex;flex-direction:column;border-right:1px solid #2C1F14}
+.sb-brand{padding:22px 20px 18px;border-bottom:1px solid #2C1F14}
+.sb-brand-name{font-family:var(--font-display);font-size:15px;font-weight:600;color:var(--sidebar-txt);letter-spacing:.03em;line-height:1.2}
+.sb-brand-sub{font-size:10px;color:var(--sidebar-mut);letter-spacing:.12em;text-transform:uppercase;margin-top:3px}
+.sb-nav{flex:1;padding:12px 0;overflow-y:auto}
+.sb-section-label{font-size:9px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--sidebar-mut);padding:14px 18px 6px}
+.sb-item{display:flex;align-items:center;gap:10px;padding:9px 18px;font-size:12.5px;font-weight:400;color:var(--sidebar-mut);cursor:pointer;transition:all .15s;border-left:2px solid transparent}
+.sb-item:hover{color:var(--sidebar-txt);background:rgba(245,239,228,.04)}
+.sb-item.active{color:var(--sidebar-txt);background:rgba(74,110,80,.15);border-left-color:var(--sage);font-weight:500}
+.sb-item svg{opacity:.6;flex-shrink:0}
+.sb-item.active svg{opacity:1}
+.sb-footer{padding:14px 18px;border-top:1px solid #2C1F14;font-size:10.5px;color:var(--sidebar-mut)}
+.sb-footer span{color:var(--sage-mid);font-weight:500}
+
+/* MAIN */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{height:52px;background:var(--white);border-bottom:1px solid var(--rule);display:flex;align-items:center;padding:0 28px;gap:16px;flex-shrink:0}
+.topbar-title{font-family:var(--font-display);font-size:17px;font-weight:600;color:var(--near-black);flex:1}
+.topbar-badge{font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:3px;background:var(--sage-lt);color:var(--sage-dk)}
+.screens{flex:1;overflow:hidden;position:relative}
+.screen{display:none;height:100%;overflow-y:auto;padding:28px}
+.screen.active{display:block}
+.step-label{font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--sage-dk);margin-bottom:10px}
+
+/* CARD */
+.card{background:var(--card-bg);border:1px solid var(--rule);border-radius:6px;margin-bottom:16px;overflow:hidden}
+.card-head{display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid var(--rule);background:var(--parch-dk);cursor:pointer;user-select:none}
+.card-head-left{display:flex;align-items:center;gap:10px}
+.card-title{font-size:13px;font-weight:600;color:var(--near-black)}
+.card-sub{font-size:11px;color:var(--muted);margin-top:1px}
+.card-toggle{color:var(--ghost);transition:transform .2s;font-size:11px}
+.card-toggle.open{transform:rotate(180deg)}
+.card-body{padding:18px;display:none}
+.card-body.open{display:block}
+
+/* FIELDS */
+.fg1{display:grid;grid-template-columns:1fr;gap:14px}
+.fg2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.fg3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.fg4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:11px;font-weight:500;color:var(--muted);letter-spacing:.02em}
+.fi{height:34px;padding:0 10px;border:1px solid var(--input-bd);border-radius:4px;background:var(--input-bg);font-family:var(--font-ui);font-size:13px;color:var(--near-black);transition:border-color .15s;width:100%}
+.fi:focus{outline:none;border-color:var(--sage);box-shadow:0 0 0 2px rgba(74,110,80,.12)}
+.fi::placeholder{color:var(--ghost)}
+select.fi{cursor:pointer}
+textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:13px}
+.field-note{font-size:10px;color:var(--ghost);line-height:1.4}
+.section-divider{height:1px;background:var(--rule);margin:16px 0}
+
+/* REQUIRED BADGE */
+.req-badge{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--red);background:var(--red-lt);border:1px solid rgba(139,32,32,.15);padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}
+
+/* DESCRIPTION CARD — now merged into property card; keep char-count styles */
+.char-count{font-size:10px;color:var(--ghost);font-family:var(--font-mono);text-align:right;margin-top:6px}
+.char-count.warn{color:var(--amber)}
+.char-count.ok{color:var(--green)}
+
+/* HURDLE TYPE TOGGLE (IRR / EM per waterfall tier) */
+.hurdle-type-toggle{display:inline-flex;border:1px solid var(--rule-dk);border-radius:4px;overflow:hidden;margin-bottom:4px}
+.ht-btn{padding:4px 9px;font-size:10.5px;font-weight:600;font-family:var(--font-ui);border:none;background:var(--parch-dk);color:var(--muted);cursor:pointer;transition:all .15s;letter-spacing:.02em}
+.ht-btn:first-child{border-right:1px solid var(--rule-dk)}
+.ht-btn.active{background:var(--sage);color:var(--white)}
+.ht-btn:hover:not(.active){background:var(--sage-lt);color:var(--sage-dk)}
+.hurdle-unit{font-size:9.5px;color:var(--ghost);font-family:var(--font-mono)}
+
+/* REFI EVENTS */
+.refi-event-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.refi-event-num{font-size:12px;font-weight:600;color:var(--near-black);letter-spacing:.02em}
+.refi-on-lbl{font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;min-width:24px}
+.refi-event-fields{margin-top:4px}
+.refi-collapsed{display:none}
+
+/* INFO HINT */
+.info-hint{margin-top:12px;padding:10px 12px;background:var(--parch);border:1px solid var(--rule);border-radius:4px;font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.info-hint a{color:var(--sage);cursor:pointer;font-weight:500}
+
+/* UPLOAD */
+.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.upload-cat{border:1px dashed var(--rule-dk);border-radius:5px;padding:14px;transition:border-color .15s,background .15s;cursor:pointer}
+.upload-cat:hover{border-color:var(--sage-mid);background:var(--sage-lt)}
+.upload-cat.active{border-color:var(--sage);border-style:solid;background:var(--sage-lt)}
+.uc-icon{font-size:18px;margin-bottom:6px}
+.uc-title{font-size:12px;font-weight:600;color:var(--near-black);margin-bottom:3px}
+.uc-desc{font-size:10.5px;color:var(--muted);line-height:1.4}
+.uc-files{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.uc-file{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--body);background:var(--white);border:1px solid var(--rule);border-radius:3px;padding:4px 8px}
+.uc-file svg{flex-shrink:0;color:var(--sage)}
+
+/* WATERFALL */
+.tier-row{display:grid;grid-template-columns:110px 1fr 1fr 1fr;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--rule)}
+.tier-row:last-child{border-bottom:none}
+.tier-label{font-size:11px;font-weight:600;color:var(--sage-dk);letter-spacing:.04em}
+
+/* TOGGLE */
+.toggle-row{display:flex;align-items:center;gap:12px;padding:12px 0}
+.toggle-label{font-size:13px;font-weight:500;color:var(--near-black)}
+.toggle-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.toggle{position:relative;width:38px;height:22px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;inset:0;background:var(--rule-dk);border-radius:22px;cursor:pointer;transition:.2s}
+.toggle-slider::before{content:'';position:absolute;width:16px;height:16px;left:3px;top:3px;background:white;border-radius:50%;transition:.2s}
+.toggle input:checked+.toggle-slider{background:var(--sage)}
+.toggle input:checked+.toggle-slider::before{transform:translateX(16px)}
+.refi-fields{display:none;margin-top:14px}
+.refi-fields.show{display:grid}
+.conditional-field{display:none}
+.conditional-field.show{display:block}
+
+/* SUBMIT BAR */
+.submit-bar{background:var(--white);border-top:1px solid var(--rule);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.submit-info{font-size:12px;color:var(--muted)}
+.btn{padding:10px 24px;border-radius:4px;font-family:var(--font-ui);font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .15s}
+.btn-primary{background:var(--sage);color:var(--white);letter-spacing:.04em}
+.btn-primary:hover{background:var(--sage-dk)}
+.btn-secondary{background:transparent;color:var(--sage);border:1px solid var(--sage)}
+.btn-secondary:hover{background:var(--sage-lt)}
+
+/* MODAL */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(44,31,20,.55);z-index:100;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:var(--white);border-radius:8px;width:480px;padding:28px;box-shadow:0 20px 60px rgba(44,31,20,.25)}
+.modal-title{font-family:var(--font-display);font-size:20px;font-weight:600;color:var(--near-black);margin-bottom:6px}
+.modal-sub{font-size:12.5px;color:var(--muted);margin-bottom:20px;line-height:1.5}
+.modal-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--rule);font-size:12.5px}
+.modal-row:last-of-type{border-bottom:none}
+.modal-row-label{color:var(--muted)}
+.modal-row-val{font-weight:600;color:var(--near-black)}
+.modal-btns{display:flex;gap:10px;margin-top:22px;justify-content:flex-end}
+
+/* DASHBOARD */
+.metrics-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.metric-card{background:var(--white);border:1px solid var(--rule);border-radius:6px;padding:16px}
+.mc-label{font-size:10.5px;color:var(--muted);font-weight:500;letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px}
+.mc-value{font-family:var(--font-display);font-size:26px;font-weight:600;color:var(--near-black);line-height:1}
+.mc-value.pass{color:var(--pass)}.mc-value.watch{color:var(--watch)}.mc-value.fail{color:var(--red)}
+.mc-footer{font-size:10.5px;color:var(--muted);margin-top:6px;display:flex;align-items:center;gap:5px}
+.tag{font-size:9px;font-weight:700;padding:2px 5px;border-radius:2px;letter-spacing:.06em}
+.tag.pass{background:var(--pass);color:var(--dark-walnut)}.tag.watch{background:var(--watch-lt);color:var(--watch);border:1px solid var(--watch)}.tag.fail{background:var(--red-lt);color:var(--red)}
+
+/* ARCHIVE */
+.deal-list{display:flex;flex-direction:column;gap:10px}
+.deal-row{background:var(--white);border:1px solid var(--rule);border-radius:6px;padding:14px 18px;display:flex;align-items:center;gap:16px;cursor:pointer;transition:border-color .15s}
+.deal-row:hover{border-color:var(--sage-mid)}
+.deal-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.deal-dot.complete{background:var(--green)}.deal-dot.progress{background:var(--amber)}
+.deal-name{font-size:13px;font-weight:600;color:var(--near-black)}
+.deal-meta{font-size:11px;color:var(--muted);margin-top:2px}
+.deal-irr{font-family:var(--font-display);font-size:18px;font-weight:600;color:var(--near-black);margin-left:auto}
+.deal-status{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:3px;flex-shrink:0}
+.deal-status.complete{background:var(--green-lt);color:var(--green)}.deal-status.progress{background:var(--amber-lt);color:var(--amber)}
+
+/* DOWNLOADS */
+.dl-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.dl-card{background:var(--white);border:1px solid var(--rule);border-radius:6px;padding:22px 24px;display:flex;flex-direction:column;gap:8px}
+.dl-card-type-badge{display:inline-flex;align-items:center;font-size:11px;font-weight:700;letter-spacing:.12em;padding:4px 10px;border-radius:4px;width:fit-content;font-family:var(--font-mono);margin-bottom:2px}
+.dl-badge-pdf{background:var(--red-lt);color:var(--red);border:1px solid rgba(139,32,32,.15)}
+.dl-badge-xlsx{background:var(--green-lt);color:var(--green);border:1px solid rgba(74,110,80,.15)}
+.dl-card-title{font-size:15px;font-weight:600;color:var(--near-black);font-family:var(--font-display)}
+.dl-card-desc{font-size:11.5px;color:var(--muted);line-height:1.6}
+.dl-btn{margin-top:auto;padding:9px 16px;border-radius:4px;font-size:12px;font-weight:600;border:1px solid var(--rule-dk);background:var(--parch-dk);color:var(--body);cursor:pointer;display:flex;align-items:center;gap:6px;width:fit-content;transition:all .15s;letter-spacing:.02em}
+.dl-btn:hover{border-color:var(--sage);color:var(--sage);background:var(--sage-lt)}
+
+/* PROGRESS STRIP */
+.progress-strip{display:flex;align-items:center;gap:6px;margin-bottom:22px}
+.ps-step{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ghost)}
+.ps-step.done{color:var(--sage)}.ps-step.active{color:var(--near-black);font-weight:600}
+.ps-num{width:20px;height:20px;border-radius:50%;background:var(--rule);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--ghost)}
+.ps-step.done .ps-num{background:var(--sage);color:var(--white)}.ps-step.active .ps-num{background:var(--near-black);color:var(--white)}
+.ps-line{height:1px;width:28px;background:var(--rule)}
+
+/* SPINNER */
+.spinner-wrap{display:none;flex-direction:column;align-items:center;justify-content:center;padding:60px 0;gap:16px}
+.spinner-wrap.show{display:flex}
+.spinner{width:40px;height:40px;border:3px solid var(--rule);border-top-color:var(--sage);border-radius:50%;animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner-text{font-size:13px;color:var(--muted)}
+
+/* ASSUMPTIONS CALLOUT (on New Underwrite screen) */
+.assum-callout{background:var(--white);border:1px solid var(--rule);border-left:3px solid var(--sage);border-radius:6px;margin-bottom:16px;padding:18px 20px;display:flex;align-items:flex-start;gap:14px}
+.assum-callout-icon{width:32px;height:32px;border-radius:6px;background:var(--sage-lt);display:flex;align-items:center;justify-content:center;color:var(--sage-dk);flex-shrink:0;margin-top:1px}
+.assum-callout-body{flex:1}
+.assum-callout-title{font-size:13px;font-weight:600;color:var(--near-black);margin-bottom:5px}
+.assum-callout-desc{font-size:11.5px;color:var(--muted);line-height:1.6;margin-bottom:12px}
+.assum-callout-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:var(--sage);color:var(--white);border:none;border-radius:4px;font-family:var(--font-ui);font-size:12px;font-weight:600;letter-spacing:.03em;cursor:pointer;transition:background .15s}
+.assum-callout-btn:hover{background:var(--sage-dk)}
+.assum-page-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--rule)}
+.assum-page-title{font-family:var(--font-display);font-size:22px;font-weight:600;color:var(--near-black);line-height:1.2}
+.assum-page-sub{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5;max-width:540px}
+.assum-save-strip{display:flex;align-items:center;gap:10px}
+.save-status{font-size:11.5px;color:var(--muted);font-style:italic}
+.save-status.saved{color:var(--green);font-style:normal;font-weight:500}
+.assum-section-label{font-size:9.5px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--sage-dk);margin:24px 0 10px;display:flex;align-items:center;gap:10px}
+.assum-section-label::after{content:'';flex:1;height:1px;background:var(--sage-mid);opacity:.5}
+.assum-card{background:var(--white);border:1px solid var(--rule);border-radius:6px;margin-bottom:12px;overflow:hidden}
+.assum-card-head{padding:13px 18px;background:var(--parch-dk);border-bottom:1px solid var(--rule)}
+.assum-card-title{font-size:13px;font-weight:600;color:var(--near-black)}
+.assum-card-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.assum-card-body{padding:18px}
+.assum-row{display:grid;grid-template-columns:1fr 170px 110px;gap:14px;align-items:start;padding:12px 0;border-bottom:1px solid var(--rule)}
+.assum-row:last-child{border-bottom:none}
+.assum-row-label{font-size:13px;font-weight:500;color:var(--near-black);line-height:1.3}
+.assum-row-desc{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4}
+.source-badge{display:inline-flex;align-items:center;gap:4px;font-size:9.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;width:fit-content}
+.source-badge.firm{background:var(--sage-lt);color:var(--sage-dk)}
+.source-badge.market{background:var(--amber-lt);color:var(--amber)}
+.source-label{font-size:10px;color:var(--ghost);margin-bottom:4px}
+.assum-info-banner{background:var(--sage-lt);border:1px solid var(--sage-mid);border-radius:6px;padding:12px 16px;display:flex;align-items:flex-start;gap:10px;margin-bottom:20px;font-size:12px;color:var(--sage-dk);line-height:1.5}
+.reset-link{font-size:11px;color:var(--muted);text-decoration:underline;cursor:pointer;transition:color .15s}
+.reset-link:hover{color:var(--sage)}
+.sec-toggle-row{display:grid;grid-template-columns:1fr 90px;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--rule)}
+.sec-toggle-row:last-child{border-bottom:none}
+.toggle-state-lbl{font-size:9.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ghost);text-align:center;margin-top:4px}
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sb-brand">
+    <img src="data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAPoA+gDASIAAhEBAxEB/8QAHAABAAMBAQEBAQAAAAAAAAAAAAYHCAUEAwIB/8QAVxABAAEDAgIDBg0PCQgDAQEAAAECAwQFEQYHEiExCBNBUWGBFBYiNVRxc3SRsbKz0RUXIzI2N0JWcnWSlKGjwRg0UlNVpMLS0yQzYoKTlaLjQ2PhJUT/xAAaAQEAAwEBAQAAAAAAAAAAAAAAAQQFAwIG/8QANxEBAAICAQEFBQYGAQUBAAAAAAECAxEEEhMhMTNRBRQyQXEVIlJhgZE0QmKhsfDxJENywdHh/9oADAMBAAIRAxEAPwDNICktgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA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AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB//2Q==" alt="DealDesk CRE Underwriting" style="width:152px;height:auto;display:block;">
+  </div>
+  <nav class="sb-nav">
+    <div class="sb-section-label">Workspace</div>
+    <div class="sb-item active" onclick="showScreen('new')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>New Underwrite
+    </div>
+    <div class="sb-item" onclick="showScreen('results')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>Deal Dashboard
+    </div>
+    <div class="sb-item" onclick="showScreen('downloads')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Downloads
+    </div>
+    <div class="sb-section-label">History</div>
+    <div class="sb-item" onclick="showScreen('archive')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>Deal Archive
+    </div>
+    <div class="sb-section-label">Settings</div>
+    <div class="sb-item" onclick="showScreen('assumptions')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Assumptions
+    </div>
+  </nav>
+  <div class="sb-footer">DealDesk v3.0 &nbsp;·&nbsp; <span>Claude Sonnet</span></div>
+</aside>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="topbar">
+    <div class="topbar-title" id="topbar-title">New Underwrite</div>
+    <div class="topbar-badge" id="topbar-badge">Input Required</div>
+  </div>
+
+  <div class="screens">
+
+    <!-- SCREEN 1 — NEW UNDERWRITE -->
+    <div class="screen active" id="screen-new">
+      <div class="progress-strip">
+        <div class="ps-step active"><div class="ps-num">1</div> Property Info</div>
+        <div class="ps-line"></div>
+        <div class="ps-step"><div class="ps-num">2</div> Deal Pricing</div>
+        <div class="ps-line"></div>
+        <div class="ps-step"><div class="ps-num">3</div> Documents</div>
+      </div>
+
+      <!-- STEP 1: PROPERTY INFORMATION -->
+      <div class="step-label">Step 01 — Property Information</div>
+      <div class="card" id="desc-card">
+        <div class="card-head" onclick="toggleCard(this)">
+          <div class="card-head-left"><div><div class="card-title">Property Details</div><div class="card-sub">Address, asset type, investment strategy &amp; project description</div></div></div>
+          <div class="card-toggle open">&#9660;</div>
+        </div>
+        <div class="card-body open">
+          <div class="fg1" style="margin-bottom:14px">
+            <div class="field"><label>Street Address</label><input class="fi" type="text" placeholder="e.g. 5140 Germantown Avenue" id="f_address"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:14px">
+            <div class="field"><label>City</label><input class="fi" type="text" placeholder="Philadelphia" id="f_city"></div>
+            <div class="field"><label>State</label><input class="fi" type="text" placeholder="PA" id="f_state"></div>
+            <div class="field"><label>ZIP Code</label><input class="fi" type="text" placeholder="19144" id="f_zip"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:14px">
+            <div class="field">
+              <label>Asset Type</label>
+              <select class="fi" id="f_asset_type" onchange="handleAssetType()">
+                <option value="">-- Select --</option>
+                <option value="Multifamily">Multifamily</option>
+                <option value="Mixed-Use">Mixed-Use</option>
+                <option value="Retail">Retail</option>
+                <option value="Office">Office</option>
+                <option value="Industrial">Industrial</option>
+                <option value="Single-Family">Single-Family</option>
+              </select>
+            </div>
+            <div class="field"><label>Deal Code / Name</label><input class="fi" type="text" placeholder="e.g. GRMN-001 · Germantown Mixed-Use" id="f_deal_name"></div>
+          </div>
+          <div class="fg1" style="margin-bottom:14px">
+            <div class="field">
+              <label>Investment Strategy</label>
+              <select class="fi" id="f_strategy" onchange="handleStrategy()">
+                <option value="">-- Select Strategy --</option>
+                <option value="stabilized">Stabilized Cash Flow</option>
+                <option value="value_add">Renovation / New Construction (Value-Add)</option>
+                <option value="for_sale">For Sale (including Land Development)</option>
+              </select>
+            </div>
+          </div>
+          <div class="section-divider"></div>
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:6px">
+              Project &amp; Underwriting Description
+              <span class="req-badge">Required</span>
+            </label>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:6px;line-height:1.4">Briefly describe the deal and the purpose of this underwriting — used in the report&apos;s Executive Summary and to guide AI analysis.</div>
+            <textarea class="fi" id="f_description" rows="4"
+              placeholder="e.g. Value-add acquisition of a 36-unit mixed-use building at 5140 Germantown Ave, Philadelphia PA. Property consists of 36 residential apartments above 6,000 SF of ground-floor retail. Seller asking $3.0M. This underwriting evaluates Scenario B — full residential renovation plus retail repositioning — against a 15% LP IRR target and 7-year hold. Key risks include permit timing, environmental unknowns, and retail lease-up in a transitioning corridor."
+              oninput="updateCharCount(this)"></textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+              <div style="font-size:10px;color:var(--red);display:none" id="desc-error">&#9888; A project description is required before submitting.</div>
+              <div style="flex:1"></div>
+              <div class="char-count" id="desc-char">0 / 2,000 characters</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 2: DEAL PRICING -->
+      <div class="step-label" style="margin-top:8px">Step 02 — Deal Pricing</div>
+
+      <!-- Acquisition & Pricing -->
+      <div class="card">
+        <div class="card-head" onclick="toggleCard(this)">
+          <div class="card-head-left"><div><div class="card-title">Acquisition &amp; Pricing</div><div class="card-sub">Purchase price &amp; renovation or construction costs for this deal</div></div></div>
+          <div class="card-toggle open">&#9660;</div>
+        </div>
+        <div class="card-body open">
+          <div class="fg2">
+            <div class="field"><label>Purchase Price ($)</label><input class="fi" type="text" placeholder="2,500,000" id="f_purchase_price"></div>
+            <div class="field">
+              <label>Renovation / Construction Costs ($)</label>
+              <input class="fi" type="text" placeholder="1,200,000" id="f_reno_cost">
+              <span class="field-note">Hard &amp; soft costs combined — enter 0 if not applicable</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CRITICAL #1 — Development Period & Carry Costs (value_add strategy) -->
+      <div class="card conditional-field" id="card-dev-period">
+        <div class="card-head" onclick="toggleCard(this)">
+          <div class="card-head-left"><div>
+            <div class="card-title">Development Period &amp; Carry Costs</div>
+            <div class="card-sub">Construction timeline, lease-up assumptions, and pre-stabilization carry costs — required for value-add and new construction deals</div>
+          </div></div>
+          <div class="card-toggle open">&#9660;</div>
+        </div>
+        <div class="card-body open">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5;background:rgba(74,110,80,0.07);border:1px solid var(--sage-lt);border-radius:4px;padding:8px 12px;">
+            These fields drive the carry cost calculations in the Excel model (§11A). Enter 0 for any item not applicable.
+          </div>
+          <div class="fg2" style="margin-bottom:10px">
+            <div class="field">
+              <label>Construction / Reno Period (Months)</label>
+              <input class="fi" type="text" placeholder="12" id="f_const_period" oninput="">
+              <span class="field-note">Number of months from acquisition to stabilization</span>
+            </div>
+            <div class="field">
+              <label>Construction Loan Rate (%)</label>
+              <input class="fi" type="text" placeholder="8.00" id="f_const_loan_rate" oninput="">
+              <span class="field-note">Annual interest rate on construction / bridge loan</span>
+            </div>
+          </div>
+          <div class="fg2" style="margin-bottom:10px">
+            <div class="field">
+              <label>Lease-Up Period (Months)</label>
+              <input class="fi" type="text" placeholder="6" id="f_leaseup_period" oninput="">
+              <span class="field-note">Months to reach stabilized occupancy post-construction</span>
+            </div>
+            <div class="field">
+              <label>Lease-Up Vacancy Rate (%)</label>
+              <input class="fi" type="text" placeholder="25" id="f_leaseup_vacancy" oninput="">
+              <span class="field-note">Effective vacancy during lease-up period</span>
+            </div>
+          </div>
+          <div class="fg2">
+            <div class="field">
+              <label>Lease-Up Concessions ($)</label>
+              <input class="fi" type="text" placeholder="0" id="f_leaseup_concessions" oninput="">
+              <span class="field-note">Free rent or move-in concessions during lease-up</span>
+            </div>
+            <div class="field">
+              <label>Marketing During Lease-Up ($)</label>
+              <input class="fi" type="text" placeholder="0" id="f_leaseup_marketing" oninput="">
+              <span class="field-note">Additional marketing spend during lease-up only</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CRITICAL #2 — For Sale / Disposition Inputs (for_sale strategy) -->
+      <div class="card conditional-field" id="card-for-sale">
+        <div class="card-head" onclick="toggleCard(this)">
+          <div class="card-head-left"><div>
+            <div class="card-title">Sale &amp; Disposition Assumptions</div>
+            <div class="card-sub">Gross sale price, construction / sale timeline, and carry costs — required for flip, land, and for-sale strategies</div>
+          </div></div>
+          <div class="card-toggle open">&#9660;</div>
+        </div>
+        <div class="card-body open">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5;background:rgba(92,61,38,0.07);border:1px solid var(--earth-light);border-radius:4px;padding:8px 12px;">
+            These fields feed directly into the Sale Analysis tab of the Excel model. Enter 0 for any carry item not applicable.
+          </div>
+          <div class="fg2" style="margin-bottom:10px">
+            <div class="field">
+              <label>Gross Sale Price / ARV ($)<span class="req-badge" style="margin-left:6px">Required</span></label>
+              <input class="fi" type="text" placeholder="e.g. 1,800,000" id="f_sale_price" oninput="">
+              <span class="field-note">After-Renovation Value — gross price before closing costs and commissions</span>
+            </div>
+            <div class="field">
+              <label>Construction / Reno Period (Months)</label>
+              <input class="fi" type="text" placeholder="6" id="f_sale_const_period" oninput="">
+              <span class="field-note">Time from acquisition to ready-to-sell condition</span>
+            </div>
+          </div>
+          <div class="fg2" style="margin-bottom:10px">
+            <div class="field">
+              <label>Marketing / Sale Period (Months)</label>
+              <input class="fi" type="text" placeholder="3" id="f_sale_mkt_period" oninput="">
+              <span class="field-note">Expected time on market before closing</span>
+            </div>
+            <div class="field">
+              <label>Broker Commission (%)</label>
+              <input class="fi" type="text" placeholder="5.00" id="f_sale_commission_pct" oninput="">
+              <span class="field-note">Total broker commission on sale — typically 4–6%</span>
+            </div>
+          </div>
+          <div style="font-size:10.5px;font-weight:600;color:var(--earth-mid);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;margin-top:4px">Monthly Carry Costs During Hold</div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field">
+              <label>Loan Interest Carry ($/mo)</label>
+              <input class="fi" type="text" placeholder="0" id="f_carry_loan_interest" oninput="">
+            </div>
+            <div class="field">
+              <label>Real Estate Taxes ($/mo)</label>
+              <input class="fi" type="text" placeholder="0" id="f_carry_re_taxes" oninput="">
+            </div>
+            <div class="field">
+              <label>Insurance ($/mo)</label>
+              <input class="fi" type="text" placeholder="0" id="f_carry_insurance" oninput="">
+            </div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field">
+              <label>Utilities ($/mo)</label>
+              <input class="fi" type="text" placeholder="0" id="f_carry_utilities" oninput="">
+            </div>
+            <div class="field">
+              <label>Property Maintenance ($/mo)</label>
+              <input class="fi" type="text" placeholder="0" id="f_carry_maintenance" oninput="">
+            </div>
+            <div class="field">
+              <label>HOA / Condo Fees ($/mo)</label>
+              <input class="fi" type="text" placeholder="0" id="f_carry_hoa" oninput="">
+            </div>
+          </div>
+          <div class="fg2">
+            <div class="field">
+              <label>Marketing / Advertising (Total $)</label>
+              <input class="fi" type="text" placeholder="0" id="f_carry_marketing" oninput="">
+              <span class="field-note">One-time total, not monthly</span>
+            </div>
+            <div class="field">
+              <label>Staging / Showing Costs (Total $)</label>
+              <input class="fi" type="text" placeholder="0" id="f_carry_staging" oninput="">
+              <span class="field-note">One-time total, not monthly</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Assumptions Callout -->
+      <div class="assum-callout">
+        <div class="assum-callout-icon">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        </div>
+        <div class="assum-callout-body">
+          <div class="assum-callout-title">All other financial parameters are managed in Assumptions</div>
+          <div class="assum-callout-desc">Debt structure (LTV, interest rate, loan term, amortization), hold period &amp; exit cap rate, target returns, equity structure (LP/GP split, preferred return), promote waterfall tiers, refinancing, revenue &amp; expense growth, vacancy, management fee, fees, and return hurdles are all configured once as firm-wide defaults and applied automatically to every underwriting run. You can review or update them at any time.</div>
+          <button class="assum-callout-btn" onclick="showScreen('assumptions')">
+            <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+            Open Assumptions &#8594;
+          </button>
+        </div>
+      </div>
+
+      <!-- STEP 3: DOCUMENT UPLOAD -->
+      <div class="step-label" style="margin-top:8px">Step 03 — Supporting Documents</div>
+      <div class="card">
+        <div class="card-head" onclick="toggleCard(this)">
+          <div class="card-head-left"><div><div class="card-title">Document Upload</div><div class="card-sub">Claude AI extraction active — PDF, XLSX, DOCX, JPG, PNG accepted</div></div></div>
+          <div class="card-toggle open">&#9660;</div>
+        </div>
+        <div class="card-body open">
+          <div class="upload-grid" id="upload-grid">
+            <div class="upload-cat" onclick="triggerUpload('oc')"><div class="uc-icon">&#128196;</div><div class="uc-title">Offering Memorandum</div><div class="uc-desc">OM, broker package, deal summary — AI extracts property data, unit mix, pricing</div><div class="uc-files" id="files-oc"></div></div>
+            <div class="upload-cat" onclick="triggerUpload('rr')"><div class="uc-icon">&#127968;</div><div class="uc-title">Rent Roll</div><div class="uc-desc">Current rent roll — AI extracts unit mix, in-place rents, lease expirations</div><div class="uc-files" id="files-rr"></div></div>
+            <div class="upload-cat" onclick="triggerUpload('fs')"><div class="uc-icon">&#128202;</div><div class="uc-title">Financial Statements</div><div class="uc-desc">T-12, P&amp;L, income &amp; expense — AI extracts NOI, expense line items, NNN reconciliation</div><div class="uc-files" id="files-fs"></div></div>
+            <div class="upload-cat" onclick="triggerUpload('cb')"><div class="uc-icon">&#127959;</div><div class="uc-title">Construction Budget</div><div class="uc-desc">GC bid, contractor estimate, scope of work — AI extracts hard/soft cost line items</div><div class="uc-files" id="files-cb"></div></div>
+            <div class="upload-cat" onclick="triggerUpload('env')"><div class="uc-icon">&#127807;</div><div class="uc-title">Environmental &amp; Survey</div><div class="uc-desc">Phase I/II ESA, ALTA survey, site plan — AI flags RECs and site constraints</div><div class="uc-files" id="files-env"></div></div>
+            <div class="upload-cat" onclick="triggerUpload('ph')"><div class="uc-icon">&#128247;</div><div class="uc-title">Property Photos</div><div class="uc-desc">Exterior, interior, aerial — AI classifies and places photos into report sections</div><div class="uc-files" id="files-ph"></div></div>
+          </div>
+          <input type="file" id="file-input" multiple accept=".pdf,.xlsx,.docx,.csv,.jpg,.jpeg,.png" style="display:none" onchange="handleFiles(event)">
+        </div>
+      </div>
+      <!-- Report Sections Toggle -->
+      <div class="step-label" style="margin-top:8px">Step 04 — Report Sections</div>
+      <div class="card">
+        <div class="card-head" onclick="toggleCard(this)">
+          <div class="card-head-left"><div><div class="card-title">Report Section Selection</div><div class="card-sub">Toggle which of the 22 sections to include in the generated PDF report for this deal</div></div></div>
+          <div class="card-toggle open">&#9660;</div>
+        </div>
+        <div class="card-body open">
+          <div style="font-size:11.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">All 22 sections are included by default. Toggle individual sections off to exclude them from this report only. Default section settings are managed in <span onclick="showScreen('assumptions')" style="color:var(--sage);cursor:pointer;font-weight:500">Assumptions &#8594;</span></div>
+          <div style="display:flex;gap:8px;margin-bottom:14px">
+            <button class="btn btn-secondary" style="padding:6px 14px;font-size:11px" onclick="toggleAllSections(true)">Select All</button>
+            <button class="btn btn-secondary" style="padding:6px 14px;font-size:11px" onclick="toggleAllSections(false)">Clear All</button>
+          </div>
+          <div id="deal-section-toggles"></div>
+        </div>
+      </div>
+      <div style="height:20px"></div>
+    </div>
+    <!-- /screen-new -->
+
+    <!-- SCREEN 2 — DEAL DASHBOARD -->
+    <div class="screen" id="screen-results">
+      <div class="step-label">Deal Dashboard — 5140 Germantown Ave, Philadelphia PA</div>
+      <div class="metrics-grid">
+        <div class="metric-card"><div class="mc-label">LP IRR</div><div class="mc-value pass">17.8%</div><div class="mc-footer">Target 15% <span class="tag pass">&#10003; Pass</span></div></div>
+        <div class="metric-card"><div class="mc-label">Equity Multiple</div><div class="mc-value">2.45&times;</div><div class="mc-footer">7-year hold period</div></div>
+        <div class="metric-card"><div class="mc-label">Cash-on-Cash Yr 1</div><div class="mc-value pass">8.9%</div><div class="mc-footer">Target 7% <span class="tag pass">&#10003; Pass</span></div></div>
+        <div class="metric-card"><div class="mc-label">DSCR Yr 1</div><div class="mc-value watch">1.38&times;</div><div class="mc-footer">Min 1.25&times; <span class="tag watch">&#8679; Watch</span></div></div>
+        <div class="metric-card"><div class="mc-label">Going-In Cap Rate</div><div class="mc-value">5.8%</div><div class="mc-footer">Market avg 6.2%</div></div>
+        <div class="metric-card"><div class="mc-label">Stabilized Cap Rate</div><div class="mc-value pass">6.4%</div><div class="mc-footer">Post value-add <span class="tag pass">&#10003; Pass</span></div></div>
+        <div class="metric-card"><div class="mc-label">Break-Even Occupancy</div><div class="mc-value">74%</div><div class="mc-footer">17 pts above min</div></div>
+        <div class="metric-card"><div class="mc-label">Price Per Unit</div><div class="mc-value">$83K</div><div class="mc-footer">36 units at ask</div></div>
+        <div class="metric-card"><div class="mc-label">Gross Rent Multiplier</div><div class="mc-value">9.2&times;</div><div class="mc-footer">Stabilized GRM</div></div>
+        <div class="metric-card"><div class="mc-label">Unlevered IRR</div><div class="mc-value">11.4%</div><div class="mc-footer">Before debt service</div></div>
+        <div class="metric-card"><div class="mc-label">Net Equity at Exit</div><div class="mc-value">$2.1M</div><div class="mc-footer">After loan payoff &amp; fees</div></div>
+        <div class="metric-card"><div class="mc-label">DD Flags</div><div class="mc-value watch">3/5/5</div><div class="mc-footer"><span class="tag fail">3 Red</span> <span class="tag watch">5 Amber</span> <span class="tag pass">5 Green</span></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-head-left"><div><div class="card-title">Investment Recommendation</div></div></div></div>
+        <div class="card-body open">
+          <div style="display:flex;gap:14px;align-items:flex-start">
+            <div style="background:var(--green-lt);border:1px solid var(--sage-mid);border-radius:6px;padding:14px 18px;flex-shrink:0;text-align:center">
+              <div style="font-size:10px;font-weight:700;color:var(--sage-dk);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">Recommendation</div>
+              <div style="font-family:var(--font-display);font-size:28px;font-weight:600;color:var(--green)">PROCEED</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px">Scenario B — Mixed-Use</div>
+            </div>
+            <div style="font-size:13px;color:var(--body);line-height:1.7">
+              5140 Germantown Ave presents a compelling value-add redevelopment opportunity. The mixed-use Scenario B (36 residential units + 6,000 SF retail) generates a projected LP IRR of 17.8%, exceeding the 15% target. Recommended offer range: <strong>$2,700,000 – $2,850,000</strong> against the $3,000,000 ask. Key risks: environmental holdovers (Phase I recommended), permit timeline uncertainty, and retail lease-up in a transitioning corridor.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCREEN 3 — DOWNLOADS -->
+    <div class="screen" id="screen-downloads">
+      <div class="step-label">Downloads — 5140 Germantown Ave</div>
+
+      <!-- OUTPUT MODE TOGGLE -->
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-head" style="cursor:default">
+          <div class="card-head-left">
+            <div>
+              <div class="card-title">Output Mode</div>
+              <div class="card-sub">Select the report register before downloading</div>
+            </div>
+          </div>
+        </div>
+        <div style="padding:16px 18px;display:flex;gap:12px;align-items:stretch">
+          <div id="mode-internal" onclick="setOutputMode('internal')" style="flex:1;padding:14px 16px;border:2px solid var(--sage-deep);border-radius:6px;cursor:pointer;background:rgba(74,110,80,.07)">
+            <div style="font-size:12.5px;font-weight:600;color:var(--near-black);margin-bottom:4px">Internal Report</div>
+            <div style="font-size:11px;color:var(--muted);line-height:1.4">Full analyst report — includes DD flags, methodology notes, bear-case language, and all 22 sections. For internal investment committee use.</div>
+            <div style="margin-top:8px;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-deep)">● Selected</div>
+          </div>
+          <div id="mode-investor" onclick="setOutputMode('investor')" style="flex:1;padding:14px 16px;border:2px solid var(--rule);border-radius:6px;cursor:pointer">
+            <div style="font-size:12.5px;font-weight:600;color:var(--near-black);margin-bottom:4px">Investor Summary</div>
+            <div style="font-size:11px;color:var(--muted);line-height:1.4">LP-appropriate version — confident, deal-positive register. §16 DD Flags &amp; Risk Assessment and §22 Appendix methodology notes suppressed. §17 DD Checklist suppressed. Cover reads "Investment Summary."</div>
+            <div style="margin-top:8px;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">○ Not Selected</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PRIMARY DOWNLOADS -->
+      <div style="font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Primary Outputs</div>
+      <div class="dl-grid">
+        <div class="dl-card">
+          <div class="dl-card-type-badge dl-badge-pdf">PDF</div>
+          <div class="dl-card-title">Underwriting Report</div>
+          <div class="dl-card-desc">22-section institutional report — Executive Summary, Photo Gallery, Maps, Property Description, Location &amp; Market, Rent Roll, Comparables, Ownership, Environmental, Zoning, Financial Analysis, Capital Structure, Supply Pipeline, Neighborhood Trends, Legal &amp; Title, Timeline, DD Flags, DD Checklist, Investment Recommendation, Conclusions, Disclaimer &amp; Appendix</div>
+          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">PDF &nbsp;·&nbsp; 22 sections &nbsp;·&nbsp; ~3.1 MB</div>
+          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Download PDF</button>
+        </div>
+        <div class="dl-card">
+          <div class="dl-card-type-badge dl-badge-xlsx">XLSX</div>
+          <div class="dl-card-title">Financial Model</div>
+          <div class="dl-card-desc">Full pro forma workbook — Cover, Assumptions, Sources &amp; Uses, Existing Rent Roll, Tenant Schedule, Pro Forma, Refi Analysis (×3), Amortization Schedules, Exit, Cash Waterfall, Sensitivity, Returns Summary</div>
+          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">XLSX &nbsp;·&nbsp; 15 tabs &nbsp;·&nbsp; ~2.4 MB</div>
+          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Download XLSX</button>
+        </div>
+      </div>
+
+      <!-- OPTIONAL OUTPUTS -->
+      <div style="font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-top:22px;margin-bottom:10px">Optional Outputs</div>
+      <div class="dl-grid">
+        <div class="dl-card">
+          <div class="dl-card-type-badge" style="background:var(--sage-deep);color:#fff">HTML</div>
+          <div class="dl-card-title">Interactive Report</div>
+          <div class="dl-card-desc">Self-contained interactive HTML file — collapsible sections, live sensitivity heatmap, Chart.js NOI &amp; cash-on-cash charts, and embedded Leaflet property map. Shareable as a single file.</div>
+          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">HTML &nbsp;·&nbsp; Single file &nbsp;·&nbsp; ~1.2 MB</div>
+          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Generate &amp; Download</button>
+        </div>
+        <div class="dl-card">
+          <div class="dl-card-type-badge" style="background:var(--earth-mid);color:#fff">PPTX</div>
+          <div class="dl-card-title">LP Pitch Deck</div>
+          <div class="dl-card-desc">10-slide PowerPoint deck — Cover, Executive Summary, The Opportunity, Property &amp; Location, Unit Mix, Strategy Slide, Financial Projections, Capital Structure, Risk &amp; Mitigation, Next Steps. DealDesk branded.</div>
+          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">PPTX &nbsp;·&nbsp; 10 slides &nbsp;·&nbsp; ~800 KB</div>
+          <div style="margin-bottom:8px">
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Lender / Broker Name <span style="color:var(--muted);font-style:italic">(optional — for Lender Package only)</span></label>
+            <input class="fi" type="text" id="dl_lender_name" placeholder="e.g. Meridian Capital Group" style="font-size:12px;padding:6px 10px">
+          </div>
+          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Generate &amp; Download</button>
+        </div>
+        <div class="dl-card">
+          <div class="dl-card-type-badge" style="background:var(--earth);color:#fff">PDF</div>
+          <div class="dl-card-title">Lender Package</div>
+          <div class="dl-card-desc">Complete lender submission package — formal cover letter, one-page executive summary, full underwriting report, rent roll summary, and 10-year pro forma. Assembled as a single organized PDF.</div>
+          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">PDF &nbsp;·&nbsp; Multi-section package &nbsp;·&nbsp; ~5.2 MB</div>
+          <div style="margin-bottom:8px">
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Lender / Broker Name <span style="color:var(--muted);font-style:italic">(optional)</span></label>
+            <input class="fi" type="text" id="dl_lender_name_pkg" placeholder="e.g. Meridian Capital Group — leave blank for generic" style="font-size:12px;padding:6px 10px">
+          </div>
+          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Generate &amp; Download</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCREEN 4 — DEAL ARCHIVE -->
+    <div class="screen" id="screen-archive">
+      <div class="step-label">Deal Archive</div>
+      <div class="deal-list">
+        <div class="deal-row"><div class="deal-dot complete"></div><div><div class="deal-name">5140 Germantown Ave — Philadelphia, PA</div><div class="deal-meta">Mixed-Use · Value-Add · Analyzed March 31, 2026</div></div><div class="deal-irr">17.8% IRR</div><div class="deal-status complete">Complete</div></div>
+        <div class="deal-row"><div class="deal-dot progress"></div><div><div class="deal-name">722 Sandy Street — Norristown, PA</div><div class="deal-meta">Multifamily · Ground-Up · Analyzed March 28, 2026</div></div><div class="deal-irr">—</div><div class="deal-status progress">In Progress</div></div>
+      </div>
+    </div>
+
+    <!-- SCREEN 5 — ASSUMPTIONS -->
+    <div class="screen" id="screen-assumptions">
+
+      <div class="assum-page-header">
+        <div>
+          <div class="assum-page-title">Underwriting Assumptions</div>
+          <div class="assum-page-sub">Firm-wide defaults applied to every underwriting run. Saved automatically and pre-populated in all future analyses. Deal-specific overrides are made directly on the New Underwrite screen.</div>
+        </div>
+        <div class="assum-save-strip">
+          <div class="save-status saved" id="save-status">&#10003; All changes saved</div>
+          <button class="btn btn-primary" onclick="saveAssumptions()">Save Assumptions</button>
+        </div>
+      </div>
+
+      <div class="assum-info-banner">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <div>Changes here apply to all <strong>future</strong> underwriting runs only. Existing completed analyses are not retroactively affected. &nbsp;<span class="reset-link" onclick="resetAssumptions()">Reset all to system defaults &#8594;</span></div>
+      </div>
+
+      <!-- §1: PROPERTY INFORMATION -->
+      <div class="assum-section-label">1 &mdash; Property Information</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Property &amp; Project Defaults</div><div class="assum-card-sub">Default property classification and physical characteristics used when not provided in the deal form</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">Hold Period</div><div class="assum-row-desc">Default number of years the property is held before disposition. Drives the length of the pro forma cash flow model.</div></div>
+            <div class="field"><label>Hold (Years)</label><input class="fi" type="text" id="a_hold_period" value="10" oninput="markChanged()"><span class="field-note">Excel default: 10 years</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Number of Units</div><div class="assum-row-desc">Default unit count used when not extracted from the offering memorandum. Drives per-unit calculations throughout the model.</div></div>
+            <div class="field"><label>Units</label><input class="fi" type="text" id="a_num_units" value="" oninput="markChanged()"><span class="field-note">Overridden by AI extraction from OM</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Gross Building Area (SF)</div><div class="assum-row-desc">Total gross building area in square feet. Used for price-per-SF calculations.</div></div>
+            <div class="field"><label>GBA (SF)</label><input class="fi" type="text" id="a_gba_sf" value="" oninput="markChanged()"><span class="field-note">Overridden by AI extraction from OM</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Lot Size (SF)</div><div class="assum-row-desc">Total lot / parcel area in square feet.</div></div>
+            <div class="field"><label>Lot Size (SF)</label><input class="fi" type="text" id="a_lot_sf" value="" oninput="markChanged()"><span class="field-note">Overridden by AI extraction from OM</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Year Built</div><div class="assum-row-desc">Year the primary structure was originally constructed.</div></div>
+            <div class="field"><label>Year Built</label><input class="fi" type="text" id="a_year_built" value="" oninput="markChanged()"><span class="field-note">Overridden by AI extraction from OM</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §2: ACQUISITION -->
+      <div class="assum-section-label">2 &mdash; Acquisition</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Acquisition Cost Defaults</div><div class="assum-card-sub">Default transfer tax, closing costs, and professional fee assumptions applied to every deal</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">Transfer Tax Rate — Buyer's Share</div><div class="assum-row-desc">The buyer's portion of the total PA transfer tax. Total PA rate is 2% state + 3.278% Philadelphia city = ~4.278% combined, typically split 50/50 between buyer and seller. The buyer's share is entered here (~2.139%). Adjust for municipalities with different splits.</div></div>
+            <div class="field"><label>Buyer's Rate (%)</label><input class="fi" type="text" id="a_transfer_tax" value="2.139" oninput="markChanged()"><span class="field-note">Buyer pays ~½ of total 4.278% = 2.139%</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Closing Costs ($)</div><div class="assum-row-desc">Fixed closing cost estimate covering title insurance, bank legal, appraisal, and lender fees. Added to Sources &amp; Uses.</div></div>
+            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_closing_costs_fixed" value="75000" oninput="markChanged()"><span class="field-note">Excel default: $75,000</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Tenant Buyout</div><div class="assum-row-desc">Cost to buy out existing tenants at acquisition. Applied as a uses item in Sources &amp; Uses. Enter $0 if not applicable.</div></div>
+            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_tenant_buyout" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §3: SOURCES & USES — PROFESSIONAL & DD COSTS -->
+      <div class="assum-section-label">3 &mdash; Sources &amp; Uses — Professional &amp; Due Diligence</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Professional &amp; Due Diligence Costs</div><div class="assum-card-sub">Default soft cost budget items for legal, title, and technical due diligence — enter $0 for items not applicable</div></div>
+        <div class="assum-card-body">
+          <div class="fg2" style="margin-bottom:4px">
+            <div class="field"><label>Legal — Closing &amp; Borrowing ($)</label><input class="fi" type="text" id="a_legal_closing" value="25000" oninput="markChanged()"></div>
+            <div class="field"><label>Title Insurance ($)</label><input class="fi" type="text" id="a_title_insurance" value="8000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:4px">
+            <div class="field"><label>Legal — Bank ($)</label><input class="fi" type="text" id="a_legal_bank" value="5000" oninput="markChanged()"></div>
+            <div class="field"><label>Appraisal ($)</label><input class="fi" type="text" id="a_appraisal" value="5000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:4px">
+            <div class="field"><label>Environmental Phase I/II ($)</label><input class="fi" type="text" id="a_environmental" value="6000" oninput="markChanged()"></div>
+            <div class="field"><label>Surveyor ($)</label><input class="fi" type="text" id="a_surveyor" value="3500" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:4px">
+            <div class="field"><label>Architect ($)</label><input class="fi" type="text" id="a_architect" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Structural Engineer ($)</label><input class="fi" type="text" id="a_structural" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:4px">
+            <div class="field"><label>Civil Engineer ($)</label><input class="fi" type="text" id="a_civil_eng" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>MEPs ($)</label><input class="fi" type="text" id="a_meps" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2">
+            <div class="field"><label>Legal — Zoning ($)</label><input class="fi" type="text" id="a_legal_zoning" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>GeoTech ($)</label><input class="fi" type="text" id="a_geotech" value="0" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §4: FINANCING COSTS -->
+      <div class="assum-section-label">4 &mdash; Sources &amp; Uses — Financing, Soft Costs &amp; Hard Costs</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Financing &amp; Carry Costs</div><div class="assum-card-sub">Default acquisition fee, mortgage carry, mezzanine, and other financing cost items</div></div>
+        <div class="assum-card-body">
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Acquisition Fee ($)</label><input class="fi" type="text" id="a_acq_fee_fixed" value="25000" oninput="markChanged()"><span class="field-note">Excel default: $25,000</span></div>
+            <div class="field"><label>Mortgage Interest (Carry) ($)</label><input class="fi" type="text" id="a_mortgage_carry" value="0" oninput="markChanged()"><span class="field-note">Interest carry during lease-up period</span></div>
+          </div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Mortgage Fees / Origination ($)</label><input class="fi" type="text" id="a_mortgage_fees" value="17500" oninput="markChanged()"><span class="field-note">Calculated from origination % above</span></div>
+            <div class="field"><label>Mezzanine Interest ($)</label><input class="fi" type="text" id="a_mezz_interest" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Soft Costs</div><div class="assum-card-sub">Default soft cost budget items — working capital, marketing, carry, and development costs</div></div>
+        <div class="assum-card-body">
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Working Capital ($)</label><input class="fi" type="text" id="a_working_capital" value="15000" oninput="markChanged()"></div>
+            <div class="field"><label>Marketing ($)</label><input class="fi" type="text" id="a_marketing" value="5000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Real Estate Tax (Carry) ($)</label><input class="fi" type="text" id="a_re_tax_carry" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Property / BR / Contractor Ins. ($)</label><input class="fi" type="text" id="a_prop_ins_carry" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Development Fee ($)</label><input class="fi" type="text" id="a_dev_fee" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Development Equity Pref Return ($)</label><input class="fi" type="text" id="a_dev_pref" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2">
+            <div class="field"><label>Permits / Expediting ($)</label><input class="fi" type="text" id="a_permits" value="0" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Hard Costs</div><div class="assum-card-sub">Default construction and hard cost budget items — enter $0 for items not applicable to stabilized hold deals</div></div>
+        <div class="assum-card-body">
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Stormwater Management System ($)</label><input class="fi" type="text" id="a_stormwater" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Demolition &amp; Site Work ($)</label><input class="fi" type="text" id="a_demo" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Construction — Hard Costs ($)</label><input class="fi" type="text" id="a_const_hard" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Construction — Reserve ($)</label><input class="fi" type="text" id="a_const_reserve" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2">
+            <div class="field"><label>GC Profit &amp; Overhead ($)</label><input class="fi" type="text" id="a_gc_overhead" value="0" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Sources — Additional Capital</div><div class="assum-card-sub">Default additional capital source assumptions for mezzanine debt, tax credits, and grants</div></div>
+        <div class="assum-card-body">
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Mezzanine Debt ($)</label><input class="fi" type="text" id="a_mezz_debt" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
+            <div class="field"><label>Tax Credit Equity ($)</label><input class="fi" type="text" id="a_tax_credit_eq" value="0" oninput="markChanged()"><span class="field-note">LIHTC or historic tax credits</span></div>
+          </div>
+          <div class="fg2">
+            <div class="field"><label>Grants / Subsidies ($)</label><input class="fi" type="text" id="a_grants" value="0" oninput="markChanged()"><span class="field-note">City, state, or federal grants</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §5: INITIAL FINANCING -->
+      <div class="assum-section-label">5 &mdash; Initial Financing</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Permanent Loan Parameters</div><div class="assum-card-sub">Default loan sizing, terms, and origination fee for the initial permanent loan</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">Loan-to-Value (LTV)</div><div class="assum-row-desc">LTV ratio for the permanent loan. The model uses the lower of this LTV or the DSCR-constrained maximum.</div></div>
+            <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_ltv_pct" value="70.00" oninput="markChanged()"><span class="field-note">Agency range: 65–75%</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Interest Rate</div><div class="assum-row-desc">Annual interest rate on the permanent loan. Used to calculate monthly debt service and DSCR.</div></div>
+            <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_interest_rate" value="6.50" oninput="markChanged()"><span class="field-note">Adjust to current market conditions</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Amortization Period</div><div class="assum-row-desc">Full amortization schedule in years — determines P&amp;I payment size alongside the interest rate.</div></div>
+            <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_amort_years" value="30" oninput="markChanged()"><span class="field-note">Most commercial loans: 25–30 yrs</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Loan Term</div><div class="assum-row-desc">Balloon / maturity term of the permanent loan in years.</div></div>
+            <div class="field"><label>Term (Years)</label><input class="fi" type="text" id="a_loan_term" value="10" oninput="markChanged()"><span class="field-note">Typical: 5, 7, or 10-year term</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Origination Fee</div><div class="assum-row-desc">Lender origination / loan fee as a percentage of the initial loan amount. Applied as a financing cost in Sources &amp; Uses.</div></div>
+            <div class="field"><label>Fee (%)</label><input class="fi" type="text" id="a_origination_fee" value="1.00" oninput="markChanged()"><span class="field-note">Excel default: 1.0%</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Interest-Only Period</div><div class="assum-row-desc">Number of months of interest-only payments at the start of the loan before principal amortization begins.</div></div>
+            <div class="field"><label>I/O Period (Months)</label><input class="fi" type="text" id="a_io_period" value="0" oninput="markChanged()"><span class="field-note">0 = fully amortizing from day 1</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §6-8: REFINANCING EVENTS -->
+      <div class="assum-section-label">6–8 &mdash; Refinancing Events</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Refinancing Events</div><div class="assum-card-sub">Model up to 3 cash-out refinance events — each toggled independently with its own loan parameters</div></div>
+        <div class="assum-card-body">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:16px;line-height:1.5">Toggle each event on to include it as a default in every new underwriting run. Events fire in the year specified and replace the outstanding loan balance.</div>
+
+          <!-- Refi Event 1 -->
+          <div class="refi-event-header">
+            <div class="refi-event-num">Refi Event 1</div>
+            <label class="toggle" style="margin-left:auto"><input type="checkbox" id="a_refi1_on" checked onchange="toggleRefiEvent(1);markChanged()"><span class="toggle-slider"></span></label>
+            <div class="refi-on-lbl" id="refi1_lbl" style="color:var(--green)">On</div>
+          </div>
+          <div class="refi-event-fields" id="refi1_fields">
+            <div class="fg3" style="margin-bottom:8px">
+              <div class="field"><label>Year</label><input class="fi" type="text" id="a_refi1_year" value="5" oninput="markChanged()"></div>
+              <div class="field"><label>Appraised Value ($)</label><input class="fi" type="text" id="a_refi1_appraised" value="3200000" oninput="markChanged()"></div>
+              <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_refi1_ltv" value="70" oninput="markChanged()"></div>
+            </div>
+            <div class="fg3" style="margin-bottom:8px">
+              <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_refi1_rate" value="6.00" oninput="markChanged()"></div>
+              <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_refi1_amort" value="30" oninput="markChanged()"></div>
+              <div class="field"><label>Loan Term (Years)</label><input class="fi" type="text" id="a_refi1_term" value="10" oninput="markChanged()"></div>
+            </div>
+            <div class="fg2" style="margin-top:2px">
+              <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi1_orig_fee" value="1.00" oninput="markChanged()"></div>
+              <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi1_prepay" value="1.00" oninput="markChanged()"><span class="field-note">% of outstanding balance at payoff</span></div>
+            </div>
+            <div class="fg2" style="margin-top:8px">
+              <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi1_closing" value="25000" oninput="markChanged()"></div>
+            </div>
+          </div>
+
+          <div style="height:1px;background:var(--rule);margin:16px 0"></div>
+
+          <!-- Refi Event 2 -->
+          <div class="refi-event-header">
+            <div class="refi-event-num">Refi Event 2</div>
+            <label class="toggle" style="margin-left:auto"><input type="checkbox" id="a_refi2_on" onchange="toggleRefiEvent(2);markChanged()"><span class="toggle-slider"></span></label>
+            <div class="refi-on-lbl" id="refi2_lbl">Off</div>
+          </div>
+          <div class="refi-event-fields refi-collapsed" id="refi2_fields">
+            <div class="fg3" style="margin-bottom:8px">
+              <div class="field"><label>Year</label><input class="fi" type="text" id="a_refi2_year" value="8" oninput="markChanged()"></div>
+              <div class="field"><label>Appraised Value ($)</label><input class="fi" type="text" id="a_refi2_appraised" value="3800000" oninput="markChanged()"></div>
+              <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_refi2_ltv" value="65" oninput="markChanged()"></div>
+            </div>
+            <div class="fg3" style="margin-bottom:8px">
+              <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_refi2_rate" value="5.50" oninput="markChanged()"></div>
+              <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_refi2_amort" value="30" oninput="markChanged()"></div>
+              <div class="field"><label>Loan Term (Years)</label><input class="fi" type="text" id="a_refi2_term" value="10" oninput="markChanged()"></div>
+            </div>
+            <div class="fg2" style="margin-top:2px">
+              <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi2_orig_fee" value="1.00" oninput="markChanged()"></div>
+              <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi2_prepay" value="1.00" oninput="markChanged()"></div>
+            </div>
+            <div class="fg2" style="margin-top:8px">
+              <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi2_closing" value="25000" oninput="markChanged()"></div>
+            </div>
+          </div>
+
+          <div style="height:1px;background:var(--rule);margin:16px 0"></div>
+
+          <!-- Refi Event 3 -->
+          <div class="refi-event-header">
+            <div class="refi-event-num">Refi Event 3</div>
+            <label class="toggle" style="margin-left:auto"><input type="checkbox" id="a_refi3_on" onchange="toggleRefiEvent(3);markChanged()"><span class="toggle-slider"></span></label>
+            <div class="refi-on-lbl" id="refi3_lbl">Off</div>
+          </div>
+          <div class="refi-event-fields refi-collapsed" id="refi3_fields">
+            <div class="fg3" style="margin-bottom:8px">
+              <div class="field"><label>Year</label><input class="fi" type="text" id="a_refi3_year" value="0" oninput="markChanged()"></div>
+              <div class="field"><label>Appraised Value ($)</label><input class="fi" type="text" id="a_refi3_appraised" value="0" oninput="markChanged()"></div>
+              <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_refi3_ltv" value="65" oninput="markChanged()"></div>
+            </div>
+            <div class="fg3" style="margin-bottom:8px">
+              <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_refi3_rate" value="5.50" oninput="markChanged()"></div>
+              <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_refi3_amort" value="30" oninput="markChanged()"></div>
+              <div class="field"><label>Loan Term (Years)</label><input class="fi" type="text" id="a_refi3_term" value="10" oninput="markChanged()"></div>
+            </div>
+            <div class="fg2" style="margin-top:2px">
+              <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi3_orig_fee" value="1.00" oninput="markChanged()"></div>
+              <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi3_prepay" value="0" oninput="markChanged()"></div>
+            </div>
+            <div class="fg2" style="margin-top:8px">
+              <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi3_closing" value="0" oninput="markChanged()"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §9: INCOME -->
+      <div class="assum-section-label">9 &mdash; Operating Assumptions — Income</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Income &amp; Growth Assumptions</div><div class="assum-card-sub">Vacancy, rent growth, loss to lease, and ancillary income defaults</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">Vacancy &amp; Bad Debt Rate</div><div class="assum-row-desc">Combined vacancy and credit loss as a percentage of gross potential rent. Applied as a deduction from GPR to arrive at Effective Gross Income.</div></div>
+            <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_vacancy" value="7.50" oninput="markChanged()"><span class="field-note">Excel default: 7.5% (incl. bad debt)</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Annual Rent Growth</div><div class="assum-row-desc">Year-over-year percentage increase applied to all rental income beginning in Year 2.</div></div>
+            <div class="field"><label>Growth (% / yr)</label><input class="fi" type="text" id="a_rev_growth" value="3.00" oninput="markChanged()"><span class="field-note">Philadelphia metro avg: 2.5–3.5% / yr</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Annual Expense Growth</div><div class="assum-row-desc">Year-over-year percentage increase applied to all operating expense line items beginning in Year 2.</div></div>
+            <div class="field"><label>Growth (% / yr)</label><input class="fi" type="text" id="a_exp_growth" value="3.00" oninput="markChanged()"><span class="field-note">CPI-based; Excel default: 3.0%</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Loss to Lease</div><div class="assum-row-desc">Percentage discount from market rent representing the gap between in-place rents and current market rents.</div></div>
+            <div class="field"><label>Loss to Lease (%)</label><input class="fi" type="text" id="a_loss_to_lease" value="3.00" oninput="markChanged()"><span class="field-note">Excel default: 3.0%</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">CAM Reimbursements (Year 1)</div><div class="assum-row-desc">Common area maintenance reimbursements received from commercial tenants in Year 1. Enter $0 for pure residential properties.</div></div>
+            <div class="field"><label>Amount ($ / yr)</label><input class="fi" type="text" id="a_cam_reimbursements" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0 (residential deals)</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Fee Income (Year 1)</div><div class="assum-row-desc">Ancillary fee income in Year 1 (laundry, parking, storage, etc.).</div></div>
+            <div class="field"><label>Amount ($ / yr)</label><input class="fi" type="text" id="a_fee_income" value="6000" oninput="markChanged()"><span class="field-note">Excel default: $6,000</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §10: FIXED EXPENSES -->
+      <div class="assum-section-label">10 &mdash; Operating Expenses — Fixed (Year 1)</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Fixed Operating Expenses</div><div class="assum-card-sub">Year 1 fixed expense line items — grown annually by the expense growth rate</div></div>
+        <div class="assum-card-body">
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Real Estate Taxes ($)</label><input class="fi" type="text" id="a_re_taxes" value="45000" oninput="markChanged()"></div>
+            <div class="field"><label>Insurance ($)</label><input class="fi" type="text" id="a_insurance" value="18000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Gas ($)</label><input class="fi" type="text" id="a_gas" value="12000" oninput="markChanged()"></div>
+            <div class="field"><label>Water &amp; Sewer ($)</label><input class="fi" type="text" id="a_water_sewer" value="14000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Electric ($)</label><input class="fi" type="text" id="a_electric" value="10000" oninput="markChanged()"></div>
+            <div class="field"><label>License / Inspections ($)</label><input class="fi" type="text" id="a_license" value="2500" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2">
+            <div class="field"><label>Trash Removal ($)</label><input class="fi" type="text" id="a_trash" value="8000" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §11: VARIABLE EXPENSES -->
+      <div class="assum-section-label">11 &mdash; Operating Expenses — Variable (Year 1)</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Variable Operating Expenses</div><div class="assum-card-sub">Year 1 variable expense line items including management fee — grown annually by expense growth rate</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">Management Fee</div><div class="assum-row-desc">Property management fee as a percentage of Effective Gross Income charged by the management company.</div></div>
+            <div class="field"><label>Fee (% of EGI)</label><input class="fi" type="text" id="a_mgmt_fee" value="6.00" oninput="markChanged()"><span class="field-note">Excel default: 6%; industry: 5–8%</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div style="height:1px;background:var(--rule);margin:12px 0"></div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Salaries ($)</label><input class="fi" type="text" id="a_salaries" value="24000" oninput="markChanged()"></div>
+            <div class="field"><label>Repairs ($)</label><input class="fi" type="text" id="a_repairs" value="8000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Exterminator ($)</label><input class="fi" type="text" id="a_exterminator" value="3600" oninput="markChanged()"></div>
+            <div class="field"><label>Cleaning / Maintenance ($)</label><input class="fi" type="text" id="a_cleaning" value="6000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Turnover ($)</label><input class="fi" type="text" id="a_turnover" value="5000" oninput="markChanged()"></div>
+            <div class="field"><label>Advertising ($)</label><input class="fi" type="text" id="a_advertising" value="4000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2" style="margin-bottom:8px">
+            <div class="field"><label>Landscape / Snow ($)</label><input class="fi" type="text" id="a_landscape" value="6000" oninput="markChanged()"></div>
+            <div class="field"><label>Admin / Legal / Acct. ($)</label><input class="fi" type="text" id="a_admin" value="5000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg2">
+            <div class="field"><label>Office / Phone / Supplies ($)</label><input class="fi" type="text" id="a_office" value="3000" oninput="markChanged()"></div>
+            <div class="field"><label>Miscellaneous ($)</label><input class="fi" type="text" id="a_misc_expense" value="2000" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §12: BELOW THE LINE -->
+      <div class="assum-section-label">12 &mdash; Below-the-Line Items</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Below-the-Line &amp; Reserve Items</div><div class="assum-card-sub">Capital reserves and below-NOI deductions applied annually</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">Capital Reserves</div><div class="assum-row-desc">Annual per-unit replacement reserve for capital expenditures. Applied as a below-the-line NOI deduction. Lenders typically require $200–$400/unit/year.</div></div>
+            <div class="field"><label>Reserve ($ / Unit / Yr)</label><input class="fi" type="text" id="a_cap_reserve" value="400" oninput="markChanged()"><span class="field-note">Excel default: $400/unit/yr</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Commissions (Year 1)</div><div class="assum-row-desc">Leasing commissions paid in Year 1 for tenant procurement. Applied as a below-the-line deduction.</div></div>
+            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_commissions" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Renovations (Year 1)</div><div class="assum-row-desc">Initial renovation budget applied in Year 1 as a below-the-line cash outflow. For value-add deals not fully captured in Sources &amp; Uses hard costs.</div></div>
+            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_renovations_yr1" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="assum-section-label">13 &mdash; Exit Assumptions</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Exit &amp; Disposition Defaults</div><div class="assum-card-sub">Exit cap rate and disposition costs applied at the end of the hold period</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">Exit Cap Rate</div><div class="assum-row-desc">Capitalization rate applied to Year N+1 NOI to calculate terminal sale value. Typically 25–50 bps above the entry cap.</div></div>
+            <div class="field"><label>Exit Cap (%)</label><input class="fi" type="text" id="a_exit_cap_rate" value="7.00" oninput="markChanged()"><span class="field-note">Excel default: 7.0%</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Disposition Costs</div><div class="assum-row-desc">Total transaction costs at disposition as a percentage of gross sale price (broker commission, transfer tax, legal, and closing costs).</div></div>
+            <div class="field"><label>Disposition Costs (%)</label><input class="fi" type="text" id="a_disp_fee" value="2.00" oninput="markChanged()"><span class="field-note">Excel default: 2.0% of sale price</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §14: WATERFALL / PARTNERSHIP -->
+      <div class="assum-section-label">14 &mdash; Waterfall &amp; Partnership Structure</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Equity Structure</div><div class="assum-card-sub">GP/LP split, waterfall type, and preferred return</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">GP Equity Contribution</div><div class="assum-row-desc">Percentage of total equity contributed by the general partner / sponsor. Set to 0% for no GP co-invest.</div></div>
+            <div class="field"><label>GP Equity (%)</label><input class="fi" type="text" id="a_gp_equity_pct" value="10" oninput="markChanged()"><span class="field-note">0% = no GP co-invest</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">LP Equity Contribution</div><div class="assum-row-desc">Percentage of total equity contributed by limited partner investors. Must sum to 100% with GP equity.</div></div>
+            <div class="field"><label>LP Equity (%)</label><input class="fi" type="text" id="a_lp_equity_pct" value="90" oninput="markChanged()"><span class="field-note">Must sum to 100% with GP</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Preferred Return (Tier 1 Hurdle)</div><div class="assum-row-desc">Annual preferred return paid to LP investors before promote kicks in. LP receives 100% of distributions up to this threshold.</div></div>
+            <div class="field"><label>Pref Return (%)</label><input class="fi" type="text" id="a_pref_return" value="8.00" oninput="markChanged()"><span class="field-note">Standard LP pref: 6–8% annually</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Waterfall Type</div><div class="assum-row-desc">Select Full (tiered promote) or Simple (single LP/GP split across all distributions above preferred return). Full is the default for institutional structures.</div></div>
+            <div class="field">
+              <label>Waterfall Type</label>
+              <select class="fi" id="a_waterfall_type" oninput="markChanged()">
+                <option value="1">Full — Tiered Promote (default)</option>
+                <option value="0">Simple — Single LP/GP Split</option>
+              </select>
+              <span class="field-note">Excel: 1 = Full waterfall; 0 = Simple split</span>
+            </div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Simple Split — LP Share</div><div class="assum-row-desc">LP distribution percentage when using a simple (non-tiered) waterfall structure. Only active when Waterfall Type = Simple.</div></div>
+            <div class="field"><label>LP Split (%)</label><input class="fi" type="text" id="a_simple_lp" value="80" oninput="markChanged()"><span class="field-note">Only used when Waterfall Type = Simple</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">LP / GP Promote Tiers — Full Waterfall</div><div class="assum-card-sub">IRR or EM hurdle per tier and LP/GP distribution splits — up to 5 tiers above preferred return</div></div>
+        <div class="assum-card-body">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">Select IRR % or Equity Multiple (EM×) as the hurdle metric independently for each tier. Distributions cascade in order from Tier 1 through Tier 5.</div>
+          <div style="display:grid;grid-template-columns:60px 130px 1fr 1fr 1fr;gap:10px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--rule)">
+            <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase">Tier</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase">Hurdle Type</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase">Threshold</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase">LP Split (%)</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase">GP Split (%)</div>
+          </div>
+          <div class="tier-row" style="grid-template-columns:60px 130px 1fr 1fr 1fr">
+            <div class="tier-label">Tier 2</div>
+            <div><div class="hurdle-type-toggle" id="ht1"><button class="ht-btn active" onclick="setHurdleType(1,'irr',this)">IRR %</button><button class="ht-btn" onclick="setHurdleType(1,'em',this)">EM &times;</button></div><div class="hurdle-unit" id="hu1">% IRR</div></div>
+            <input class="fi" type="text" placeholder="12" id="a_t1_hurdle" value="12" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="70" id="a_t1_lp" value="70" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="30" id="a_t1_gp" value="30" oninput="markChanged()">
+          </div>
+          <div class="tier-row" style="grid-template-columns:60px 130px 1fr 1fr 1fr">
+            <div class="tier-label">Tier 3</div>
+            <div><div class="hurdle-type-toggle" id="ht2"><button class="ht-btn active" onclick="setHurdleType(2,'irr',this)">IRR %</button><button class="ht-btn" onclick="setHurdleType(2,'em',this)">EM &times;</button></div><div class="hurdle-unit" id="hu2">% IRR</div></div>
+            <input class="fi" type="text" placeholder="15" id="a_t2_hurdle" value="15" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="60" id="a_t2_lp" value="60" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="40" id="a_t2_gp" value="40" oninput="markChanged()">
+          </div>
+          <div class="tier-row" style="grid-template-columns:60px 130px 1fr 1fr 1fr">
+            <div class="tier-label">Tier 4</div>
+            <div><div class="hurdle-type-toggle" id="ht3"><button class="ht-btn active" onclick="setHurdleType(3,'irr',this)">IRR %</button><button class="ht-btn" onclick="setHurdleType(3,'em',this)">EM &times;</button></div><div class="hurdle-unit" id="hu3">% IRR</div></div>
+            <input class="fi" type="text" placeholder="18" id="a_t3_hurdle" value="18" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="30" id="a_t3_lp" value="30" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="70" id="a_t3_gp" value="70" oninput="markChanged()">
+          </div>
+          <div class="tier-row" style="grid-template-columns:60px 130px 1fr 1fr 1fr">
+            <div class="tier-label">Tier 5</div>
+            <div><div class="hurdle-type-toggle" id="ht4"><button class="ht-btn active" onclick="setHurdleType(4,'irr',this)">IRR %</button><button class="ht-btn" onclick="setHurdleType(4,'em',this)">EM &times;</button></div><div class="hurdle-unit" id="hu4">% IRR</div></div>
+            <input class="fi" type="text" placeholder="24" id="a_t4_hurdle" value="24" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="20" id="a_t4_lp" value="20" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="80" id="a_t4_gp" value="80" oninput="markChanged()">
+          </div>
+          <div class="tier-row" style="grid-template-columns:60px 130px 1fr 1fr 1fr">
+            <div class="tier-label" style="font-size:10px">Above T4</div>
+            <div><div class="hurdle-type-toggle" id="ht5"><button class="ht-btn active" onclick="setHurdleType(5,'irr',this)">IRR %</button><button class="ht-btn" onclick="setHurdleType(5,'em',this)">EM &times;</button></div><div class="hurdle-unit" id="hu5">% IRR</div></div>
+            <input class="fi" type="text" placeholder="Any above T4" id="a_t5_hurdle" value="" oninput="markChanged()" style="background:var(--sage-lt);font-size:10px" disabled title="Tier 5 captures anything above the Tier 4 upper bound">
+            <input class="fi" type="text" placeholder="10" id="a_t5_lp" value="10" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="90" id="a_t5_gp" value="90" oninput="markChanged()">
+          </div>
+          <div style="font-size:10.5px;color:var(--muted);line-height:1.5;margin-top:6px;padding:6px 8px;background:rgba(178,201,180,0.15);border-radius:3px">
+            Tier 5 (Above T4) captures all returns above the Tier 4 hurdle — no upper bound. LP/GP splits apply to all residual distributions above the Tier 4 threshold.
+          </div>
+          <div class="tier-row" style="grid-template-columns:60px 130px 1fr 1fr 1fr;border-bottom:none;display:none">
+            <div class="tier-label">Above T5</div>
+            <div style="font-size:10.5px;color:var(--muted);padding-top:4px">LP residual</div>
+            <div></div>
+            <input class="fi" type="text" placeholder="10" id="a_t5_lp_legacy" value="10" oninput="markChanged()">
+            <input class="fi" type="text" placeholder="90" id="a_t5_gp_legacy" value="90" oninput="markChanged()">
+          </div>
+        </div>
+      </div>
+
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Equity Multiple (EM) Hurdles</div><div class="assum-card-sub">EM threshold values used when the waterfall hurdle type is set to EM × instead of IRR % for any tier</div></div>
+        <div class="assum-card-body">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">These EM hurdle values are referenced by the model when a promote tier is configured to use Equity Multiple (EM×) rather than IRR as its distribution trigger.</div>
+          <div class="fg3">
+            <div class="field"><label>EM Tier 1 Hurdle (&times;)</label><input class="fi" type="text" id="a_em_t1" value="2.0" oninput="markChanged()"><span class="field-note">Excel default: 2.0×</span></div>
+            <div class="field"><label>EM Tier 2 Hurdle (&times;)</label><input class="fi" type="text" id="a_em_t2" value="2.5" oninput="markChanged()"><span class="field-note">Excel default: 2.5×</span></div>
+            <div class="field"><label>EM Tier 3 Hurdle (&times;)</label><input class="fi" type="text" id="a_em_t3" value="3.0" oninput="markChanged()"><span class="field-note">Excel default: 3.0×</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- §15: SENSITIVITY ANALYSIS -->
+      <div class="assum-section-label">15 &mdash; Sensitivity Analysis Ranges</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Sensitivity Matrix Axes</div><div class="assum-card-sub">Define the low, high, and step values for the rent growth vs. exit cap rate sensitivity heatmap</div></div>
+        <div class="assum-card-body">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">These define the axes of the sensitivity matrix in the Excel model. Values are displayed as a heatmap with IRR (or EM) outputs at each combination.</div>
+          <div class="fg3" style="margin-bottom:12px">
+            <div class="field"><label>Rent Growth — Low (%)</label><input class="fi" type="text" id="a_sens_rg_low" value="0.00" oninput="markChanged()"></div>
+            <div class="field"><label>Rent Growth — High (%)</label><input class="fi" type="text" id="a_sens_rg_high" value="5.00" oninput="markChanged()"></div>
+            <div class="field"><label>Rent Growth — Step (%)</label><input class="fi" type="text" id="a_sens_rg_step" value="1.00" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3">
+            <div class="field"><label>Exit Cap — Low (%)</label><input class="fi" type="text" id="a_sens_cap_low" value="5.50" oninput="markChanged()"></div>
+            <div class="field"><label>Exit Cap — High (%)</label><input class="fi" type="text" id="a_sens_cap_high" value="8.50" oninput="markChanged()"></div>
+            <div class="field"><label>Exit Cap — Step (%)</label><input class="fi" type="text" id="a_sens_cap_step" value="0.50" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RETURN THRESHOLDS -->
+      <div class="assum-section-label">Return Thresholds &amp; Underwriting Standards</div>
+
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Minimum Return &amp; Underwriting Hurdles</div><div class="assum-card-sub">Firm-wide minimum thresholds — deals below these levels are flagged in the DD summary and investment recommendation</div></div>
+        <div class="assum-card-body">
+
+          <div class="assum-row">
+            <div><div class="assum-row-label">Minimum Equity Multiple (EM)</div><div class="assum-row-desc">Minimum LP equity multiple (total distributions ÷ contributed equity) over the full hold period. Deals below this are flagged as a return risk.</div></div>
+            <div class="field"><label>Minimum EM (&times;)</label><input class="fi" type="text" id="a_min_em" value="1.80" oninput="markChanged()"><span class="field-note">Firm target: 1.8–2.0&times; over hold</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+
+          <div class="assum-row">
+            <div><div class="assum-row-label">Minimum LP IRR</div><div class="assum-row-desc">Minimum acceptable levered LP internal rate of return over the hold period. Deals below this threshold receive a negative investment recommendation.</div></div>
+            <div class="field"><label>Minimum IRR (%)</label><input class="fi" type="text" id="a_min_irr" value="12.00" oninput="markChanged()"><span class="field-note">Firm target: 15% LP IRR; floor at 12%</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+
+          <div class="assum-row">
+            <div><div class="assum-row-label">Minimum Cash-on-Cash Return</div><div class="assum-row-desc">Minimum Year 1 stabilized cash-on-cash return. Below this, the deal is flagged as insufficient current income for LP distributions.</div></div>
+            <div class="field"><label>Minimum CoC (%)</label><input class="fi" type="text" id="a_min_coc" value="7.00" oninput="markChanged()"><span class="field-note">Firm target: 7–8% Year 1 CoC</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+
+          <div class="assum-row">
+            <div><div class="assum-row-label">Minimum DSCR</div><div class="assum-row-desc">Minimum acceptable Debt Service Coverage Ratio in Year 1 on a stabilized basis. Below this, DSCR is flagged as a lender and DD risk.</div></div>
+            <div class="field"><label>Minimum DSCR (&times;)</label><input class="fi" type="text" id="a_min_dscr" value="1.25" oninput="markChanged()"><span class="field-note">Most lenders require 1.20–1.30&times;</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+
+          <div class="assum-row">
+            <div><div class="assum-row-label">Minimum Stabilized Cap Rate</div><div class="assum-row-desc">Minimum stabilized cap rate required for a deal to clear underwriting. Deals below this are flagged as overpriced relative to market.</div></div>
+            <div class="field"><label>Minimum Cap Rate (%)</label><input class="fi" type="text" id="a_min_cap" value="5.50" oninput="markChanged()"><span class="field-note">Flag below-market cap acquisitions</span></div>
+            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- DEFAULT REPORT SECTIONS -->
+      <div class="assum-section-label">Default Report Sections</div>
+
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">PDF Report Section Defaults</div><div class="assum-card-sub">Toggle which of the 22 sections are included in every generated PDF report by default — overridden per deal on the New Underwrite screen</div></div>
+        <div class="assum-card-body">
+          <div style="font-size:11.5px;color:var(--muted);margin-bottom:16px;line-height:1.5">
+            Sections toggled <strong>on</strong> are included in every report by default. Sections toggled <strong>off</strong> are excluded unless re-enabled per deal.
+          </div>
+          <div id="section-toggles"></div>
+        </div>
+      </div>
+
+      <!-- NOTIFICATIONS -->
+      <div class="assum-section-label">Notifications</div>
+
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Deal Completion Alerts</div><div class="assum-card-sub">Configure email and Slack notifications sent when each underwriting run completes</div></div>
+        <div class="assum-card-body">
+
+          <!-- Email -->
+          <div class="assum-row">
+            <div><div class="assum-row-label">Email Notifications</div><div class="assum-row-desc">Send a formatted HTML summary email with key metrics and download links when a run completes. Uses Python smtplib — configure SMTP credentials in secrets.toml.</div></div>
+            <div class="field">
+              <label>Enable Email Alerts</label>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+                <label class="toggle"><input type="checkbox" id="a_notify_email_enabled" oninput="markChanged()"><span class="toggle-slider"></span></label>
+                <span id="lbl_notify_email" style="font-size:11px;color:var(--muted)">Off</span>
+              </div>
+            </div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Email Recipients</div><div class="assum-row-desc">Comma-separated list of email addresses. All addresses receive the same notification when a run completes.</div></div>
+            <div class="field">
+              <label>Recipients</label>
+              <input class="fi" type="text" id="a_notify_email_recipients" placeholder="analyst@firm.com, partner@firm.com" oninput="markChanged()">
+              <span class="field-note">Comma-separated. Leave blank to disable.</span>
+            </div>
+          </div>
+
+          <!-- Slack -->
+          <div class="assum-row" style="border-top:1px solid var(--rule);padding-top:14px;margin-top:4px">
+            <div><div class="assum-row-label">Slack Notifications</div><div class="assum-row-desc">Send a concise plain-text deal alert to a Slack channel via Incoming Webhook. No emoji — professional team notification format.</div></div>
+            <div class="field">
+              <label>Enable Slack Alerts</label>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+                <label class="toggle"><input type="checkbox" id="a_notify_slack_enabled" oninput="markChanged()"><span class="toggle-slider"></span></label>
+                <span id="lbl_notify_slack" style="font-size:11px;color:var(--muted)">Off</span>
+              </div>
+            </div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Slack Webhook URL</div><div class="assum-row-desc">Incoming Webhook URL from your Slack app configuration. Stored in .streamlit/secrets.toml — never committed to version control. The field here is a convenience reference only.</div></div>
+            <div class="field">
+              <label>Webhook URL</label>
+              <input class="fi" type="text" id="a_notify_slack_webhook" placeholder="https://hooks.slack.com/services/..." oninput="markChanged()">
+              <span class="field-note">Configure in secrets.toml for security.</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div style="height:40px"></div>
+    </div>
+    <!-- /screen-assumptions -->
+
+  </div><!-- /screens -->
+
+  <!-- SUBMIT BAR -->
+  <div class="submit-bar" id="submit-bar">
+    <div class="submit-info" id="submit-info">Fill in property details and financial parameters to continue.</div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-secondary" onclick="clearForm()">Clear</button>
+      <button class="btn btn-primary" onclick="openModal()">Run Underwriting Analysis &#8594;</button>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<!-- CONFIRMATION MODAL -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-title">Confirm Underwriting Run</div>
+    <div class="modal-sub">Review key parameters before submitting. The analysis typically completes in 90–120 seconds.</div>
+    <div class="modal-row"><span class="modal-row-label">Property</span><span class="modal-row-val" id="m_address">—</span></div>
+    <div class="modal-row"><span class="modal-row-label">Asset Type</span><span class="modal-row-val" id="m_asset">—</span></div>
+    <div class="modal-row"><span class="modal-row-label">Strategy</span><span class="modal-row-val" id="m_strategy">—</span></div>
+    <div class="modal-row"><span class="modal-row-label">Purchase Price</span><span class="modal-row-val" id="m_price">—</span></div>
+    <div class="modal-row"><span class="modal-row-label">Reno / Construction Costs</span><span class="modal-row-val" id="m_tpc">—</span></div>
+    <div class="modal-row"><span class="modal-row-label">LTV / Rate / Term</span><span class="modal-row-val" id="m_debt">— <span style="font-size:10px;font-weight:400;color:var(--muted)">(from Assumptions)</span></span></div>
+    <div class="modal-row"><span class="modal-row-label">Hold Period</span><span class="modal-row-val" id="m_hold">— <span style="font-size:10px;font-weight:400;color:var(--muted)">(from Assumptions)</span></span></div>
+    <div class="modal-row"><span class="modal-row-label">Target LP IRR</span><span class="modal-row-val" id="m_irr">— <span style="font-size:10px;font-weight:400;color:var(--muted)">(from Assumptions)</span></span></div>
+    <div class="modal-row"><span class="modal-row-label">LP / GP Split</span><span class="modal-row-val" id="m_split">— <span style="font-size:10px;font-weight:400;color:var(--muted)">(from Assumptions)</span></span></div>
+    <div class="modal-row"><span class="modal-row-label">Preferred Return</span><span class="modal-row-val" id="m_pref">— <span style="font-size:10px;font-weight:400;color:var(--muted)">(from Assumptions)</span></span></div>
+    <div class="modal-row"><span class="modal-row-label">Acq. Fee / Disp. Fee</span><span class="modal-row-val" id="m_fees">—</span></div>
+    <div class="modal-btns">
+      <button class="btn btn-secondary" onclick="closeModal()">Edit</button>
+      <button class="btn btn-primary" onclick="submitRun()">Confirm &amp; Submit &#8594;</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// REPORT SECTIONS CONFIG
+const REPORT_SECTIONS = [
+  {id:'s01',num:'01',label:'Executive Summary',                        desc:'High-level deal overview, KPI dashboard, deal thesis, and top opportunities.',                                on:true,  locked:false},
+  {id:'s02',num:'02',label:'Property Photo Gallery & Visual Documentation', desc:'Hero shot, property photo grid (exterior, interior, retail, aerial), and floor plans.',                 on:true,  locked:false},
+  {id:'s03',num:'03',label:'Maps & Geographic Context',                desc:'Aerial location map, neighborhood context map, and FEMA flood zone map.',                                   on:true,  locked:false},
+  {id:'s04',num:'04',label:'Property Description',                     desc:'Physical description, parcel & improvement data, census tract, utilities & infrastructure.',                on:true,  locked:false},
+  {id:'s05',num:'05',label:'Ownership & Title History',                desc:'Ownership chain, deed transfer history, and title flag summary.',                                           on:true,  locked:false},
+  {id:'s06',num:'06',label:'Zoning & Land Use Analysis',               desc:'Zoning classification, permitted uses, density standards, overlays, and variance analysis.',                on:true,  locked:false},
+  {id:'s07',num:'07',label:'Location & Market Overview',               desc:'Neighborhood overview, transportation & access, demographics, employment, and walkability.',                on:true,  locked:false},
+  {id:'s08',num:'08',label:'Neighborhood Trend Analysis',              desc:'Population, income, and employment trend charts; demographic shift analysis.',                              on:true,  locked:false},
+  {id:'s09',num:'09',label:'Market Supply & Pipeline Analysis',        desc:'Competing supply pipeline, submarket absorption trends, and vacancy forecast.',                             on:true,  locked:false},
+  {id:'s10',num:'10',label:'Unit Mix & Rent Roll Detail',              desc:'Unit mix summary, rent roll by unit, lease expiration schedule, and current occupancy.',                    on:true,  locked:false},
+  {id:'s11',num:'11',label:'Comparable Market Analysis',               desc:'Residential rent comps, sale comps, and submarket cap rate analysis with narrative.',                       on:true,  locked:false},
+  {id:'s12',num:'12',label:'Financial Analysis',                       desc:'Full pro forma, NOI build, cash flow waterfall, IRR/EM sensitivity, and sources & uses.',                   on:true,  locked:false},
+  {id:'s13',num:'13',label:'Debt & Capital Structure',                 desc:'Loan sizing, debt service schedule, DSCR analysis, and capital stack summary.',                            on:true,  locked:false},
+  {id:'s14',num:'14',label:'Environmental & Climate Risk Assessment',  desc:'Environmental screening, flood risk, First Street climate scores, and Phase I/II findings.',                on:true,  locked:false},
+  {id:'s15',num:'15',label:'Legal & Title Status',                     desc:'Title search summary, liens & encumbrances, easements, and pending litigation.',                            on:true,  locked:false},
+  {id:'s16',num:'16',label:'Due Diligence Flags & Risk Assessment',    desc:'Red/amber/green DD flag matrix, risk narrative, and remediation recommendations.',                          on:true,  locked:false},
+  {id:'s17',num:'17',label:'Due Diligence Checklist & Status Tracker', desc:'Physical, legal, financial, and environmental DD checklist with completion status tracker.',                 on:true,  locked:false},
+  {id:'s18',num:'18',label:'Project Timeline & Milestone Schedule',    desc:'Phase-by-phase milestone schedule from acquisition through stabilization and disposition.',                  on:true,  locked:false},
+  {id:'s19',num:'19',label:'Investment Recommendation',                desc:'Final AI-generated recommendation, offer guidance, scenario comparison, and decision rationale.',            on:true,  locked:false},
+  {id:'s20',num:'20',label:'Conclusions & Next Steps',                 desc:'Summary conclusions and prioritized next steps for proceeding.',                                             on:true,  locked:false},
+  {id:'s21',num:'21',label:'Disclaimer & Certification',               desc:'Legal disclaimer, confidentiality notice, and preparer certification. Always included.',                    on:true,  locked:true},
+  {id:'s22',num:'22',label:'Appendix A: Data Sources & Methodology',   desc:'Data source table, methodology notes, and provenance for all data elements. Always included.',             on:true,  locked:true},
+];
+
+const DEFAULTS = {
+  // §1 Property Information
+  a_hold_period:'10', a_num_units:'', a_gba_sf:'', a_lot_sf:'', a_year_built:'',
+  // §2 Acquisition
+  a_transfer_tax:'2.139', a_closing_costs_fixed:'75000', a_tenant_buyout:'0',
+  // §3 Professional & Due Diligence
+  a_legal_closing:'25000', a_title_insurance:'8000', a_legal_bank:'5000',
+  a_appraisal:'5000', a_environmental:'6000', a_surveyor:'3500',
+  a_architect:'0', a_structural:'0', a_civil_eng:'0', a_meps:'0',
+  a_legal_zoning:'0', a_geotech:'0',
+  // §4 Financing costs, soft costs, hard costs, sources
+  a_acq_fee_fixed:'25000', a_mortgage_carry:'0', a_mortgage_fees:'17500', a_mezz_interest:'0',
+  a_working_capital:'15000', a_marketing:'5000', a_re_tax_carry:'0', a_prop_ins_carry:'0',
+  a_dev_fee:'0', a_dev_pref:'0', a_permits:'0',
+  a_stormwater:'0', a_demo:'0', a_const_hard:'0', a_const_reserve:'0', a_gc_overhead:'0',
+  a_mezz_debt:'0', a_tax_credit_eq:'0', a_grants:'0',
+  // §5 Initial financing
+  a_ltv_pct:'70.00', a_interest_rate:'6.50', a_amort_years:'30',
+  a_loan_term:'10', a_origination_fee:'1.00', a_io_period:'0',
+  // §6–8 Refi events (year, appraised value, ltv, rate, amort, term, orig fee, prepay, closing)
+  a_refi1_year:'5',  a_refi1_appraised:'3200000', a_refi1_ltv:'70', a_refi1_rate:'6.00',
+  a_refi1_amort:'30', a_refi1_term:'10', a_refi1_orig_fee:'1.00', a_refi1_prepay:'1.00', a_refi1_closing:'25000',
+  a_refi2_year:'8',  a_refi2_appraised:'3800000', a_refi2_ltv:'65', a_refi2_rate:'5.50',
+  a_refi2_amort:'30', a_refi2_term:'10', a_refi2_orig_fee:'1.00', a_refi2_prepay:'1.00', a_refi2_closing:'25000',
+  a_refi3_year:'0',  a_refi3_appraised:'0',       a_refi3_ltv:'65', a_refi3_rate:'5.50',
+  a_refi3_amort:'30', a_refi3_term:'10', a_refi3_orig_fee:'1.00', a_refi3_prepay:'0',    a_refi3_closing:'0',
+  // §8 Income
+  a_vacancy:'7.50', a_rev_growth:'3.00', a_exp_growth:'3.00',
+  a_loss_to_lease:'3.00', a_cam_reimbursements:'0', a_fee_income:'6000',
+  // §9 Fixed expenses
+  a_re_taxes:'45000', a_insurance:'18000', a_gas:'12000',
+  a_water_sewer:'14000', a_electric:'10000', a_license:'2500', a_trash:'8000',
+  // §10 Variable expenses
+  a_mgmt_fee:'6.00', a_salaries:'24000', a_repairs:'8000',
+  a_exterminator:'3600', a_cleaning:'6000', a_turnover:'5000',
+  a_advertising:'4000', a_landscape:'6000', a_admin:'5000',
+  a_office:'3000', a_misc_expense:'2000',
+  // §11 Below-the-line
+  a_cap_reserve:'400', a_commissions:'0', a_renovations_yr1:'0',
+  // §12 Exit
+  a_exit_cap_rate:'7.00', a_disp_fee:'2.00',
+  // §13 Waterfall / Partnership
+  a_gp_equity_pct:'10', a_lp_equity_pct:'90', a_waterfall_type:'1',
+  a_pref_return:'8.00', a_simple_lp:'80',
+  a_t1_hurdle:'12', a_t1_lp:'70', a_t1_gp:'30',
+  a_t2_hurdle:'15', a_t2_lp:'60', a_t2_gp:'40',
+  a_t3_hurdle:'18', a_t3_lp:'30', a_t3_gp:'70',
+  a_t4_hurdle:'24', a_t4_lp:'20', a_t4_gp:'80',
+  a_t5_lp:'10',    a_t5_gp:'90',  // Above T4 residual tier — no upper bound
+  // §14 EM hurdles
+  a_em_t1:'2.0', a_em_t2:'2.5', a_em_t3:'3.0',
+  // §15 Sensitivity
+  a_sens_rg_low:'0.00', a_sens_rg_high:'5.00', a_sens_rg_step:'1.00',
+  a_sens_cap_low:'5.50', a_sens_cap_high:'8.50', a_sens_cap_step:'0.50',
+  // Return thresholds
+  a_min_em:'1.80', a_min_irr:'12.00', a_min_coc:'7.00', a_min_dscr:'1.25', a_min_cap:'5.50',
+  // Target IRR (used in modal)
+  a_target_irr:'15.00',
+  // §16 Notifications
+  a_notify_email_enabled: false, a_notify_email_recipients:'',
+  a_notify_slack_enabled: false, a_notify_slack_webhook:'',
+};
+
+// ── DEAL-SPECIFIC FIELD DEFAULTS (New Underwrite screen — not persisted to Assumptions) ──
+// These are deal-specific and reset on clearForm() only. Not stored in DEFAULTS.
+// Fields: f_const_period, f_const_loan_rate, f_leaseup_period, f_leaseup_vacancy,
+//         f_leaseup_concessions, f_leaseup_marketing (Dev Period card — value_add)
+//         f_sale_price, f_sale_const_period, f_sale_mkt_period, f_sale_commission_pct,
+//         f_carry_loan_interest, f_carry_re_taxes, f_carry_insurance, f_carry_utilities,
+//         f_carry_maintenance, f_carry_hoa, f_carry_marketing, f_carry_staging (For Sale card)
+
+// ── MINOR #4: Model version constants (single source of truth — update here only) ──
+// When coding begins, import these from config.py:
+// MODEL_HAIKU  = "claude-haiku-4-5-20251001"
+// MODEL_SONNET = "claude-sonnet-4-5-20250514"
+
+// ── SECTION TOGGLE RENDERERS ──────────────────────────────────────────────
+
+function renderSectionToggles() {
+  const c = document.getElementById('section-toggles');
+  if (!c) return;
+  const saved = JSON.parse(localStorage.getItem('fp_sections') || '{}');
+  c.innerHTML = REPORT_SECTIONS.map(s => {
+    const checked = s.locked ? true : (saved[s.id] !== undefined ? saved[s.id] : s.on);
+    const toggleHtml = s.locked
+      ? `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+           <div style="font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--sage-dk);background:var(--sage-lt);border:1px solid var(--sage-mid);padding:3px 7px;border-radius:3px;white-space:nowrap">Always On</div>
+         </div>`
+      : `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+           <label class="toggle"><input type="checkbox" id="toggle_${s.id}" ${checked?'checked':''} onchange="updateToggleLbl('${s.id}');markChanged()"><span class="toggle-slider"></span></label>
+           <div class="toggle-state-lbl" id="lbl_${s.id}" style="${checked?'color:var(--green)':''}">${checked?'On':'Off'}</div>
+         </div>`;
+    return `<div class="sec-toggle-row">
+      <div>
+        <div style="font-size:13px;font-weight:500;color:var(--near-black)">
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-right:8px">${s.num}</span>${s.label}
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4">${s.desc}</div>
+      </div>
+      ${toggleHtml}
+    </div>`;
+  }).join('');
+}
+
+function renderDealSectionToggles() {
+  const c = document.getElementById('deal-section-toggles');
+  if (!c) return;
+  const saved = JSON.parse(localStorage.getItem('fp_deal_sections') || '{}');
+  const assmDefaults = JSON.parse(localStorage.getItem('fp_sections') || '{}');
+  c.innerHTML = REPORT_SECTIONS.map(s => {
+    const defOn = assmDefaults[s.id] !== undefined ? assmDefaults[s.id] : s.on;
+    const checked = s.locked ? true : (saved[s.id] !== undefined ? saved[s.id] : defOn);
+    const toggleHtml = s.locked
+      ? `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+           <div style="font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--sage-dk);background:var(--sage-lt);border:1px solid var(--sage-mid);padding:3px 7px;border-radius:3px;white-space:nowrap">Always On</div>
+         </div>`
+      : `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+           <label class="toggle"><input type="checkbox" id="deal_toggle_${s.id}" ${checked?'checked':''} onchange="updateDealToggleLbl('${s.id}');saveDealSections()"><span class="toggle-slider"></span></label>
+           <div class="toggle-state-lbl" id="deal_lbl_${s.id}" style="${checked?'color:var(--green)':''}">${checked?'On':'Off'}</div>
+         </div>`;
+    return `<div class="sec-toggle-row">
+      <div>
+        <div style="font-size:13px;font-weight:500;color:var(--near-black)">
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-right:8px">${s.num}</span>${s.label}
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4">${s.desc}</div>
+      </div>
+      ${toggleHtml}
+    </div>`;
+  }).join('');
+}
+
+function updateToggleLbl(id) {
+  const el = document.getElementById('toggle_'+id);
+  const lbl = document.getElementById('lbl_'+id);
+  if(el && lbl) { lbl.textContent=el.checked?'On':'Off'; lbl.style.color=el.checked?'var(--green)':''; }
+}
+
+function updateDealToggleLbl(id) {
+  const el = document.getElementById('deal_toggle_'+id);
+  const lbl = document.getElementById('deal_lbl_'+id);
+  if(el && lbl) { lbl.textContent=el.checked?'On':'Off'; lbl.style.color=el.checked?'var(--green)':''; }
+}
+
+function saveDealSections() {
+  const secs = {};
+  REPORT_SECTIONS.forEach(s => {
+    const el = document.getElementById('deal_toggle_'+s.id);
+    if(el) secs[s.id] = el.checked;
+  });
+  localStorage.setItem('fp_deal_sections', JSON.stringify(secs));
+}
+
+function toggleAllSections(onOff) {
+  REPORT_SECTIONS.forEach(s => {
+    if(s.locked) return;
+    const el = document.getElementById('deal_toggle_'+s.id);
+    const lbl = document.getElementById('deal_lbl_'+s.id);
+    if(el) { el.checked = onOff; }
+    if(lbl) { lbl.textContent = onOff?'On':'Off'; lbl.style.color = onOff?'var(--green)':''; }
+  });
+  saveDealSections();
+}
+
+// ── ASSUMPTIONS LOAD / SAVE / RESET ──────────────────────────────────────
+
+function loadAssumptions() {
+  const saved = JSON.parse(localStorage.getItem('fp_assumptions') || '{}');
+  Object.keys(DEFAULTS).forEach(k => {
+    const el = document.getElementById(k);
+    if (!el) return;
+    if (el.type === 'checkbox') {
+      el.checked = saved[k] !== undefined ? saved[k] : DEFAULTS[k];
+    } else {
+      el.value = saved[k] !== undefined ? saved[k] : DEFAULTS[k];
+    }
+  });
+  // Refi toggles
+  [1,2,3].forEach(n => {
+    const savedOn = saved['a_refi'+n+'_on'];
+    const isOn = savedOn !== undefined ? savedOn : (n===1);
+    const cb = document.getElementById('a_refi'+n+'_on');
+    if(cb) cb.checked = isOn;
+    const lbl = document.getElementById('refi'+n+'_lbl');
+    const fields = document.getElementById('refi'+n+'_fields');
+    if(lbl) { lbl.textContent=isOn?'On':'Off'; lbl.style.color=isOn?'var(--green)':''; }
+    if(fields) fields.classList.toggle('refi-collapsed', !isOn);
+  });
+  // Hurdle types (5 tiers — Tier 5 is "Above T4" residual, no hurdle type needed but kept for parity)
+  const ht = JSON.parse(localStorage.getItem('fp_hurdle_types') || '{}');
+  [1,2,3,4,5].forEach(n => {
+    const type = ht['t'+n] || 'irr';
+    const btns = document.querySelectorAll('#ht'+n+' .ht-btn');
+    btns.forEach(b => b.classList.remove('active'));
+    if(type==='irr' && btns[0]) btns[0].classList.add('active');
+    else if(btns[1]) btns[1].classList.add('active');
+    const hu = document.getElementById('hu'+n);
+    if(hu) hu.textContent = type==='irr' ? '% IRR' : '× EM';
+  });
+  // Assumptions-screen section defaults
+  const savedSec = JSON.parse(localStorage.getItem('fp_sections') || '{}');
+  REPORT_SECTIONS.forEach(s => {
+    const el = document.getElementById('toggle_'+s.id);
+    if(el) el.checked = savedSec[s.id] !== undefined ? savedSec[s.id] : s.on;
+  });
+  setSaveStatus('saved');
+}
+
+function saveAssumptions() {
+  const data = {};
+  Object.keys(DEFAULTS).forEach(k => {
+    const el = document.getElementById(k);
+    if (!el) return;
+    data[k] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  [1,2,3].forEach(n => { const cb=document.getElementById('a_refi'+n+'_on'); if(cb) data['a_refi'+n+'_on']=cb.checked; });
+  localStorage.setItem('fp_assumptions', JSON.stringify(data));
+  // Hurdle types (5 tiers)
+  const ht = {};
+  [1,2,3,4,5].forEach(n => {
+    const btns = document.querySelectorAll('#ht'+n+' .ht-btn');
+    ht['t'+n] = (btns[1] && btns[1].classList.contains('active')) ? 'em' : 'irr';
+  });
+  localStorage.setItem('fp_hurdle_types', JSON.stringify(ht));
+  // Section defaults
+  const secs = {};
+  REPORT_SECTIONS.forEach(s => {
+    if(s.locked) { secs[s.id] = true; return; }
+    const el = document.getElementById('toggle_'+s.id);
+    if(el) secs[s.id] = el.checked;
+  });
+  localStorage.setItem('fp_sections', JSON.stringify(secs));
+  setSaveStatus('saved');
+}
+
+function resetAssumptions() {
+  if(!confirm('Reset all assumptions to system defaults? This cannot be undone.')) return;
+  Object.keys(DEFAULTS).forEach(k => { const el=document.getElementById(k); if(el) el.value=DEFAULTS[k]; });
+  [1,2,3].forEach(n => {
+    const defOn = n===1;
+    const cb = document.getElementById('a_refi'+n+'_on');
+    if(cb) cb.checked = defOn;
+    const lbl = document.getElementById('refi'+n+'_lbl');
+    const fields = document.getElementById('refi'+n+'_fields');
+    if(lbl) { lbl.textContent=defOn?'On':'Off'; lbl.style.color=defOn?'var(--green)':''; }
+    if(fields) fields.classList.toggle('refi-collapsed', !defOn);
+  });
+  [1,2,3,4,5].forEach(n => {
+    const btns = document.querySelectorAll('#ht'+n+' .ht-btn');
+    btns.forEach(b => b.classList.remove('active'));
+    if(btns[0]) btns[0].classList.add('active');
+    const hu = document.getElementById('hu'+n); if(hu) hu.textContent='% IRR';
+  });
+  REPORT_SECTIONS.forEach(s => {
+    const el = document.getElementById('toggle_'+s.id);
+    if(el) { el.checked=s.on; updateToggleLbl(s.id); }
+  });
+  localStorage.removeItem('fp_assumptions');
+  localStorage.removeItem('fp_sections');
+  localStorage.removeItem('fp_hurdle_types');
+  localStorage.removeItem('fp_deal_sections');
+  setSaveStatus('saved');
+}
+
+// ── HURDLE TYPE TOGGLE ───────────────────────────────────────────────────
+
+function setHurdleType(tier, type, btn) {
+  const btns = document.querySelectorAll('#ht'+tier+' .ht-btn');
+  btns.forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const hu = document.getElementById('hu'+tier);
+  if(hu) hu.textContent = type==='irr' ? '% IRR' : '× EM';
+  const input = document.getElementById('a_t'+tier+'_hurdle');
+  if(input) {
+    const irrDefaults = {1:'12',2:'15',3:'18',4:'24',5:''};
+    const emDefaults  = {1:'1.5',2:'1.8',3:'2.0',4:'2.5',5:''};
+    input.placeholder = type==='irr' ? (irrDefaults[tier]||'') : (emDefaults[tier]||'');
+  }
+  markChanged();
+}
+
+// ── REFI EVENT TOGGLE ────────────────────────────────────────────────────
+
+function toggleRefiEvent(n) {
+  const cb = document.getElementById('a_refi'+n+'_on');
+  const isOn = cb && cb.checked;
+  const lbl = document.getElementById('refi'+n+'_lbl');
+  const fields = document.getElementById('refi'+n+'_fields');
+  if(lbl) { lbl.textContent=isOn?'On':'Off'; lbl.style.color=isOn?'var(--green)':''; }
+  if(fields) fields.classList.toggle('refi-collapsed', !isOn);
+  markChanged();
+}
+
+function markChanged() { setSaveStatus('unsaved'); }
+function setSaveStatus(state) {
+  const el = document.getElementById('save-status');
+  if(!el) return;
+  if(state==='saved') { el.textContent='✓ All changes saved'; el.className='save-status saved'; }
+  else { el.textContent='Unsaved changes'; el.className='save-status'; }
+}
+
+// SCREEN NAVIGATION
+const SCREEN_META = {
+  new:         ['New Underwrite',   'Input Required'],
+  results:     ['Deal Dashboard',   'Last Run'],
+  downloads:   ['Downloads',        'Ready'],
+  archive:     ['Deal Archive',     'History'],
+  assumptions: ['Assumptions',      'Settings'],
+};
+const SCREEN_ORDER = ['new','results','downloads','archive','assumptions'];
+
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.sb-item').forEach(i=>i.classList.remove('active'));
+  document.getElementById('screen-'+id).classList.add('active');
+  const idx = SCREEN_ORDER.indexOf(id);
+  const items = document.querySelectorAll('.sb-item');
+  if(items[idx]) items[idx].classList.add('active');
+  document.getElementById('topbar-title').textContent = SCREEN_META[id][0];
+  document.getElementById('topbar-badge').textContent = SCREEN_META[id][1];
+  document.getElementById('submit-bar').style.display = id==='new'?'flex':'none';
+}
+
+function toggleCard(head) {
+  const body=head.nextElementSibling;
+  const tog=head.querySelector('.card-toggle');
+  const open=body.classList.contains('open');
+  body.classList.toggle('open',!open);
+  tog.classList.toggle('open',!open);
+}
+
+function handleStrategy() {
+  const strategy = document.getElementById('f_strategy')?.value || '';
+  const devCard  = document.getElementById('card-dev-period');
+  const saleCard = document.getElementById('card-for-sale');
+  // Show Development Period card for value_add only
+  if (devCard)  devCard.classList.toggle('show',  strategy === 'value_add');
+  // Show For Sale card for for_sale only
+  if (saleCard) saleCard.classList.toggle('show', strategy === 'for_sale');
+  // Update callout text to reflect active strategy
+  const calloutTitle = document.querySelector('.assum-callout-title');
+  if (calloutTitle) {
+    const labels = {
+      stabilized: 'All hold & operating parameters are managed in Assumptions',
+      value_add:  'Construction timeline & carry costs above. All other parameters in Assumptions',
+      for_sale:   'Sale price & carry costs above. All other parameters in Assumptions',
+    };
+    calloutTitle.textContent = labels[strategy] || 'All other financial parameters are managed in Assumptions';
+  }
+}
+
+// ── OUTPUT MODE TOGGLE ────────────────────────────────────────────────────
+let currentOutputMode = localStorage.getItem('fp_output_mode') || 'internal';
+
+function setOutputMode(mode) {
+  currentOutputMode = mode;
+  localStorage.setItem('fp_output_mode', mode);
+  const iCard = document.getElementById('mode-internal');
+  const vCard = document.getElementById('mode-investor');
+  if (!iCard || !vCard) return;
+  if (mode === 'internal') {
+    iCard.style.border = '2px solid var(--sage-deep)';
+    iCard.style.background = 'rgba(74,110,80,.07)';
+    iCard.querySelector('div:last-child').style.color = 'var(--sage-deep)';
+    iCard.querySelector('div:last-child').textContent = '● Selected';
+    vCard.style.border = '2px solid var(--rule)';
+    vCard.style.background = '';
+    vCard.querySelector('div:last-child').style.color = 'var(--muted)';
+    vCard.querySelector('div:last-child').textContent = '○ Not Selected';
+  } else {
+    vCard.style.border = '2px solid var(--sage-deep)';
+    vCard.style.background = 'rgba(74,110,80,.07)';
+    vCard.querySelector('div:last-child').style.color = 'var(--sage-deep)';
+    vCard.querySelector('div:last-child').textContent = '● Selected';
+    iCard.style.border = '2px solid var(--rule)';
+    iCard.style.background = '';
+    iCard.querySelector('div:last-child').style.color = 'var(--muted)';
+    iCard.querySelector('div:last-child').textContent = '○ Not Selected';
+  }
+}
+
+// Restore output mode on load
+document.addEventListener('DOMContentLoaded', () => setOutputMode(currentOutputMode));
+function handleAssetType() {}
+
+
+
+
+function updateCharCount(el) {
+  const len=el.value.length, max=2000;
+  const c=document.getElementById('desc-char');
+  c.textContent=`${len.toLocaleString()} / ${max.toLocaleString()} characters`;
+  c.className='char-count '+(len>=max*.9?'warn':len>0?'ok':'');
+  if(len>0){document.getElementById('desc-error').style.display='none';el.style.borderColor='';}
+}
+
+let currentZone=null;
+function triggerUpload(zone){currentZone=zone;document.getElementById('file-input').click();}
+function handleFiles(e) {
+  Array.from(e.target.files).forEach(f=>{
+    const sz=f.size<1024*1024?(f.size/1024).toFixed(0)+' KB':(f.size/1024/1024).toFixed(1)+' MB';
+    const el=document.createElement('div');el.className='uc-file';
+    el.innerHTML=`<svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/></svg><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name}</span><span style="color:var(--ghost);font-size:10px;flex-shrink:0">${sz}</span><svg onclick="this.parentElement.remove()" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="cursor:pointer;color:var(--ghost);flex-shrink:0"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+    document.getElementById('files-'+currentZone).appendChild(el);
+    // Store File object for API submission
+    if (_fileStore && _fileStore[currentZone] !== undefined) {
+      _fileStore[currentZone].push(f);
+    }
+  });
+  document.getElementById('file-input').value='';
+  ['oc','rr','fs','cb','env','ph'].forEach((z,i)=>{
+    const cats=document.querySelectorAll('.upload-cat');
+    const fc=document.getElementById('files-'+z);
+    if(fc&&fc.children.length>0&&cats[i]) cats[i].classList.add('active');
+  });
+}
+
+function openModal() {
+  const desc=document.getElementById('f_description').value.trim();
+  if(!desc){
+    document.getElementById('desc-error').style.display='block';
+    document.getElementById('f_description').style.borderColor='var(--red)';
+    document.getElementById('f_description').scrollIntoView({behavior:'smooth',block:'center'});
+    return;
+  }
+  const acqFee = document.getElementById('a_acq_fee_fixed')?.value || '25000';
+  const dispFee = document.getElementById('a_disp_fee')?.value || '2.00';
+  const ltv  = document.getElementById('a_ltv_pct')?.value || '—';
+  const rate = document.getElementById('a_interest_rate')?.value || '—';
+  const term = document.getElementById('a_loan_term')?.value || '—';
+  const hold = document.getElementById('a_hold_period')?.value || '—';
+  const irr  = document.getElementById('a_target_irr')?.value || '—';
+  const lp   = document.getElementById('a_lp_equity_pct')?.value || '—';
+  const gp   = document.getElementById('a_gp_equity_pct')?.value || '—';
+  const pref = document.getElementById('a_pref_return')?.value || '—';
+
+  const addr=[document.getElementById('f_address').value,document.getElementById('f_city').value,document.getElementById('f_state').value,document.getElementById('f_zip').value].filter(Boolean).join(', ')||'—';
+  document.getElementById('m_address').textContent = addr;
+  document.getElementById('m_asset').textContent = document.getElementById('f_asset_type').value||'—';
+  document.getElementById('m_strategy').textContent = document.getElementById('f_strategy').options[document.getElementById('f_strategy').selectedIndex]?.text||'—';
+  document.getElementById('m_price').textContent = document.getElementById('f_purchase_price').value ? '$'+document.getElementById('f_purchase_price').value : '—';
+  document.getElementById('m_tpc').textContent = document.getElementById('f_reno_cost').value ? '$'+document.getElementById('f_reno_cost').value : '$0';
+  document.getElementById('m_debt').textContent = [ltv&&ltv+'% LTV', rate&&rate+'%', term&&term+' yr'].filter(Boolean).join(' / ') || '—';
+  document.getElementById('m_hold').textContent = hold ? hold+' years' : '—';
+  document.getElementById('m_irr').textContent = irr ? irr+'%' : '—';
+  document.getElementById('m_split').textContent = [lp&&'LP '+lp+'%', gp&&'GP '+gp+'%'].filter(Boolean).join(' / ') || '—';
+  document.getElementById('m_pref').textContent = pref ? pref+'%' : '—';
+  document.getElementById('m_fees').textContent = `Acq $${parseInt(acqFee||0).toLocaleString()} / Disp ${dispFee}%`;
+  document.getElementById('modal').classList.add('show');
+}
+
+function closeModal(){document.getElementById('modal').classList.remove('show')}
+// ── FILE STORE: track actual File objects per upload zone ─────────────────
+const _fileStore = {oc:[], rr:[], fs:[], cb:[], env:[], ph:[]};
+
+// Helper: read a File as base64 string
+function _fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Helper: get a numeric field value (returns 0 if blank)
+function _num(id) {
+  const el = document.getElementById(id);
+  if (!el) return 0;
+  const v = parseFloat(el.value);
+  return isNaN(v) ? 0 : v;
+}
+
+// Helper: get a string field value
+function _str(id) {
+  const el = document.getElementById(id);
+  return el ? (el.value || '') : '';
+}
+
+// Helper: get checkbox value
+function _chk(id) {
+  const el = document.getElementById(id);
+  return el ? el.checked : false;
+}
+
+async function submitRun() {
+  closeModal();
+
+  // ── Show loading state on results screen ─────────────────────
+  showScreen('results');
+  const resultsDiv = document.getElementById('screen-results');
+  resultsDiv.innerHTML = `
+    <div style="padding:60px 0;text-align:center">
+      <div style="font-family:var(--font-display);font-size:22px;color:var(--sage-dk);margin-bottom:16px">
+        Running DealDesk Pipeline…
+      </div>
+      <div style="font-size:13px;color:var(--muted);line-height:1.8" id="pipeline-status">
+        Extracting documents · Fetching market data · Running financial engine…<br>
+        This typically takes 2–4 minutes. Please keep this window open.
+      </div>
+      <div style="margin-top:24px;width:320px;margin-left:auto;margin-right:auto;
+                  height:4px;background:var(--rule);border-radius:2px;overflow:hidden">
+        <div id="pipeline-bar" style="height:100%;width:0%;background:var(--sage);
+             border-radius:2px;transition:width 0.5s ease"></div>
+      </div>
+    </div>`;
+
+  // Animate progress bar while waiting
+  let pct = 0;
+  const barEl = document.getElementById('pipeline-bar');
+  const barTimer = setInterval(() => {
+    if (pct < 85) { pct += (85 - pct) * 0.03; barEl.style.width = pct + '%'; }
+  }, 500);
+
+  try {
+    // ── Collect uploaded files as base64 ──────────────────────
+    const uploadedFiles = [];
+    const zoneMap = {oc:'om', rr:'rent_roll', fs:'financials', cb:'construction', env:'environmental', ph:'photos'};
+    for (const [zone, docType] of Object.entries(zoneMap)) {
+      for (const file of _fileStore[zone]) {
+        const b64 = await _fileToBase64(file);
+        uploadedFiles.push({name: file.name, content_base64: b64, type: docType});
+      }
+    }
+
+    // ── Collect section config ────────────────────────────────
+    const sectionsConfig = {};
+    REPORT_SECTIONS.forEach(s => {
+      const el = document.getElementById('deal_toggle_' + s.id) ||
+                 document.getElementById('toggle_' + s.id);
+      sectionsConfig[s.id] = el ? el.checked : true;
+    });
+
+    // ── Build payload ─────────────────────────────────────────
+    const payload = {
+      // Deal fields
+      f_address:      _str('f_address'),
+      f_city:         _str('f_city'),
+      f_state:        _str('f_state'),
+      f_zip:          _str('f_zip'),
+      f_deal_name:    _str('f_deal_name'),
+      f_asset_type:   _str('f_asset_type'),
+      f_strategy:     _str('f_strategy'),
+      f_description:  _str('f_description'),
+      f_purchase_price: _num('f_purchase_price'),
+
+      // Dev period (value_add)
+      f_const_period:       _num('f_const_period'),
+      f_const_loan_rate:    _num('f_const_loan_rate'),
+      f_leaseup_period:     _num('f_leaseup_period'),
+      f_leaseup_vacancy:    _num('f_leaseup_vacancy'),
+      f_leaseup_concessions: _num('f_leaseup_concessions'),
+      f_leaseup_marketing:  _num('f_leaseup_marketing'),
+      f_reno_cost:          _num('f_reno_cost'),
+
+      // For sale fields
+      f_sale_price:           _num('f_sale_price'),
+      f_sale_const_period:    _num('f_sale_const_period'),
+      f_sale_mkt_period:      _num('f_sale_mkt_period'),
+      f_sale_commission_pct:  _num('f_sale_commission_pct'),
+      f_carry_loan_interest:  _num('f_carry_loan_interest'),
+      f_carry_re_taxes:       _num('f_carry_re_taxes'),
+      f_carry_insurance:      _num('f_carry_insurance'),
+      f_carry_utilities:      _num('f_carry_utilities'),
+      f_carry_maintenance:    _num('f_carry_maintenance'),
+      f_carry_hoa:            _num('f_carry_hoa'),
+      f_carry_marketing:      _num('f_carry_marketing'),
+      f_carry_staging:        _num('f_carry_staging'),
+
+      // Assumption fields (a_ prefix — all from Assumptions screen)
+      a_hold_period:          _num('a_hold_period'),
+      a_num_units:            _num('a_num_units'),
+      a_gba_sf:               _num('a_gba_sf'),
+      a_lot_sf:               _num('a_lot_sf'),
+      a_year_built:           _num('a_year_built'),
+      a_transfer_tax:         _num('a_transfer_tax'),
+      a_closing_costs_fixed:  _num('a_closing_costs_fixed'),
+      a_tenant_buyout:        _num('a_tenant_buyout'),
+      a_legal_closing:        _num('a_legal_closing'),
+      a_title_insurance:      _num('a_title_insurance'),
+      a_legal_bank:           _num('a_legal_bank'),
+      a_appraisal:            _num('a_appraisal'),
+      a_environmental:        _num('a_environmental'),
+      a_surveyor:             _num('a_surveyor'),
+      a_architect:            _num('a_architect'),
+      a_structural:           _num('a_structural'),
+      a_civil_eng:            _num('a_civil_eng'),
+      a_meps:                 _num('a_meps'),
+      a_legal_zoning:         _num('a_legal_zoning'),
+      a_geotech:              _num('a_geotech'),
+      a_acq_fee_fixed:        _num('a_acq_fee_fixed'),
+      a_mortgage_carry:       _num('a_mortgage_carry'),
+      a_mortgage_fees:        _num('a_mortgage_fees'),
+      a_mezz_interest:        _num('a_mezz_interest'),
+      a_working_capital:      _num('a_working_capital'),
+      a_marketing:            _num('a_marketing'),
+      a_re_tax_carry:         _num('a_re_tax_carry'),
+      a_prop_ins_carry:       _num('a_prop_ins_carry'),
+      a_dev_fee:              _num('a_dev_fee'),
+      a_dev_pref:             _num('a_dev_pref'),
+      a_permits:              _num('a_permits'),
+      a_stormwater:           _num('a_stormwater'),
+      a_demo:                 _num('a_demo'),
+      a_const_hard:           _num('a_const_hard'),
+      a_const_reserve:        _num('a_const_reserve'),
+      a_gc_overhead:          _num('a_gc_overhead'),
+      a_mezz_debt:            _num('a_mezz_debt'),
+      a_tax_credit_eq:        _num('a_tax_credit_eq'),
+      a_grants:               _num('a_grants'),
+      a_ltv_pct:              _num('a_ltv_pct'),
+      a_interest_rate:        _num('a_interest_rate'),
+      a_amort_years:          _num('a_amort_years'),
+      a_loan_term:            _num('a_loan_term'),
+      a_origination_fee:      _num('a_origination_fee'),
+      a_io_period:            _num('a_io_period'),
+      a_refi1_on:             _chk('a_refi1_on'),
+      a_refi1_year:           _num('a_refi1_year'),
+      a_refi1_appraised:      _num('a_refi1_appraised'),
+      a_refi1_ltv:            _num('a_refi1_ltv'),
+      a_refi1_rate:           _num('a_refi1_rate'),
+      a_refi1_amort:          _num('a_refi1_amort'),
+      a_refi1_term:           _num('a_refi1_term'),
+      a_refi1_orig_fee:       _num('a_refi1_orig_fee'),
+      a_refi1_prepay:         _num('a_refi1_prepay'),
+      a_refi1_closing:        _num('a_refi1_closing'),
+      a_refi2_on:             _chk('a_refi2_on'),
+      a_refi2_year:           _num('a_refi2_year'),
+      a_refi2_appraised:      _num('a_refi2_appraised'),
+      a_refi2_ltv:            _num('a_refi2_ltv'),
+      a_refi2_rate:           _num('a_refi2_rate'),
+      a_refi2_amort:          _num('a_refi2_amort'),
+      a_refi2_term:           _num('a_refi2_term'),
+      a_refi2_orig_fee:       _num('a_refi2_orig_fee'),
+      a_refi2_prepay:         _num('a_refi2_prepay'),
+      a_refi2_closing:        _num('a_refi2_closing'),
+      a_refi3_on:             _chk('a_refi3_on'),
+      a_refi3_year:           _num('a_refi3_year'),
+      a_refi3_appraised:      _num('a_refi3_appraised'),
+      a_refi3_ltv:            _num('a_refi3_ltv'),
+      a_refi3_rate:           _num('a_refi3_rate'),
+      a_refi3_amort:          _num('a_refi3_amort'),
+      a_refi3_term:           _num('a_refi3_term'),
+      a_refi3_orig_fee:       _num('a_refi3_orig_fee'),
+      a_refi3_prepay:         _num('a_refi3_prepay'),
+      a_refi3_closing:        _num('a_refi3_closing'),
+      a_vacancy:              _num('a_vacancy'),
+      a_rev_growth:           _num('a_rev_growth'),
+      a_exp_growth:           _num('a_exp_growth'),
+      a_loss_to_lease:        _num('a_loss_to_lease'),
+      a_cam_reimbursements:   _num('a_cam_reimbursements'),
+      a_fee_income:           _num('a_fee_income'),
+      a_re_taxes:             _num('a_re_taxes'),
+      a_insurance:            _num('a_insurance'),
+      a_gas:                  _num('a_gas'),
+      a_water_sewer:          _num('a_water_sewer'),
+      a_electric:             _num('a_electric'),
+      a_license:              _num('a_license'),
+      a_trash:                _num('a_trash'),
+      a_mgmt_fee:             _num('a_mgmt_fee'),
+      a_salaries:             _num('a_salaries'),
+      a_repairs:              _num('a_repairs'),
+      a_exterminator:         _num('a_exterminator'),
+      a_cleaning:             _num('a_cleaning'),
+      a_turnover:             _num('a_turnover'),
+      a_advertising:          _num('a_advertising'),
+      a_landscape:            _num('a_landscape'),
+      a_admin:                _num('a_admin'),
+      a_office:               _num('a_office'),
+      a_misc_expense:         _num('a_misc_expense'),
+      a_cap_reserve:          _num('a_cap_reserve'),
+      a_commissions:          _num('a_commissions'),
+      a_renovations_yr1:      _num('a_renovations_yr1'),
+      a_exit_cap_rate:        _num('a_exit_cap_rate'),
+      a_disp_fee:             _num('a_disp_fee'),
+      a_gp_equity_pct:        _num('a_gp_equity_pct'),
+      a_waterfall_type:       _num('a_waterfall_type'),
+      a_pref_return:          _num('a_pref_return'),
+      a_simple_lp:            _num('a_simple_lp'),
+      a_t1_hurdle:            _num('a_t1_hurdle'),
+      a_t1_lp:                _num('a_t1_lp'),
+      a_t2_hurdle:            _num('a_t2_hurdle'),
+      a_t2_lp:                _num('a_t2_lp'),
+      a_t3_hurdle:            _num('a_t3_hurdle'),
+      a_t3_lp:                _num('a_t3_lp'),
+      a_t4_hurdle:            _num('a_t4_hurdle'),
+      a_t4_lp:                _num('a_t4_lp'),
+      a_t5_lp:                _num('a_t5_lp'),
+      a_em_t1:                _num('a_em_t1'),
+      a_em_t2:                _num('a_em_t2'),
+      a_em_t3:                _num('a_em_t3'),
+      a_sens_rg_low:          _num('a_sens_rg_low'),
+      a_sens_rg_high:         _num('a_sens_rg_high'),
+      a_sens_rg_step:         _num('a_sens_rg_step'),
+      a_sens_cap_low:         _num('a_sens_cap_low'),
+      a_sens_cap_high:        _num('a_sens_cap_high'),
+      a_sens_cap_step:        _num('a_sens_cap_step'),
+      a_target_irr:           _num('a_target_irr'),
+
+      // Output mode & sections
+      investor_mode:    (typeof currentOutputMode !== 'undefined' && currentOutputMode === 'investor'),
+      sections_config:  sectionsConfig,
+
+      // Uploaded files
+      uploaded_files:   uploadedFiles,
+    };
+
+    // ── POST to FastAPI ───────────────────────────────────────
+    const resp = await fetch('http://localhost:8000/underwrite', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+
+    clearInterval(barTimer);
+
+    if (!resp.ok) {
+      let errMsg = 'Pipeline error';
+      try { const j = await resp.json(); errMsg = j.detail || errMsg; } catch(e) {}
+      throw new Error(errMsg);
+    }
+
+    // ── Trigger PDF download ──────────────────────────────────
+    barEl.style.width = '100%';
+    const blob = await resp.blob();
+    const pdfUrl = URL.createObjectURL(blob);
+
+    // Get Excel URL from response headers
+    const dealId = resp.headers.get('X-Deal-Id') || '';
+    const xlsxUrl = dealId ? `http://localhost:8000/download/excel/${dealId}` : null;
+
+    // ── Update results screen with success state ──────────────
+    const address = [_str('f_address'), _str('f_city'), _str('f_state')].filter(Boolean).join(', ');
+    resultsDiv.innerHTML = `
+      <div class="step-label">Pipeline Complete — ${address}</div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-body open" style="padding:28px">
+          <div style="text-align:center;margin-bottom:24px">
+            <div style="font-size:36px;margin-bottom:8px">✓</div>
+            <div style="font-family:var(--font-display);font-size:18px;color:var(--sage-dk);
+                        font-weight:600">Report Generated Successfully</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px">
+              Pipeline complete — PDF report and Excel model are ready for download
+            </div>
+          </div>
+          <div style="display:flex;gap:12px;justify-content:center">
+            <a href="${pdfUrl}" download="${dealId}_report.pdf"
+               style="display:inline-block;padding:12px 28px;background:var(--sage);color:white;
+                      border-radius:4px;font-family:var(--font-ui);font-size:13px;font-weight:600;
+                      text-decoration:none;letter-spacing:.04em">
+              ⬇ Download PDF Report
+            </a>
+            ${xlsxUrl ? `<a href="${xlsxUrl}" download="${dealId}_financial_model.xlsx"
+               style="display:inline-block;padding:12px 28px;background:var(--earth-mid);color:white;
+                      border-radius:4px;font-family:var(--font-ui);font-size:13px;font-weight:600;
+                      text-decoration:none;letter-spacing:.04em">
+              ⬇ Download Excel Model
+            </a>` : ''}
+          </div>
+        </div>
+      </div>`;
+
+  } catch(err) {
+    clearInterval(barTimer);
+    resultsDiv.innerHTML = `
+      <div class="step-label">Pipeline Error</div>
+      <div class="card">
+        <div class="card-body open" style="padding:28px;text-align:center">
+          <div style="font-size:36px;margin-bottom:12px">⚠</div>
+          <div style="font-family:var(--font-display);font-size:16px;color:var(--red);
+                      font-weight:600;margin-bottom:8px">Pipeline Failed</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.6;max-width:480px;
+                      margin:0 auto">${err.message}</div>
+          <button class="btn btn-secondary" onclick="showScreen('new')"
+                  style="margin-top:20px">← Back to Form</button>
+        </div>
+      </div>`;
+  }
+}
+
+function clearForm() {
+  document.querySelectorAll('#screen-new input,#screen-new select,#screen-new textarea').forEach(el=>{
+    if(el.type==='checkbox')el.checked=false; else el.value='';
+  });
+  document.querySelectorAll('.uc-files').forEach(c=>c.innerHTML='');
+  document.querySelectorAll('.upload-cat').forEach(c=>c.classList.remove('active'));
+  document.getElementById('desc-char').textContent='0 / 2,000 characters';
+  document.getElementById('desc-char').className='char-count';
+  document.getElementById('desc-error').style.display='none';
+  const descTa=document.getElementById('f_description');
+  if(descTa) descTa.style.borderColor='';
+  // Reset conditional strategy cards
+  handleStrategy();
+}
+
+// INIT
+renderSectionToggles();
+renderDealSectionToggles();
+loadAssumptions();
+showScreen('new');
+// Restore strategy-conditional cards if strategy was pre-filled
+document.addEventListener('DOMContentLoaded', () => {
+  setOutputMode(currentOutputMode);
+  handleStrategy();
+});
+</script>
+</body>
+</html>
