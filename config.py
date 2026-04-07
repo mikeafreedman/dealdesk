@@ -3,6 +3,7 @@ DealDesk CRE Underwriting — Global Configuration
 Pure constants: API refs, model strings, paths, template routing.
 """
 
+import os
 from pathlib import Path
 
 # ── Root paths ────────────────────────────────────────────────
@@ -96,6 +97,7 @@ MUNICIPAL_REGISTRY_CSV = DATA_DIR / "municipal_registry.csv"
 
 # ── Anthropic / LLM ──────────────────────────────────────────
 ANTHROPIC_SECRET_KEY = "anthropic"          # key in st.secrets
+ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL_HAIKU  = "claude-haiku-4-5-20251001"
 MODEL_SONNET = "claude-sonnet-4-6"
 
@@ -108,6 +110,9 @@ SMTP_PORT_DEFAULT = 587
 
 # ── Slack ─────────────────────────────────────────────────────
 SLACK_SECRET_KEY = "slack"                  # key in st.secrets
+
+# ── Google Maps / Street View ────────────────────────────────
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 
 # ── Pipeline defaults ─────────────────────────────────────────
 PDF_CONVERSION_TIMEOUT = 60                 # seconds

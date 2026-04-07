@@ -18,10 +18,9 @@ from typing import Optional
 
 import anthropic
 import pymupdf4llm
-import streamlit as st
 
-from config import ANTHROPIC_SECRET_KEY, MODEL_HAIKU
-from models.models import DealData, ExtractedDocumentData
+from config import ANTHROPIC_API_KEY, MODEL_HAIKU
+from models.models import CompsData, CommercialComp, DealData, ExtractedDocumentData, RentComp, SaleComp
 
 logger = logging.getLogger(__name__)
 
@@ -158,9 +157,7 @@ def pdf_to_markdown(pdf_path: str) -> str:
 
 def _call_haiku(system: str, user_msg: str) -> Optional[dict]:
     """Send a single Haiku extraction call. Returns parsed JSON or None."""
-    client = anthropic.Anthropic(
-        api_key=st.secrets[ANTHROPIC_SECRET_KEY]["api_key"],
-    )
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     try:
         response = client.messages.create(
             model=MODEL_HAIKU,
@@ -207,6 +204,32 @@ def _apply_1a(data: dict, deal: DealData) -> None:
         ext.year_built_extracted = None
     ext.description_extracted = data.get("property_description")
     ext.image_placements      = {"images": data.get("images", [])}
+
+    # Extract comp data if present in the OM
+    raw_rent    = data.get("rent_comps") or []
+    raw_comm    = data.get("commercial_comps") or []
+    raw_sale    = data.get("sale_comps") or []
+    if any([raw_rent, raw_comm, raw_sale]):
+        def _safe(cls, items):
+            out = []
+            for item in (items or []):
+                if isinstance(item, dict) and any(v for v in item.values() if v is not None):
+                    try:
+                        out.append(cls(**{k: v for k, v in item.items() if k in cls.model_fields}))
+                    except Exception:
+                        pass
+            return out
+        ext.comps = CompsData(
+            rent_comps=_safe(RentComp, raw_rent),
+            commercial_comps=_safe(CommercialComp, raw_comm),
+            sale_comps=_safe(SaleComp, raw_sale),
+        )
+        logger.info(
+            "Prompt 1A comps extracted — %d rent, %d commercial, %d sale",
+            len(ext.comps.rent_comps),
+            len(ext.comps.commercial_comps),
+            len(ext.comps.sale_comps),
+        )
 
     # Backfill address from OM if not already set
     addr = deal.address

@@ -23,6 +23,8 @@ from pydantic import BaseModel
 
 from models.models import (
     AssetType,
+    CompsData,
+    CommercialComp,
     DealData,
     FinancialAssumptions,
     InvestmentStrategy,
@@ -276,6 +278,7 @@ class UnderwriteRequest(BaseModel):
     investor_mode: bool = False
     sections_config: Dict[str, bool] = {}
     uploaded_files: List[UploadedFile] = []
+    comps: Optional[Dict[str, Any]] = None
 
 
 # ── Helper: save base64 file to temp path ────────────────────────────────
@@ -486,6 +489,17 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
     # Sections config
     if req.sections_config:
         deal.sections_config = SectionsConfig(**req.sections_config)
+
+    # Wire comp data from frontend
+    if req.comps:
+        try:
+            from models.models import RentComp, SaleComp
+            rc = [RentComp(**c) for c in req.comps.get("rent_comps", []) if c]
+            cc = [CommercialComp(**c) for c in req.comps.get("commercial_comps", []) if c]
+            sc = [SaleComp(**c) for c in req.comps.get("sale_comps", []) if c]
+            deal.comps = CompsData(rent_comps=rc, commercial_comps=cc, sale_comps=sc)
+        except Exception as exc:
+            logger.warning("Comps wiring failed: %s", exc)
 
     return deal
 

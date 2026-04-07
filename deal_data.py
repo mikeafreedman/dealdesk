@@ -22,6 +22,7 @@ from typing import Any, Dict, List
 
 from models.models import (
     AssetType,
+    CompsData,
     DealData,
     ExtractedDocumentData,
     FinancialAssumptions,
@@ -349,6 +350,38 @@ def _init_provenance(deal: DealData) -> None:
     if not deal.provenance.deal_id:
         deal.provenance.deal_id = deal.deal_id
     deal.provenance.run_timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMPS MERGE
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _merge_comps(deal: DealData) -> None:
+    """
+    Merge comp data from extracted docs into deal.comps.
+
+    Priority: deal.comps (manual frontend entry) > extracted_docs.comps.
+    If the user has manually entered any comps, those win entirely for that
+    comp type. If a comp type is empty on deal.comps but present in
+    extracted_docs.comps, backfill from extraction.
+    """
+    extracted_comps = deal.extracted_docs.comps
+    if not extracted_comps:
+        return  # nothing extracted — leave deal.comps as-is (manual or empty)
+
+    # For each comp type: only backfill if the deal.comps list is empty
+    if not deal.comps.rent_comps and extracted_comps.rent_comps:
+        deal.comps.rent_comps = extracted_comps.rent_comps[:8]
+        logger.info("Backfilled %d rent comps from extracted OM", len(deal.comps.rent_comps))
+
+    if not deal.comps.commercial_comps and extracted_comps.commercial_comps:
+        deal.comps.commercial_comps = extracted_comps.commercial_comps[:5]
+        logger.info("Backfilled %d commercial comps from extracted OM", len(deal.comps.commercial_comps))
+
+    if not deal.comps.sale_comps and extracted_comps.sale_comps:
+        deal.comps.sale_comps = extracted_comps.sale_comps[:5]
+        logger.info("Backfilled %d sale comps from extracted OM", len(deal.comps.sale_comps))
 
 
 # ═══════════════════════════════════════════════════════════════════════════

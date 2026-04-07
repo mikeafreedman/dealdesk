@@ -402,6 +402,63 @@ class FinancialOutputs(BaseModel):
     pro_forma_years:         Optional[List[Dict[str, float]]] = None
 
 
+
+class RentComp(BaseModel):
+    """One residential rent comparable — Section 11.1."""
+    address:       Optional[str]   = None
+    distance_miles: Optional[float] = None
+    unit_type:     Optional[str]   = None   # "Studio" | "1BR" | "2BR" | "3BR" | "4BR+"
+    beds:          Optional[int]   = None
+    baths:         Optional[float] = None
+    sq_ft:         Optional[int]   = None
+    monthly_rent:  Optional[float] = None
+    rent_per_sf:   Optional[float] = None
+    lease_date:    Optional[str]   = None   # ISO YYYY-MM-DD
+    source:        Optional[str]   = None   # free text: "CoStar", "Manual entry", etc.
+
+
+class CommercialComp(BaseModel):
+    """One commercial rent comparable — Section 11.2."""
+    address:           Optional[str]   = None
+    distance_miles:    Optional[float] = None
+    use_type:          Optional[str]   = None   # "Office" | "Retail" | "Medical" | "Industrial"
+    sq_ft:             Optional[int]   = None
+    asking_rent_per_sf: Optional[float] = None
+    lease_type:        Optional[str]   = None   # "NNN" | "Gross" | "MG" | "FSG"
+    lease_date:        Optional[str]   = None
+    tenant_name:       Optional[str]   = None
+    source:            Optional[str]   = None
+
+
+class SaleComp(BaseModel):
+    """One sale comparable — Section 11.3."""
+    address:        Optional[str]   = None
+    distance_miles: Optional[float] = None
+    asset_type:     Optional[str]   = None
+    sq_ft:          Optional[int]   = None
+    num_units:      Optional[int]   = None
+    sale_price:     Optional[float] = None
+    price_per_sf:   Optional[float] = None
+    price_per_unit: Optional[float] = None
+    cap_rate:       Optional[float] = None
+    sale_date:      Optional[str]   = None
+    source:         Optional[str]   = None
+
+
+class CompsData(BaseModel):
+    """Container for all comparable data — max 8 rent, 5 commercial, 5 sale."""
+    rent_comps:       List[RentComp]       = Field(default_factory=list)
+    commercial_comps: List[CommercialComp] = Field(default_factory=list)
+    sale_comps:       List[SaleComp]       = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def enforce_caps(self) -> 'CompsData':
+        self.rent_comps       = self.rent_comps[:8]
+        self.commercial_comps = self.commercial_comps[:5]
+        self.sale_comps       = self.sale_comps[:5]
+        return self
+
+
 class ExtractedDocumentData(BaseModel):
     """Structured data from uploaded documents — populated by extractor.py."""
     # From Prompt 1A — OM
@@ -429,6 +486,8 @@ class ExtractedDocumentData(BaseModel):
     expense_line_items:         Optional[Dict[str, float]] = None
     cam_reimbursements_t12:     Optional[float] = None
     nnn_reconciliation:         Optional[Dict[str, Any]]   = None
+    # Comparable data extracted from uploaded OM/broker package
+    comps:                      Optional[CompsData]        = None
 
 
 class InsuranceAnalysis(BaseModel):
@@ -662,6 +721,9 @@ class DealData(BaseModel):
 
     # Extracted document data
     extracted_docs: ExtractedDocumentData = Field(default_factory=ExtractedDocumentData)
+
+    # Comparable data — merged from extracted docs + manual frontend entry
+    comps: CompsData = Field(default_factory=CompsData)
 
     # Computed financial outputs
     financial_outputs: FinancialOutputs = Field(default_factory=FinancialOutputs)
