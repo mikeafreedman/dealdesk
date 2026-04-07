@@ -4,6 +4,8 @@ Pure constants: API refs, model strings, paths, template routing.
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
 from pathlib import Path
 
 # ── Root paths ────────────────────────────────────────────────
