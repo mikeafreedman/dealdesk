@@ -23,17 +23,21 @@ from pathlib import Path
 from typing import Optional
 
 import anthropic
-import streamlit as st
-from docxtpl import DocxTemplate
+from docxtpl import DocxTemplate, InlineImage
+from docx.shared import Mm
 from docx.oxml.ns import qn
 
 from config import (
-    ANTHROPIC_SECRET_KEY,
+    ANTHROPIC_API_KEY,
     MODEL_SONNET,
     OUTPUTS_DIR,
     PDF_CONVERSION_TIMEOUT,
     WORD_TEMPLATE,
 )
+from map_builder import build_all_maps, MapImages
+from chart_builder import build_all_charts, ChartImages
+from map_builder import build_all_maps, MapImages
+from chart_builder import build_all_charts, ChartImages
 from models.models import DealData
 
 logger = logging.getLogger(__name__)
@@ -179,7 +183,7 @@ _USER_5D = (
 def _call_sonnet(system: str, user_msg: str, max_tokens: int = 8192) -> Optional[dict]:
     """Send a single Sonnet call and parse the JSON response. Returns None on failure."""
     client = anthropic.Anthropic(
-        api_key=st.secrets[ANTHROPIC_SECRET_KEY]["api_key"],
+        api_key=ANTHROPIC_API_KEY,
     )
     try:
         response = client.messages.create(
@@ -361,6 +365,85 @@ def _build_context(deal: DealData) -> dict:
     # Provenance
     ctx["provenance"] = deal.provenance.model_dump()
 
+
+    # ── Comparable market data tables (Section 11) ────────────────────────
+    # Rent comp table rows (Table 24 — 7 cols: Property, Type, Beds, SF, Rent/Mo, $/SF, Distance)
+    rent_rows = []
+    for c in (deal.comps.rent_comps or []):
+        rent_rows.append({
+            "property":     c.address or "",
+            "type":         c.unit_type or "",
+            "beds":         str(c.beds) if c.beds is not None else "",
+            "sf":           f"{c.sq_ft:,}" if c.sq_ft else "",
+            "monthly_rent": f"${c.monthly_rent:,.0f}" if c.monthly_rent else "",
+            "rent_per_sf":  f"${c.rent_per_sf:.2f}" if c.rent_per_sf else "",
+            "distance":     f"{c.distance_miles:.1f} mi" if c.distance_miles else "",
+        })
+    ctx["rent_comp_rows"] = rent_rows
+
+    # Commercial comp table rows (Table 25 — 5 cols: Address, Use, SF, Rent/SF, Type)
+    comm_rows = []
+    for c in (deal.comps.commercial_comps or []):
+        comm_rows.append({
+            "address":      c.address or "",
+            "use_type":     c.use_type or "",
+            "sf":           f"{c.sq_ft:,}" if c.sq_ft else "",
+            "rent_per_sf":  f"${c.asking_rent_per_sf:.2f}/SF" if c.asking_rent_per_sf else "",
+            "lease_type":   c.lease_type or "",
+        })
+    ctx["commercial_comp_rows"] = comm_rows
+
+    # Sale comp table rows (Table 26 — 6 cols: Address, SF, Units, Price, $/SF, Cap Rate)
+    sale_rows = []
+    for c in (deal.comps.sale_comps or []):
+        sale_rows.append({
+            "address":       c.address or "",
+            "sf":            f"{c.sq_ft:,}" if c.sq_ft else "",
+            "units":         str(c.num_units) if c.num_units else "",
+            "sale_price":    f"${c.sale_price:,.0f}" if c.sale_price else "",
+            "price_per_sf":  f"${c.price_per_sf:.0f}" if c.price_per_sf else "",
+            "cap_rate":      f"{c.cap_rate:.2%}" if c.cap_rate else "",
+        })
+    ctx["sale_comp_rows"] = sale_rows
+
+
+    # Comparable market data table rows (Section 11)
+    rent_rows = []
+    for c in (deal.comps.rent_comps or []):
+        rent_rows.append({
+            "property":     c.address or "",
+            "type":         c.unit_type or "",
+            "beds":         str(c.beds) if c.beds is not None else "",
+            "sf":           f"{c.sq_ft:,}" if c.sq_ft else "",
+            "monthly_rent": f"${c.monthly_rent:,.0f}" if c.monthly_rent else "",
+            "rent_per_sf":  f"${c.rent_per_sf:.2f}" if c.rent_per_sf else "",
+            "distance":     f"{c.distance_miles:.1f} mi" if c.distance_miles else "",
+        })
+    ctx["rent_comp_rows"] = rent_rows
+
+    comm_rows = []
+    for c in (deal.comps.commercial_comps or []):
+        comm_rows.append({
+            "address":     c.address or "",
+            "use_type":    c.use_type or "",
+            "sf":          f"{c.sq_ft:,}" if c.sq_ft else "",
+            "rent_per_sf": f"${c.asking_rent_per_sf:.2f}/SF" if c.asking_rent_per_sf else "",
+            "lease_type":  c.lease_type or "",
+        })
+    ctx["commercial_comp_rows"] = comm_rows
+
+    sale_rows = []
+    for c in (deal.comps.sale_comps or []):
+        sale_rows.append({
+            "address":      c.address or "",
+            "sf":           f"{c.sq_ft:,}" if c.sq_ft else "",
+            "units":        str(c.num_units) if c.num_units else "",
+            "sale_price":   f"${c.sale_price:,.0f}" if c.sale_price else "",
+            "price_per_sf": f"${c.price_per_sf:.0f}" if c.price_per_sf else "",
+            "cap_rate":     f"{c.cap_rate:.2%}" if c.cap_rate else "",
+        })
+    ctx["sale_comp_rows"] = sale_rows
+
     # Section suppression flags
     ctx["suppressed_sections"] = suppressed
     for sid in ["s01", "s02", "s03", "s04", "s05", "s06", "s07", "s08", "s09",
@@ -506,11 +589,143 @@ def _strip_highlight(doc):
                             rPr.remove(highlight)
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# IMAGE CONTEXT BUILDER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _build_image_context(deal: DealData, tpl: DocxTemplate) -> dict:
+    """
+    Generate all map and chart images and return them as InlineImage objects
+    ready for docxtpl template substitution.
+
+    Each image slot gets either a real InlineImage or None.
+    Template placeholders that receive None remain as grey placeholder boxes.
+    """
+    ctx = {}
+
+    # ── Maps ──────────────────────────────────────────────────────────────
+    try:
+        maps = build_all_maps(deal)
+    except Exception as exc:
+        logger.error("map_builder failed: %s", exc)
+        maps = MapImages()
+
+    def _inline(png_bytes, w_mm=160, h_mm=100):
+        """Wrap PNG bytes as a docxtpl InlineImage."""
+        if not png_bytes:
+            return None
+        import tempfile, os
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.write(png_bytes)
+        tmp.close()
+        try:
+            return InlineImage(tpl, tmp.name, width=Mm(w_mm), height=Mm(h_mm))
+        except Exception as exc:
+            logger.warning("InlineImage creation failed: %s", exc)
+            return None
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+
+    ctx["img_aerial_map"]       = _inline(maps.aerial)
+    ctx["img_neighborhood_map"] = _inline(maps.neighborhood)
+    ctx["img_fema_map"]         = _inline(maps.fema)
+
+    # ── Charts ────────────────────────────────────────────────────────────
+    try:
+        charts = build_all_charts(deal)
+    except Exception as exc:
+        logger.error("chart_builder failed: %s", exc)
+        charts = ChartImages()
+
+    ctx["img_demographic_chart"]   = _inline(charts.demographic,   w_mm=160, h_mm=90)
+    ctx["img_proforma_chart"]      = _inline(charts.proforma,      w_mm=160, h_mm=90)
+    ctx["img_irr_heatmap"]         = _inline(charts.irr_heatmap,   w_mm=160, h_mm=90)
+    ctx["img_capital_stack"]       = _inline(charts.capital_stack, w_mm=80,  h_mm=100)
+    ctx["img_financing_chart"]     = _inline(charts.financing,     w_mm=160, h_mm=80)
+    ctx["img_risk_matrix"]         = _inline(charts.risk_matrix,   w_mm=160, h_mm=90)
+    ctx["img_gantt_chart"]         = _inline(charts.gantt,         w_mm=160, h_mm=80)
+
+    available = sum(1 for v in ctx.values() if v is not None)
+    logger.info("Image context built — %d/%d images available", available, len(ctx))
+    return ctx
+
+
+
+# ===================================================================
+# IMAGE CONTEXT BUILDER
+# ===================================================================
+
+def _build_image_context(deal: DealData, tpl: DocxTemplate) -> dict:
+    """
+    Generate all map and chart images and return them as InlineImage
+    objects ready for docxtpl template substitution.
+    Each image slot gets either a real InlineImage or None.
+    """
+    import tempfile, os
+    ctx = {}
+
+    def _inline(png_bytes, w_mm=160, h_mm=100):
+        if not png_bytes:
+            return None
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.write(png_bytes)
+        tmp.close()
+        try:
+            return InlineImage(tpl, tmp.name, width=Mm(w_mm), height=Mm(h_mm))
+        except Exception as exc:
+            logger.warning("InlineImage creation failed: %s", exc)
+            return None
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+
+    # Maps
+    try:
+        maps = build_all_maps(deal)
+    except Exception as exc:
+        logger.error("map_builder failed: %s", exc)
+        maps = MapImages()
+
+    ctx["img_aerial_map"]       = _inline(maps.aerial)
+    ctx["img_neighborhood_map"] = _inline(maps.neighborhood)
+    ctx["img_fema_map"]         = _inline(maps.fema)
+
+    # Charts
+    try:
+        charts = build_all_charts(deal)
+    except Exception as exc:
+        logger.error("chart_builder failed: %s", exc)
+        charts = ChartImages()
+
+    ctx["img_demographic_chart"] = _inline(charts.demographic,   w_mm=160, h_mm=90)
+    ctx["img_proforma_chart"]    = _inline(charts.proforma,      w_mm=160, h_mm=90)
+    ctx["img_irr_heatmap"]       = _inline(charts.irr_heatmap,   w_mm=160, h_mm=90)
+    ctx["img_capital_stack"]     = _inline(charts.capital_stack, w_mm=80,  h_mm=100)
+    ctx["img_financing_chart"]   = _inline(charts.financing,     w_mm=160, h_mm=80)
+    ctx["img_risk_matrix"]       = _inline(charts.risk_matrix,   w_mm=160, h_mm=90)
+    ctx["img_gantt_chart"]       = _inline(charts.gantt,         w_mm=160, h_mm=80)
+
+    available = sum(1 for v in ctx.values() if v is not None)
+    logger.info("Image context: %d/%d images available", available, len(ctx))
+    return ctx
+
+
 def _populate_docx(deal: DealData) -> Path:
     """Populate DealDesk_Report_Template_v4.docx with template context. Returns docx path."""
     ctx = _build_context(deal)
 
     tpl = DocxTemplate(str(WORD_TEMPLATE))
+
+    # Generate and merge image context
+    img_ctx = _build_image_context(deal, tpl)
+    ctx.update(img_ctx)
+
     tpl.render(ctx)
     _strip_highlight(tpl.docx)
 

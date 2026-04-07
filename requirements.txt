@@ -70,3 +70,5 @@ urllib3==2.6.3
 uvicorn==0.34.2
 watchdog==6.0.0
 xlsxwriter==3.2.9
+python-dotenv>=1.0.0
+matplotlib>=3.8.0
