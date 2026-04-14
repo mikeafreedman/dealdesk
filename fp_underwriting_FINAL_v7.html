@@ -300,17 +300,42 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
           transition: background 0.15s;
         }
         .btn-add-comp:hover { background: #e8dfc8; }
-        .comp-entry .fi { font-size: 12px; }
 
         /* Rent Roll table */
-        .rr-table{width:100%;border-collapse:collapse;font-size:12px}
+        .rr-table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:12px}
         .rr-table th{background:var(--walnut);color:#fff;font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:7px 8px;text-align:left;white-space:nowrap}
-        .rr-table td{padding:4px 4px;border-bottom:1px solid var(--rule)}
+        .rr-table td{padding:5px 4px;vertical-align:middle;border-bottom:1px solid var(--rule)}
         .rr-table .fi{font-size:12px;padding:5px 7px;width:100%;box-sizing:border-box}
         .rr-table select.fi{appearance:auto;padding-right:6px}
         .rr-row-num{font-size:11px;color:var(--muted);font-weight:600;text-align:center;min-width:24px}
         .btn-remove-rr{background:none;border:none;color:var(--ghost);cursor:pointer;font-size:14px;padding:2px 6px;border-radius:3px}
         .btn-remove-rr:hover{background:#f5e6e6;color:var(--red)}
+
+        .rr-grid-header {
+          display: grid;
+          gap: 6px;
+          align-items: center;
+          padding: 0 0 4px 0;
+          border-bottom: 2px solid var(--walnut);
+          margin-bottom: 4px;
+        }
+        .rr-grid-header span {
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: .05em;
+          text-transform: uppercase;
+          color: var(--walnut);
+          font-family: var(--font-ui);
+        }
+        .rr-grid-row {
+          display: grid;
+          gap: 6px;
+          align-items: center;
+          padding: 6px 0;
+          border-bottom: 1px solid var(--rule);
+        }
+        .rr-res-grid  { grid-template-columns: 110px 70px 130px 140px 1fr 90px; }
+        .rr-comm-grid { grid-template-columns: 120px 70px 110px 130px 140px 90px 100px 90px; }
 
       </style>
 </head>
@@ -326,17 +351,9 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
     <div class="sb-item active" onclick="showScreen('new')">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>New Underwrite
     </div>
-    <div class="sb-item" onclick="showScreen('results')">
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>Deal Dashboard
-    </div>
-    <div class="sb-item" onclick="showScreen('downloads')">
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Downloads
-    </div>
-    <div class="sb-section-label">History</div>
     <div class="sb-item" onclick="showScreen('archive')">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>Deal Archive
     </div>
-    <div class="sb-section-label">Settings</div>
     <div class="sb-item" onclick="showScreen('assumptions')">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Assumptions
     </div>
@@ -452,44 +469,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       <div class="step-label" style="margin-top:8px">Step 02 — Supporting Documents</div>
       <div class="card">
         <div class="card-head" onclick="toggleCard(this)">
-          <div class="card-head-left"><div><div class="card-title">
-        <!-- ── Section 11 — Comparable Market Data ─────────────────────── -->
-        <div class="card" id="card-comps">
-          <div class="card-head" onclick="toggleCard(this)">
-            <div class="card-head-left"><div><div class="card-title">Comparable Market Data</div><div class="card-sub">Rent, commercial &amp; sale comps — extracted from uploaded OM or entered manually</div></div></div>
-            <div class="card-toggle open">&#9660;</div>
-          </div>
-          <div class="card-body">
-
-            <!-- Note banner -->
-            <div style="background:#f0ebe0;border-left:3px solid #8B6914;padding:10px 14px;margin-bottom:18px;font-size:12px;color:#5C3D26;border-radius:0 4px 4px 0;">
-              If you upload an Offering Memorandum, comps will be extracted automatically and pre-filled below. Manual entries override extracted values.
-            </div>
-
-            <!-- ── 11.1 Residential Rent Comps ── -->
-            <div class="section-label" style="margin-bottom:10px;">11.1 — Residential Rent Comparables <span style="font-weight:400;color:#888;">(max 8)</span></div>
-            <div id="rent-comps-container"></div>
-            <button type="button" class="btn-add-comp" onclick="addComp('rent')" id="btn-add-rent">+ Add Rent Comp</button>
-
-            <div style="margin-top:22px;margin-bottom:10px;border-top:1px solid #ddd;padding-top:16px;">
-              <!-- ── 11.2 Commercial Rent Comps ── -->
-              <div class="section-label" style="margin-bottom:10px;">11.2 — Commercial Rent Comparables <span style="font-weight:400;color:#888;">(max 5)</span></div>
-              <div id="commercial-comps-container"></div>
-              <button type="button" class="btn-add-comp" onclick="addComp('commercial')" id="btn-add-commercial">+ Add Commercial Comp</button>
-            </div>
-
-            <div style="margin-top:22px;margin-bottom:10px;border-top:1px solid #ddd;padding-top:16px;">
-              <!-- ── 11.3 Sale Comps ── -->
-              <div class="section-label" style="margin-bottom:10px;">11.3 — Sale Comparables <span style="font-weight:400;color:#888;">(max 5)</span></div>
-              <div id="sale-comps-container"></div>
-              <button type="button" class="btn-add-comp" onclick="addComp('sale')" id="btn-add-sale">+ Add Sale Comp</button>
-            </div>
-
-          </div>
-        </div>
-        <!-- ── /Section 11 — Comparable Market Data ─────────────────────── -->
-
-        Document Upload</div><div class="card-sub">Claude AI extraction active — PDF, XLSX, DOCX, JPG, PNG accepted</div></div></div>
+          <div class="card-head-left"><div><div class="card-title">Document Upload</div><div class="card-sub">Claude AI extraction active — PDF, XLSX, DOCX, JPG, PNG accepted</div></div></div>
           <div class="card-toggle open">&#9660;</div>
         </div>
         <div class="card-body open">
@@ -504,141 +484,12 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
           <input type="file" id="file-input" multiple accept=".pdf,.xlsx,.docx,.csv,.jpg,.jpeg,.png" style="display:none" onchange="handleFiles(event)">
         </div>
       </div>
-      <!-- Report Sections Toggle -->
-      <div class="step-label" style="margin-top:8px">Step 03 — Report Sections</div>
-      <div class="card">
-        <div class="card-head" onclick="toggleCard(this)">
-          <div class="card-head-left"><div><div class="card-title">Report Section Selection</div><div class="card-sub">Toggle which of the 22 sections to include in the generated PDF report for this deal</div></div></div>
-          <div class="card-toggle open">&#9660;</div>
-        </div>
-        <div class="card-body open">
-          <div style="font-size:11.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">All 22 sections are included by default. Toggle individual sections off to exclude them from this report only. Default section settings are managed in <span onclick="showScreen('assumptions')" style="color:var(--sage);cursor:pointer;font-weight:500">Assumptions &#8594;</span></div>
-          <div style="display:flex;gap:8px;margin-bottom:14px">
-            <button class="btn btn-secondary" style="padding:6px 14px;font-size:11px" onclick="toggleAllSections(true)">Select All</button>
-            <button class="btn btn-secondary" style="padding:6px 14px;font-size:11px" onclick="toggleAllSections(false)">Clear All</button>
-          </div>
-          <div id="deal-section-toggles"></div>
-        </div>
-      </div>
       <div style="height:20px"></div>
     </div>
     <!-- /screen-new -->
 
-    <!-- SCREEN 2 — DEAL DASHBOARD -->
-    <div class="screen" id="screen-results">
-      <div class="step-label">Deal Dashboard — 5140 Germantown Ave, Philadelphia PA</div>
-      <div class="metrics-grid">
-        <div class="metric-card"><div class="mc-label">LP IRR</div><div class="mc-value pass">17.8%</div><div class="mc-footer">Target 15% <span class="tag pass">&#10003; Pass</span></div></div>
-        <div class="metric-card"><div class="mc-label">Equity Multiple</div><div class="mc-value">2.45&times;</div><div class="mc-footer">7-year hold period</div></div>
-        <div class="metric-card"><div class="mc-label">Cash-on-Cash Yr 1</div><div class="mc-value pass">8.9%</div><div class="mc-footer">Target 7% <span class="tag pass">&#10003; Pass</span></div></div>
-        <div class="metric-card"><div class="mc-label">DSCR Yr 1</div><div class="mc-value watch">1.38&times;</div><div class="mc-footer">Min 1.25&times; <span class="tag watch">&#8679; Watch</span></div></div>
-        <div class="metric-card"><div class="mc-label">Going-In Cap Rate</div><div class="mc-value">5.8%</div><div class="mc-footer">Market avg 6.2%</div></div>
-        <div class="metric-card"><div class="mc-label">Stabilized Cap Rate</div><div class="mc-value pass">6.4%</div><div class="mc-footer">Post value-add <span class="tag pass">&#10003; Pass</span></div></div>
-        <div class="metric-card"><div class="mc-label">Break-Even Occupancy</div><div class="mc-value">74%</div><div class="mc-footer">17 pts above min</div></div>
-        <div class="metric-card"><div class="mc-label">Price Per Unit</div><div class="mc-value">$83K</div><div class="mc-footer">36 units at ask</div></div>
-        <div class="metric-card"><div class="mc-label">Gross Rent Multiplier</div><div class="mc-value">9.2&times;</div><div class="mc-footer">Stabilized GRM</div></div>
-        <div class="metric-card"><div class="mc-label">Unlevered IRR</div><div class="mc-value">11.4%</div><div class="mc-footer">Before debt service</div></div>
-        <div class="metric-card"><div class="mc-label">Net Equity at Exit</div><div class="mc-value">$2.1M</div><div class="mc-footer">After loan payoff &amp; fees</div></div>
-        <div class="metric-card"><div class="mc-label">DD Flags</div><div class="mc-value watch">3/5/5</div><div class="mc-footer"><span class="tag fail">3 Red</span> <span class="tag watch">5 Amber</span> <span class="tag pass">5 Green</span></div></div>
-      </div>
-      <div class="card">
-        <div class="card-head"><div class="card-head-left"><div><div class="card-title">Investment Recommendation</div></div></div></div>
-        <div class="card-body open">
-          <div style="display:flex;gap:14px;align-items:flex-start">
-            <div style="background:var(--green-lt);border:1px solid var(--sage-mid);border-radius:6px;padding:14px 18px;flex-shrink:0;text-align:center">
-              <div style="font-size:10px;font-weight:700;color:var(--sage-dk);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">Recommendation</div>
-              <div style="font-family:var(--font-display);font-size:28px;font-weight:600;color:var(--green)">PROCEED</div>
-              <div style="font-size:11px;color:var(--muted);margin-top:4px">Scenario B — Mixed-Use</div>
-            </div>
-            <div style="font-size:13px;color:var(--body);line-height:1.7">
-              5140 Germantown Ave presents a compelling value-add redevelopment opportunity. The mixed-use Scenario B (36 residential units + 6,000 SF retail) generates a projected LP IRR of 17.8%, exceeding the 15% target. Recommended offer range: <strong>$2,700,000 – $2,850,000</strong> against the $3,000,000 ask. Key risks: environmental holdovers (Phase I recommended), permit timeline uncertainty, and retail lease-up in a transitioning corridor.
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- SCREEN 3 — DOWNLOADS -->
-    <div class="screen" id="screen-downloads">
-      <div class="step-label">Downloads — 5140 Germantown Ave</div>
-
-      <!-- OUTPUT MODE TOGGLE -->
-      <div class="card" style="margin-bottom:20px">
-        <div class="card-head" style="cursor:default">
-          <div class="card-head-left">
-            <div>
-              <div class="card-title">Output Mode</div>
-              <div class="card-sub">Select the report register before downloading</div>
-            </div>
-          </div>
-        </div>
-        <div style="padding:16px 18px;display:flex;gap:12px;align-items:stretch">
-          <div id="mode-internal" onclick="setOutputMode('internal')" style="flex:1;padding:14px 16px;border:2px solid var(--sage-deep);border-radius:6px;cursor:pointer;background:rgba(74,110,80,.07)">
-            <div style="font-size:12.5px;font-weight:600;color:var(--near-black);margin-bottom:4px">Internal Report</div>
-            <div style="font-size:11px;color:var(--muted);line-height:1.4">Full analyst report — includes DD flags, methodology notes, bear-case language, and all 22 sections. For internal investment committee use.</div>
-            <div style="margin-top:8px;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-deep)">● Selected</div>
-          </div>
-          <div id="mode-investor" onclick="setOutputMode('investor')" style="flex:1;padding:14px 16px;border:2px solid var(--rule);border-radius:6px;cursor:pointer">
-            <div style="font-size:12.5px;font-weight:600;color:var(--near-black);margin-bottom:4px">Investor Summary</div>
-            <div style="font-size:11px;color:var(--muted);line-height:1.4">LP-appropriate version — confident, deal-positive register. §16 DD Flags &amp; Risk Assessment and §22 Appendix methodology notes suppressed. §17 DD Checklist suppressed. Cover reads "Investment Summary."</div>
-            <div style="margin-top:8px;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">○ Not Selected</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- PRIMARY DOWNLOADS -->
-      <div style="font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Primary Outputs</div>
-      <div class="dl-grid">
-        <div class="dl-card">
-          <div class="dl-card-type-badge dl-badge-pdf">PDF</div>
-          <div class="dl-card-title">Underwriting Report</div>
-          <div class="dl-card-desc">22-section institutional report — Executive Summary, Photo Gallery, Maps, Property Description, Location &amp; Market, Rent Roll, Comparables, Ownership, Environmental, Zoning, Financial Analysis, Capital Structure, Supply Pipeline, Neighborhood Trends, Legal &amp; Title, Timeline, DD Flags, DD Checklist, Investment Recommendation, Conclusions, Disclaimer &amp; Appendix</div>
-          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">PDF &nbsp;·&nbsp; 22 sections &nbsp;·&nbsp; ~3.1 MB</div>
-          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Download PDF</button>
-        </div>
-        <div class="dl-card">
-          <div class="dl-card-type-badge dl-badge-xlsx">XLSX</div>
-          <div class="dl-card-title">Financial Model</div>
-          <div class="dl-card-desc">Full pro forma workbook — Cover, Assumptions, Sources &amp; Uses, Existing Rent Roll, Tenant Schedule, Pro Forma, Refi Analysis (×3), Amortization Schedules, Exit, Cash Waterfall, Sensitivity, Returns Summary</div>
-          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">XLSX &nbsp;·&nbsp; 15 tabs &nbsp;·&nbsp; ~2.4 MB</div>
-          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Download XLSX</button>
-        </div>
-      </div>
-
-      <!-- OPTIONAL OUTPUTS -->
-      <div style="font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-top:22px;margin-bottom:10px">Optional Outputs</div>
-      <div class="dl-grid">
-        <div class="dl-card">
-          <div class="dl-card-type-badge" style="background:var(--sage-deep);color:#fff">HTML</div>
-          <div class="dl-card-title">Interactive Report</div>
-          <div class="dl-card-desc">Self-contained interactive HTML file — collapsible sections, live sensitivity heatmap, Chart.js NOI &amp; cash-on-cash charts, and embedded Leaflet property map. Shareable as a single file.</div>
-          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">HTML &nbsp;·&nbsp; Single file &nbsp;·&nbsp; ~1.2 MB</div>
-          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Generate &amp; Download</button>
-        </div>
-        <div class="dl-card">
-          <div class="dl-card-type-badge" style="background:var(--earth-mid);color:#fff">PPTX</div>
-          <div class="dl-card-title">LP Pitch Deck</div>
-          <div class="dl-card-desc">10-slide PowerPoint deck — Cover, Executive Summary, The Opportunity, Property &amp; Location, Unit Mix, Strategy Slide, Financial Projections, Capital Structure, Risk &amp; Mitigation, Next Steps. DealDesk branded.</div>
-          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">PPTX &nbsp;·&nbsp; 10 slides &nbsp;·&nbsp; ~800 KB</div>
-          <div style="margin-bottom:8px">
-            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Lender / Broker Name <span style="color:var(--muted);font-style:italic">(optional — for Lender Package only)</span></label>
-            <input class="fi" type="text" id="dl_lender_name" placeholder="e.g. Meridian Capital Group" style="font-size:12px;padding:6px 10px">
-          </div>
-          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Generate &amp; Download</button>
-        </div>
-        <div class="dl-card">
-          <div class="dl-card-type-badge" style="background:var(--earth);color:#fff">PDF</div>
-          <div class="dl-card-title">Lender Package</div>
-          <div class="dl-card-desc">Complete lender submission package — formal cover letter, one-page executive summary, full underwriting report, rent roll summary, and 10-year pro forma. Assembled as a single organized PDF.</div>
-          <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">PDF &nbsp;·&nbsp; Multi-section package &nbsp;·&nbsp; ~5.2 MB</div>
-          <div style="margin-bottom:8px">
-            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Lender / Broker Name <span style="color:var(--muted);font-style:italic">(optional)</span></label>
-            <input class="fi" type="text" id="dl_lender_name_pkg" placeholder="e.g. Meridian Capital Group — leave blank for generic" style="font-size:12px;padding:6px 10px">
-          </div>
-          <button class="dl-btn"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Generate &amp; Download</button>
-        </div>
-      </div>
-    </div>
+    <!-- SCREEN 2 — PIPELINE RESULTS (populated by submitRun) -->
+    <div class="screen" id="screen-results"></div>
 
     <!-- SCREEN 4 — DEAL ARCHIVE -->
     <div class="screen" id="screen-archive">
@@ -699,9 +550,97 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       </div>
 
       <!-- ═══════════════════════════════════════════════════════════
+           RENT ROLL ASSUMPTIONS (NEW — replaces old hidden manual entry)
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label">2 &mdash; Rent Roll Assumptions</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Rent Roll Assumptions</div><div class="assum-card-sub">Residential and commercial rent roll — drives Gross Potential Rent (GPR)</div></div>
+        <div class="assum-card-body">
+
+          <!-- Sub-card 2A: Residential -->
+          <div class="assum-row-label" style="margin-bottom:8px;font-weight:600">Residential Rent Roll</div>
+          <div style="overflow-x:auto;margin-bottom:14px">
+<div id="res-rr-table">
+  <div class="rr-grid-header rr-res-grid">
+    <span>Unit Type</span>
+    <span># Units</span>
+    <span>Current Rent/Mo ($)</span>
+    <span>Pro Forma Rent/Mo ($)</span>
+    <span>Notes</span>
+    <span></span>
+  </div>
+  <div id="res-rr-tbody">
+    <div class="res-rr-row rr-grid-row rr-res-grid">
+      <select class="fi" name="res_row_1_type" oninput="updateGPRTotals()">
+        <option value="Studio">Studio</option>
+        <option value="1 Bed">1 Bed</option>
+        <option value="2 Bed">2 Bed</option>
+        <option value="3 Bed">3 Bed</option>
+        <option value="4 Bed">4 Bed</option>
+      </select>
+      <input class="fi" type="number" name="res_row_1_units" value="" placeholder="0" oninput="updateGPRTotals()">
+      <input class="fi" type="number" name="res_row_1_current_rent" value="" placeholder="0" oninput="updateGPRTotals()">
+      <input class="fi" type="number" name="res_row_1_proforma_rent" value="" placeholder="0" oninput="updateGPRTotals()">
+      <input class="fi" type="text" name="res_row_1_notes" value="" placeholder="Optional">
+      <button type="button" class="btn-add-comp" style="border-color:var(--red);color:var(--red)" onclick="removeResRow(this)">&#x2715; Remove</button>
+    </div>
+  </div>
+</div>
+          </div>
+          <div style="margin-bottom:18px">
+            <button type="button" class="btn-add-comp" onclick="addResRow()">+ Add Unit Type</button>
+          </div>
+
+          <!-- Sub-card 2B: Commercial -->
+          <div class="assum-row-label" style="margin-bottom:8px;font-weight:600">Commercial Rent Roll</div>
+          <div style="overflow-x:auto;margin-bottom:14px">
+<div id="comm-rr-table">
+  <div class="rr-grid-header rr-comm-grid">
+    <span>Tenant / Suite</span>
+    <span>SF</span>
+    <span>Lease Type</span>
+    <span>Current Rent/SF/yr ($)</span>
+    <span>Pro Forma Rent/SF/yr ($)</span>
+    <span>CAM/SF/yr ($)</span>
+    <span>Notes</span>
+    <span></span>
+  </div>
+  <div id="comm-rr-tbody">
+    <div class="comm-rr-row rr-grid-row rr-comm-grid">
+      <input class="fi" type="text" name="comm_row_1_tenant" value="" placeholder="e.g. Suite 101">
+      <input class="fi" type="number" name="comm_row_1_sf" value="" placeholder="0" oninput="updateGPRTotals()">
+      <select class="fi" name="comm_row_1_lease_type">
+        <option value="NNN">NNN</option>
+        <option value="NN">NN</option>
+        <option value="Gross">Gross</option>
+        <option value="Modified Gross">Modified Gross</option>
+      </select>
+      <input class="fi" type="number" name="comm_row_1_current_rent_psf" value="" placeholder="0.00" oninput="updateGPRTotals()">
+      <input class="fi" type="number" name="comm_row_1_proforma_rent_psf" value="" placeholder="0.00" oninput="updateGPRTotals()">
+      <input class="fi" type="number" name="comm_row_1_cam_psf" value="0" placeholder="0.00">
+      <input class="fi" type="text" name="comm_row_1_notes" value="" placeholder="Optional">
+      <button type="button" class="btn-add-comp" style="border-color:var(--red);color:var(--red)" onclick="removeCommRow(this)">&#x2715; Remove</button>
+    </div>
+  </div>
+</div>
+          </div>
+          <div style="margin-bottom:18px">
+            <button type="button" class="btn-add-comp" onclick="addCommRow()">+ Add Tenant</button>
+          </div>
+
+          <!-- GPR Totals -->
+          <div style="padding:12px 14px;background:var(--parch-dk);border:1px solid var(--rule);border-radius:4px;display:flex;gap:24px;flex-wrap:wrap;font-size:12.5px">
+            <div>Residential GPR/yr: <strong id="total_res_gpr_display">$0</strong></div>
+            <div>Commercial GPR/yr: <strong id="total_comm_gpr_display">$0</strong></div>
+            <div>Total GPR/yr: <strong id="total_gpr_display">$0</strong></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════════
            UNDERWRITING ASSUMPTIONS
            ═══════════════════════════════════════════════════════════ -->
-      <div class="assum-section-label">2 &mdash; Underwriting Assumptions</div>
+      <div class="assum-section-label">3 &mdash; Underwriting Assumptions</div>
       <div class="assum-card">
         <div class="assum-card-head"><div class="assum-card-title">Income, Growth &amp; Vacancy</div><div class="assum-card-sub">Core underwriting parameters for revenue and expense projections</div></div>
         <div class="assum-card-body">
@@ -725,16 +664,84 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
             <div><div class="assum-row-label">Exit Cap Rate</div><div class="assum-row-desc">Capitalization rate applied to Year N+1 NOI to calculate terminal sale value. Typically 25–50 bps above entry cap.</div></div>
             <div class="field"><label>Exit Cap (%)</label><input class="fi" type="text" id="a_exit_cap_rate" value="7.00" oninput="markChanged()"><span class="field-note">Excel default: 7.0%</span></div>
           </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Monthly Rent (In-Place)</div><div class="assum-row-desc">Total monthly rent if property is stabilized or leased. Leave 0 if vacant &mdash; system will use market data.</div></div>
+            <div class="field"><label>Monthly Rent ($)</label><input class="fi" type="number" id="monthly_rent" placeholder="e.g. 9625" oninput="markChanged()"><span class="field-note">0 = use extracted rent roll / market</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">CAM Reimbursements &mdash; Year 1</div><div class="assum-row-desc">Tenant reimbursements for Common Area Maintenance. Added to Effective Gross Income.</div></div>
+            <div class="field"><label>CAM Reimbursements ($)</label><input class="fi" type="number" id="a_cam_reimbursements_v" value="0" oninput="document.getElementById('a_cam_reimbursements').value=this.value;markChanged()"><span class="field-note">NNN recoveries — Year 1</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Fee Income &mdash; Year 1</div><div class="assum-row-desc">Miscellaneous fee income (laundry, parking, pet, application, late fees, etc.).</div></div>
+            <div class="field"><label>Fee Income ($)</label><input class="fi" type="number" id="a_fee_income_v" value="0" oninput="document.getElementById('a_fee_income').value=this.value;markChanged()"><span class="field-note">Ancillary income — Year 1</span></div>
+          </div>
         </div>
       </div>
 
       <!-- ═══════════════════════════════════════════════════════════
-           CONSTRUCTION & RENOVATION
+           SOFT COSTS (MERGED — DD + Soft Costs)
            ═══════════════════════════════════════════════════════════ -->
-      <div class="assum-section-label">3 &mdash; Construction &amp; Renovation</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Construction &amp; Renovation Costs</div><div class="assum-card-sub">Hard costs recorded in Sources &amp; Uses and below-the-line renovation CapEx</div></div>
+      <div class="assum-section-label">4 &mdash; Soft Costs</div>
+      <details class="assum-card" style="padding:0" open>
+        <summary style="cursor:pointer;padding:14px 18px;font-weight:600;color:var(--earth-dark)">Soft Costs</summary>
         <div class="assum-card-body">
+          <div class="assum-row-label" style="margin-bottom:10px;font-weight:600">Professional &amp; Due Diligence</div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Legal &mdash; Closing &amp; Borrowing ($)</label><input class="fi" type="number" id="a_legal_closing" value="25000" oninput="markChanged()"></div>
+            <div class="field"><label>Title Insurance ($)</label><input class="fi" type="number" id="a_title_insurance" value="8000" oninput="markChanged()"></div>
+            <div class="field"><label>Legal &mdash; Bank ($)</label><input class="fi" type="number" id="a_legal_bank" value="5000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Appraisal ($)</label><input class="fi" type="number" id="a_appraisal" value="5000" oninput="markChanged()"></div>
+            <div class="field"><label>Environmental / Phase I ($)</label><input class="fi" type="number" id="a_environmental" value="6000" oninput="markChanged()"></div>
+            <div class="field"><label>Surveyor ($)</label><input class="fi" type="number" id="a_surveyor" value="3500" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Architect ($)</label><input class="fi" type="number" id="a_architect" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Structural Engineer ($)</label><input class="fi" type="number" id="a_structural" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Civil Engineer ($)</label><input class="fi" type="number" id="a_civil_eng" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3">
+            <div class="field"><label>MEPs ($)</label><input class="fi" type="number" id="a_meps" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Legal &mdash; Zoning ($)</label><input class="fi" type="number" id="a_legal_zoning" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>GeoTech ($)</label><input class="fi" type="number" id="a_geotech" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-top:8px;margin-bottom:18px">
+            <div class="field"><label>Tenant Buyout ($)</label><input class="fi" type="number" id="a_tenant_buyout" value="0" oninput="markChanged()"></div>
+          </div>
+
+          <div class="assum-row-label" style="margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Project Soft Costs</div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Acquisition Fee ($)</label><input class="fi" type="number" id="a_acq_fee_fixed" value="25000" oninput="markChanged()"></div>
+            <div class="field"><label>Working Capital ($)</label><input class="fi" type="number" id="a_working_capital" value="15000" oninput="markChanged()"></div>
+            <div class="field"><label>Marketing ($)</label><input class="fi" type="number" id="a_marketing" value="5000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Real Estate Tax Carry ($)</label><input class="fi" type="number" id="a_re_tax_carry" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Property Ins. Carry ($)</label><input class="fi" type="number" id="a_prop_ins_carry" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Development Fee ($)</label><input class="fi" type="number" id="a_dev_fee" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Dev. Equity Pref Return ($)</label><input class="fi" type="number" id="a_dev_pref" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Permits / Expediting ($)</label><input class="fi" type="number" id="a_permits" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Stormwater System ($)</label><input class="fi" type="number" id="a_stormwater" value="0" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3">
+            <div class="field"><label>Demolition &amp; Site Work ($)</label><input class="fi" type="number" id="a_demo" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>GC Profit &amp; Overhead ($)</label><input class="fi" type="number" id="a_gc_overhead" value="0" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </details>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           CONSTRUCTION / RENOVATION & EXPENSES (MERGED)
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label">5 &mdash; Construction / Renovation &amp; Expenses</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Construction / Renovation &amp; Expenses</div><div class="assum-card-sub">Hard costs, renovation CapEx, and operating expenses</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row-label" style="margin-bottom:10px;font-weight:600">Construction &amp; Renovation</div>
           <div class="assum-row">
             <div><div class="assum-row-label">Construction Budget &mdash; Hard Costs (S&amp;U)</div><div class="assum-row-desc">GC contract amount &mdash; recorded in Sources &amp; Uses hard costs.</div></div>
             <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_const_hard" value="0" oninput="markChanged()"><span class="field-note">GC contract amount &mdash; goes into Sources &amp; Uses</span></div>
@@ -755,13 +762,46 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
             <div><div class="assum-row-label">Lease-Up Period (Months)</div><div class="assum-row-desc">Months from CO/delivery to stabilized occupancy. Drives pre-stabilization vacancy.</div></div>
             <div class="field"><label>Lease-Up (Mo)</label><input class="fi" type="text" id="a_leaseup_months" value="0" oninput="markChanged()"><span class="field-note">Value-add: typically 6&ndash;18 mo</span></div>
           </div>
+
+          <div class="assum-row-label" style="margin-top:18px;margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Fixed Expenses &mdash; Year 1</div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Real Estate Taxes ($)</label><input class="fi" type="number" id="a_re_taxes" value="45000" oninput="markChanged()"></div>
+            <div class="field"><label>Insurance ($)</label><input class="fi" type="number" id="a_insurance" value="18000" oninput="markChanged()"></div>
+            <div class="field"><label>Gas ($)</label><input class="fi" type="number" id="a_gas" value="12000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Water &amp; Sewer ($)</label><input class="fi" type="number" id="a_water_sewer" value="14000" oninput="markChanged()"></div>
+            <div class="field"><label>Electric ($)</label><input class="fi" type="number" id="a_electric" value="10000" oninput="markChanged()"></div>
+            <div class="field"><label>License / Inspections ($)</label><input class="fi" type="number" id="a_license" value="2500" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3">
+            <div class="field"><label>Trash Removal ($)</label><input class="fi" type="number" id="a_trash" value="8000" oninput="markChanged()"></div>
+          </div>
+
+          <div class="assum-row-label" style="margin-top:18px;margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Variable Expenses &mdash; Year 1</div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Management Fee (% of EGI)</label><input class="fi" type="number" id="a_mgmt_fee" value="6.00" oninput="markChanged()"><span class="field-note">Enter as percent (6 = 6%)</span></div>
+            <div class="field"><label>Repairs ($)</label><input class="fi" type="number" id="a_repairs" value="8000" oninput="markChanged()"></div>
+            <div class="field"><label>Cleaning / Maintenance ($)</label><input class="fi" type="number" id="a_cleaning" value="6000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Landscape / Snow ($)</label><input class="fi" type="number" id="a_landscape" value="6000" oninput="markChanged()"></div>
+            <div class="field"><label>Admin / Legal / Acct. ($)</label><input class="fi" type="number" id="a_admin" value="5000" oninput="markChanged()"></div>
+            <div class="field"><label>Office / Phone / Supplies ($)</label><input class="fi" type="number" id="a_office" value="3000" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Miscellaneous ($)</label><input class="fi" type="number" id="a_misc_expense" value="2000" oninput="markChanged()"></div>
+            <div class="field"><label>Capital Reserves ($/unit/year)</label><input class="fi" type="number" id="a_cap_reserve" value="400" oninput="markChanged()"></div>
+            <div class="field"><label>Commissions &mdash; Year 1 ($)</label><input class="fi" type="number" id="a_commissions" value="0" oninput="markChanged()"></div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">Renovations &mdash; Year 1 is set in the Construction &amp; Renovation sub-section above.</div>
         </div>
       </div>
 
       <!-- ═══════════════════════════════════════════════════════════
            LEASING COST ASSUMPTIONS
            ═══════════════════════════════════════════════════════════ -->
-      <div class="assum-section-label">3B &mdash; Leasing Cost Assumptions</div>
+      <div class="assum-section-label">6 &mdash; Leasing Cost Assumptions</div>
       <div class="assum-card">
         <div class="assum-card-head"><div class="assum-card-title">Leasing Cost Assumptions</div><div class="assum-card-sub">TI allowances, leasing commissions, and renewal defaults applied to the rent roll</div></div>
         <div class="assum-card-body">
@@ -781,7 +821,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       <!-- ═══════════════════════════════════════════════════════════
            INITIAL FINANCING
            ═══════════════════════════════════════════════════════════ -->
-      <div class="assum-section-label">4 &mdash; Initial Financing</div>
+      <div class="assum-section-label">7 &mdash; Initial Financing</div>
       <div class="assum-card">
         <div class="assum-card-head"><div class="assum-card-title">Permanent Loan Parameters</div><div class="assum-card-sub">Loan sizing, terms, and origination fee for the initial permanent loan</div></div>
         <div class="assum-card-body">
@@ -815,7 +855,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       <!-- ═══════════════════════════════════════════════════════════
            REFINANCE EVENTS
            ═══════════════════════════════════════════════════════════ -->
-      <div class="assum-section-label">5 &mdash; Refinance Event 1</div>
+      <div class="assum-section-label">8 &mdash; Refinance Event 1</div>
       <div class="assum-card">
         <div class="assum-card-head" style="display:flex;align-items:center;justify-content:space-between">
           <div><div class="assum-card-title">Refinance 1</div><div class="assum-card-sub">Cash-out refinance replacing the initial permanent loan</div></div>
@@ -851,7 +891,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         </div>
       </div>
 
-      <div class="assum-section-label">6 &mdash; Refinance Event 2</div>
+      <div class="assum-section-label">9 &mdash; Refinance Event 2</div>
       <div class="assum-card">
         <div class="assum-card-head" style="display:flex;align-items:center;justify-content:space-between">
           <div><div class="assum-card-title">Refinance 2</div><div class="assum-card-sub">Second refinance event &mdash; replaces outstanding loan from Refi 1 or initial loan</div></div>
@@ -887,7 +927,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         </div>
       </div>
 
-      <div class="assum-section-label">7 &mdash; Refinance Event 3</div>
+      <div class="assum-section-label">10 &mdash; Refinance Event 3</div>
       <div class="assum-card">
         <div class="assum-card-head" style="display:flex;align-items:center;justify-content:space-between">
           <div><div class="assum-card-title">Refinance 3</div><div class="assum-card-sub">Third refinance event &mdash; replaces outstanding loan from Refi 2 or prior</div></div>
@@ -926,7 +966,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       <!-- ═══════════════════════════════════════════════════════════
            CAPITAL STRUCTURE & WATERFALL
            ═══════════════════════════════════════════════════════════ -->
-      <div class="assum-section-label">8 &mdash; Capital Structure &amp; Waterfall</div>
+      <div class="assum-section-label">11 &mdash; Capital Structure &amp; Waterfall</div>
       <div class="assum-card">
         <div class="assum-card-head"><div class="assum-card-title">Equity Structure</div><div class="assum-card-sub">GP/LP split, preferred return, and waterfall type</div></div>
         <div class="assum-card-body">
@@ -1019,118 +1059,42 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       </div>
 
       <!-- ═══════════════════════════════════════════════════════════
-           RENT ROLL — MANUAL ENTRY (Change C)
+           SENSITIVITY ANALYSIS RANGES (surfaced from hidden)
            ═══════════════════════════════════════════════════════════ -->
-      <div class="assum-section-label" style="cursor:pointer;display:flex;align-items:center;gap:8px" onclick="toggleRentRollSection()">
-        9 &mdash; Rent Roll &mdash; Manual Entry
-        <span id="rr-section-arrow" style="font-size:12px;transition:transform .2s;transform:rotate(-90deg)">&#9660;</span>
-      </div>
-      <div class="assum-card" id="rr-section-card" style="display:none">
-        <div class="assum-card-head">
-          <div class="assum-card-title">Rent Roll &mdash; Manual Entry</div>
-          <div class="assum-card-sub">Unit-level rent data for in-place income, lease expiration schedule, and occupancy</div>
-        </div>
+      <div class="assum-section-label">12 &mdash; Sensitivity Analysis Ranges</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Sensitivity Analysis Ranges</div><div class="assum-card-sub">Low / high / step values for the rent-growth &times; exit-cap sensitivity grid</div></div>
         <div class="assum-card-body">
-          <div style="font-size:11px;color:var(--earth-mid);margin-bottom:14px;line-height:1.5;background:rgba(74,110,80,0.07);border:1px solid var(--sage-lt);border-radius:4px;padding:8px 12px;">
-            Only required if a rent roll was NOT included in your uploaded documents (offering memorandum, T-12, leases, etc.). If a rent roll was uploaded, leave this section blank &mdash; DealDesk will extract it automatically from your documents.
+          <div class="assum-row-label" style="margin-bottom:10px;font-weight:600">Rent Growth (%)</div>
+          <div class="fg3" style="margin-bottom:14px">
+            <div class="field"><label>Low (%)</label><input class="fi" type="text" id="a_sens_rg_low" value="0.00" oninput="markChanged()"></div>
+            <div class="field"><label>High (%)</label><input class="fi" type="text" id="a_sens_rg_high" value="5.00" oninput="markChanged()"></div>
+            <div class="field"><label>Step (%)</label><input class="fi" type="text" id="a_sens_rg_step" value="1.00" oninput="markChanged()"></div>
           </div>
-          <div id="rr-asset-note" style="font-size:11px;color:var(--muted);margin-bottom:10px;display:none;font-style:italic">
-            Select asset type on the New Underwrite screen to customize this table.
-          </div>
-          <div style="overflow-x:auto">
-            <table class="rr-table" id="rr-table">
-              <thead id="rr-thead">
-                <tr>
-                  <th style="width:28px">#</th>
-                  <th>Unit / Suite</th>
-                  <th>Type</th>
-                  <th>SF</th>
-                  <th class="rr-col-resi">Rent ($/mo)</th>
-                  <th class="rr-col-resi">Market ($/mo)</th>
-                  <th class="rr-col-comm" style="display:none">Rent ($/SF/yr)</th>
-                  <th class="rr-col-comm" style="display:none">Market ($/SF/yr)</th>
-                  <th class="rr-col-comm" style="display:none">Annual Rent ($)</th>
-                  <th>Lease Expiry</th>
-                  <th>Status</th>
-                  <th style="width:55px">Term (Yr)</th>
-                  <th style="width:55px">Exp. Yr</th>
-                  <th style="width:55px">Renew %</th>
-                  <th style="width:55px">Down Mo</th>
-                  <th style="width:30px"></th>
-                </tr>
-              </thead>
-              <tbody id="rr-tbody"></tbody>
-            </table>
-          </div>
-          <div style="margin-top:8px;display:flex;align-items:center;gap:12px">
-            <button type="button" class="btn-add-comp" onclick="addRentRollRow()" id="btn-add-rr">+ Add Row</button>
-            <button type="button" class="btn-add-comp" onclick="clearAllRentRoll()" style="border-color:var(--red);color:var(--red)">Clear All</button>
-            <span style="font-size:11px;color:var(--muted)" id="rr-count">3 of 20 rows</span>
+          <div class="assum-row-label" style="margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Exit Cap Rate (%)</div>
+          <div class="fg3">
+            <div class="field"><label>Low (%)</label><input class="fi" type="text" id="a_sens_cap_low" value="5.50" oninput="markChanged()"></div>
+            <div class="field"><label>High (%)</label><input class="fi" type="text" id="a_sens_cap_high" value="8.50" oninput="markChanged()"></div>
+            <div class="field"><label>Step (%)</label><input class="fi" type="text" id="a_sens_cap_step" value="0.50" oninput="markChanged()"></div>
           </div>
         </div>
       </div>
 
-      <!-- Hidden: removed S&U fields kept for JS payload builder -->
+      <!-- Hidden: retained fields not surfaced (thresholds, legacy duplicates) -->
       <div style="display:none" aria-hidden="true">
         <input type="text" id="a_closing_costs_fixed" value="75000">
-        <input type="text" id="a_tenant_buyout" value="0">
-        <input type="text" id="a_legal_closing" value="25000">
-        <input type="text" id="a_title_insurance" value="8000">
-        <input type="text" id="a_legal_bank" value="5000">
-        <input type="text" id="a_appraisal" value="5000">
-        <input type="text" id="a_environmental" value="6000">
-        <input type="text" id="a_surveyor" value="3500">
-        <input type="text" id="a_architect" value="0">
-        <input type="text" id="a_structural" value="0">
-        <input type="text" id="a_civil_eng" value="0">
-        <input type="text" id="a_meps" value="0">
-        <input type="text" id="a_legal_zoning" value="0">
-        <input type="text" id="a_geotech" value="0">
-        <input type="text" id="a_acq_fee_fixed" value="25000">
+        <input type="text" id="a_cam_reimbursements" value="0">
+        <input type="text" id="a_fee_income" value="0">
         <input type="text" id="a_mortgage_carry" value="0">
         <input type="text" id="a_mortgage_fees" value="17500">
         <input type="text" id="a_mezz_interest" value="0">
-        <input type="text" id="a_working_capital" value="15000">
-        <input type="text" id="a_marketing" value="5000">
-        <input type="text" id="a_re_tax_carry" value="0">
-        <input type="text" id="a_prop_ins_carry" value="0">
-        <input type="text" id="a_dev_fee" value="0">
-        <input type="text" id="a_dev_pref" value="0">
-        <input type="text" id="a_permits" value="0">
-        <input type="text" id="a_stormwater" value="0">
-        <input type="text" id="a_demo" value="0">
-        <input type="text" id="a_gc_overhead" value="0">
         <input type="text" id="a_mezz_debt" value="0">
         <input type="text" id="a_tax_credit_eq" value="0">
         <input type="text" id="a_grants" value="0">
-        <input type="text" id="a_cam_reimbursements" value="0">
-        <input type="text" id="a_fee_income" value="0">
-        <input type="text" id="a_re_taxes" value="45000">
-        <input type="text" id="a_insurance" value="18000">
-        <input type="text" id="a_gas" value="12000">
-        <input type="text" id="a_water_sewer" value="14000">
-        <input type="text" id="a_electric" value="10000">
-        <input type="text" id="a_license" value="2500">
-        <input type="text" id="a_trash" value="8000">
-        <input type="text" id="a_mgmt_fee" value="6.00">
         <input type="text" id="a_salaries" value="24000">
-        <input type="text" id="a_repairs" value="8000">
         <input type="text" id="a_exterminator" value="3600">
-        <input type="text" id="a_cleaning" value="6000">
         <input type="text" id="a_turnover" value="5000">
         <input type="text" id="a_advertising" value="4000">
-        <input type="text" id="a_landscape" value="6000">
-        <input type="text" id="a_admin" value="5000">
-        <input type="text" id="a_office" value="3000">
-        <input type="text" id="a_misc_expense" value="2000">
-        <input type="text" id="a_cap_reserve" value="400">
-        <input type="text" id="a_commissions" value="0">
-        <input type="text" id="a_sens_rg_low" value="0.00">
-        <input type="text" id="a_sens_rg_high" value="5.00">
-        <input type="text" id="a_sens_rg_step" value="1.00">
-        <input type="text" id="a_sens_cap_low" value="5.50">
-        <input type="text" id="a_sens_cap_high" value="8.50">
-        <input type="text" id="a_sens_cap_step" value="0.50">
         <input type="text" id="a_min_em" value="1.80">
         <input type="text" id="a_min_irr" value="12.00">
         <input type="text" id="a_min_coc" value="7.00">
@@ -1373,64 +1337,10 @@ function renderSectionToggles() {
   }).join('');
 }
 
-function renderDealSectionToggles() {
-  const c = document.getElementById('deal-section-toggles');
-  if (!c) return;
-  const saved = JSON.parse(localStorage.getItem('fp_deal_sections') || '{}');
-  const assmDefaults = JSON.parse(localStorage.getItem('fp_sections') || '{}');
-  c.innerHTML = REPORT_SECTIONS.map(s => {
-    const defOn = assmDefaults[s.id] !== undefined ? assmDefaults[s.id] : s.on;
-    const checked = s.locked ? true : (saved[s.id] !== undefined ? saved[s.id] : defOn);
-    const toggleHtml = s.locked
-      ? `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
-           <div style="font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--sage-dk);background:var(--sage-lt);border:1px solid var(--sage-mid);padding:3px 7px;border-radius:3px;white-space:nowrap">Always On</div>
-         </div>`
-      : `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
-           <label class="toggle"><input type="checkbox" id="deal_toggle_${s.id}" ${checked?'checked':''} onchange="updateDealToggleLbl('${s.id}');saveDealSections()"><span class="toggle-slider"></span></label>
-           <div class="toggle-state-lbl" id="deal_lbl_${s.id}" style="${checked?'color:var(--green)':''}">${checked?'On':'Off'}</div>
-         </div>`;
-    return `<div class="sec-toggle-row">
-      <div>
-        <div style="font-size:13px;font-weight:500;color:var(--near-black)">
-          <span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-right:8px">${s.num}</span>${s.label}
-        </div>
-        <div style="font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4">${s.desc}</div>
-      </div>
-      ${toggleHtml}
-    </div>`;
-  }).join('');
-}
-
 function updateToggleLbl(id) {
   const el = document.getElementById('toggle_'+id);
   const lbl = document.getElementById('lbl_'+id);
   if(el && lbl) { lbl.textContent=el.checked?'On':'Off'; lbl.style.color=el.checked?'var(--green)':''; }
-}
-
-function updateDealToggleLbl(id) {
-  const el = document.getElementById('deal_toggle_'+id);
-  const lbl = document.getElementById('deal_lbl_'+id);
-  if(el && lbl) { lbl.textContent=el.checked?'On':'Off'; lbl.style.color=el.checked?'var(--green)':''; }
-}
-
-function saveDealSections() {
-  const secs = {};
-  REPORT_SECTIONS.forEach(s => {
-    const el = document.getElementById('deal_toggle_'+s.id);
-    if(el) secs[s.id] = el.checked;
-  });
-  localStorage.setItem('fp_deal_sections', JSON.stringify(secs));
-}
-
-function toggleAllSections(onOff) {
-  REPORT_SECTIONS.forEach(s => {
-    if(s.locked) return;
-    const el = document.getElementById('deal_toggle_'+s.id);
-    const lbl = document.getElementById('deal_lbl_'+s.id);
-    if(el) { el.checked = onOff; }
-    if(lbl) { lbl.textContent = onOff?'On':'Off'; lbl.style.color = onOff?'var(--green)':''; }
-  });
-  saveDealSections();
 }
 
 // ── ASSUMPTIONS LOAD / SAVE / RESET ──────────────────────────────────────
@@ -1573,12 +1483,11 @@ function setSaveStatus(state) {
 // SCREEN NAVIGATION
 const SCREEN_META = {
   new:         ['New Underwrite',   'Input Required'],
-  results:     ['Deal Dashboard',   'Last Run'],
-  downloads:   ['Downloads',        'Ready'],
+  results:     ['Pipeline Results', 'Last Run'],
   archive:     ['Deal Archive',     'History'],
   assumptions: ['Assumptions',      'Settings'],
 };
-const SCREEN_ORDER = ['new','results','downloads','archive','assumptions'];
+const SCREEN_ORDER = ['new','archive','assumptions'];
 
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
@@ -1794,12 +1703,26 @@ async function submitRun() {
       }
     }
 
-    // ── Collect section config ────────────────────────────────
-    const sectionsConfig = {};
-    REPORT_SECTIONS.forEach(s => {
-      const el = document.getElementById('deal_toggle_' + s.id) ||
-                 document.getElementById('toggle_' + s.id);
-      sectionsConfig[s.id] = el ? el.checked : true;
+    // ── Collect residential & commercial rent roll rows ───────
+    const resRows = [];
+    document.querySelectorAll('.res-rr-row').forEach((row) => {
+      resRows.push({
+        type:          row.querySelector('[name$="_type"]')?.value || '',
+        units:         parseFloat(row.querySelector('[name$="_units"]')?.value) || 0,
+        current_rent:  parseFloat(row.querySelector('[name$="_current_rent"]')?.value) || 0,
+        proforma_rent: parseFloat(row.querySelector('[name$="_proforma_rent"]')?.value) || 0,
+      });
+    });
+    const commRows = [];
+    document.querySelectorAll('.comm-rr-row').forEach((row) => {
+      commRows.push({
+        tenant:            row.querySelector('[name$="_tenant"]')?.value || '',
+        sf:                parseFloat(row.querySelector('[name$="_sf"]')?.value) || 0,
+        lease_type:        row.querySelector('[name$="_lease_type"]')?.value || '',
+        current_rent_psf:  parseFloat(row.querySelector('[name$="_current_rent_psf"]')?.value) || 0,
+        proforma_rent_psf: parseFloat(row.querySelector('[name$="_proforma_rent_psf"]')?.value) || 0,
+        cam_psf:           parseFloat(row.querySelector('[name$="_cam_psf"]')?.value) || 0,
+      });
     });
 
     // ── Build payload ─────────────────────────────────────────
@@ -1977,14 +1900,16 @@ async function submitRun() {
       a_sens_cap_step:        _num('a_sens_cap_step'),
       a_target_irr:           _num('a_target_irr'),
 
-      // Output mode & sections
+      // Top-level income override — if user typed a monthly rent, pass to backend
+      monthly_gross_rent:     _num('monthly_rent') || _num('monthly_gross_rent') || 0,
+
+      // Output mode
       investor_mode:    (typeof currentOutputMode !== 'undefined' && currentOutputMode === 'investor'),
-      sections_config:  sectionsConfig,
 
       // Uploaded files
       uploaded_files:   uploadedFiles,
-          comps:           collectComps(),
-          rent_roll:       collectRentRoll(),
+          residential_rent_roll: resRows,
+          commercial_rent_roll:  commRows,
     };
 
     // ── POST to FastAPI ───────────────────────────────────────
@@ -2077,7 +2002,6 @@ function clearForm() {
 
 // INIT
 renderSectionToggles();
-renderDealSectionToggles();
 loadAssumptions();
 showScreen('new');
 // Restore strategy-conditional cards if strategy was pre-filled
@@ -2115,12 +2039,9 @@ showScreen('new');
 document.addEventListener('DOMContentLoaded', () => {
   setOutputMode(currentOutputMode);
   handleStrategy();
-  // Initialize rent roll with 3 blank rows
   updateRentRollColumns();
-  for (var _rri = 0; _rri < 3; _rri++) addRentRollRow();
 });
 
-        // ── Comp Entry Logic ─────────────────────────────────────────────
         /* ── Rent Roll rows ────────────────────────────────────── */
         const RR_MAX = 20;
         let rrCount = 0;
@@ -2160,53 +2081,6 @@ document.addEventListener('DOMContentLoaded', () => {
           var rsf = parseFloat((document.getElementById('rr_rent_sf_' + n) || {}).value) || 0;
           var el = document.getElementById('rr_annual_' + n);
           if (el) el.value = sf && rsf ? (sf * rsf).toFixed(0) : '';
-        }
-
-        function addRentRollRow(prefill) {
-          if (rrCount >= RR_MAX) return;
-          rrCount++;
-          var n = rrCount;
-          var tbody = document.getElementById('rr-tbody');
-          var tr = document.createElement('tr');
-          tr.id = 'rr_row_' + n;
-          var d = prefill || {};
-          var mode = getRrMode();
-          var showResi = mode !== 'comm';
-          var showComm = mode === 'comm' || mode === 'both';
-          tr.innerHTML =
-            '<td class="rr-row-num">' + n + '</td>' +
-            '<td><input class="fi" type="text" id="rr_unit_' + n + '" placeholder="e.g. 1A" value="' + (d.unit||'') + '" oninput="markChanged()"></td>' +
-            '<td><select class="fi" id="rr_type_' + n + '" oninput="markChanged()">' +
-              '<option value="">—</option>' +
-              '<option value="Studio">Studio</option><option value="1BR">1 BR</option>' +
-              '<option value="2BR">2 BR</option><option value="3BR">3 BR</option>' +
-              '<option value="4BR">4 BR</option><option value="Commercial">Commercial</option>' +
-              '<option value="Other">Other</option>' +
-            '</select></td>' +
-            '<td><input class="fi" type="text" id="rr_sf_' + n + '" placeholder="750" value="' + (d.sf||'') + '" oninput="calcAnnualRent(' + n + ');markChanged()"></td>' +
-            // Residential columns
-            '<td class="rr-col-resi"' + (showResi?'':' style="display:none"') + '><input class="fi" type="text" id="rr_rent_mo_' + n + '" placeholder="1,200" value="' + (d.rent_mo||'') + '" oninput="markChanged()"></td>' +
-            '<td class="rr-col-resi"' + (showResi?'':' style="display:none"') + '><input class="fi" type="text" id="rr_market_mo_' + n + '" placeholder="1,400" value="' + (d.market_mo||'') + '" oninput="markChanged()"></td>' +
-            // Commercial columns
-            '<td class="rr-col-comm"' + (showComm?'':' style="display:none"') + '><input class="fi" type="text" id="rr_rent_sf_' + n + '" placeholder="28.00" value="' + (d.rent_sf||'') + '" oninput="calcAnnualRent(' + n + ');markChanged()"></td>' +
-            '<td class="rr-col-comm"' + (showComm?'':' style="display:none"') + '><input class="fi" type="text" id="rr_market_sf_' + n + '" placeholder="32.00" value="' + (d.market_sf||'') + '" oninput="markChanged()"></td>' +
-            '<td class="rr-col-comm"' + (showComm?'':' style="display:none"') + '><input class="fi" type="text" id="rr_annual_' + n + '" value="" readonly style="background:var(--sage-lt);cursor:default" tabindex="-1"></td>' +
-            // Common columns
-            '<td><input class="fi" type="text" id="rr_expiry_' + n + '" placeholder="MM/YYYY" value="' + (d.expiry||'') + '" oninput="markChanged()"></td>' +
-            '<td><select class="fi" id="rr_status_' + n + '" oninput="markChanged()" onchange="onStatusChange(' + n + ')">' +
-              '<option value="Occupied">Occupied</option>' +
-              '<option value="Vacant">Vacant</option>' +
-              '<option value="Month-to-Month">Month-to-Month</option>' +
-            '</select></td>' +
-            // Leasing fields
-            '<td><input class="fi" type="text" id="rr_lease_term_' + n + '" placeholder="5" value="' + (d.lease_term||'') + '" oninput="markChanged()" style="width:50px"></td>' +
-            '<td><input class="fi" type="text" id="rr_expiry_year_' + n + '" placeholder="5" value="' + (d.expiry_year||'') + '" oninput="markChanged()" style="width:50px"></td>' +
-            '<td><input class="fi" type="text" id="rr_renewal_prob_' + n + '" placeholder="70" value="' + (d.renewal_prob||'') + '" oninput="markChanged()" style="width:50px"></td>' +
-            '<td><input class="fi" type="text" id="rr_downtime_' + n + '" placeholder="3" value="' + (d.downtime||'') + '" oninput="markChanged()" style="width:50px"></td>' +
-            '<td><button type="button" class="btn-remove-rr" onclick="removeRentRollRow(' + n + ')" title="Remove row">&times;</button></td>';
-          tbody.appendChild(tr);
-          document.getElementById('rr-count').textContent = rrCount + ' of ' + RR_MAX + ' rows';
-          if (rrCount >= RR_MAX) document.getElementById('btn-add-rr').style.display = 'none';
         }
 
         function removeRentRollRow(n) {
@@ -2252,239 +2126,98 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
 
-        function clearAllRentRoll() {
-          document.getElementById('rr-tbody').innerHTML = '';
-          rrCount = 0;
-          // Re-add 3 blank rows
-          for (var i = 0; i < 3; i++) addRentRollRow();
-          document.getElementById('rr-count').textContent = rrCount + ' of ' + RR_MAX + ' rows';
-          document.getElementById('btn-add-rr').style.display = '';
-          markChanged();
-        }
-
-        function toggleRentRollSection() {
-          var card = document.getElementById('rr-section-card');
-          var arrow = document.getElementById('rr-section-arrow');
-          if (!card) return;
-          var show = card.style.display === 'none';
-          card.style.display = show ? '' : 'none';
-          if (arrow) arrow.style.transform = show ? 'rotate(0deg)' : 'rotate(-90deg)';
-        }
-
         function updateLpFromGp() {
           var gp = parseFloat((document.getElementById('a_gp_equity_pct') || {}).value) || 0;
           var lp = document.getElementById('a_lp_equity_pct');
           if (lp) lp.value = (100 - gp).toFixed(0);
         }
 
-        function collectRentRoll() {
-          var rows = [];
-          for (var i = 1; i <= rrCount; i++) {
-            var el = document.getElementById('rr_unit_' + i);
-            if (!el) continue;
-            var row = {
-              unit:   el.value.trim(),
-              type:   (document.getElementById('rr_type_' + i) || {}).value || '',
-              sf:     (document.getElementById('rr_sf_' + i) || {}).value || '',
-              expiry: (document.getElementById('rr_expiry_' + i) || {}).value || '',
-              status: (document.getElementById('rr_status_' + i) || {}).value || '',
-              lease_term:    (document.getElementById('rr_lease_term_' + i) || {}).value || '',
-              expiry_year:   (document.getElementById('rr_expiry_year_' + i) || {}).value || '',
-              renewal_prob:  (document.getElementById('rr_renewal_prob_' + i) || {}).value || '',
-              downtime:      (document.getElementById('rr_downtime_' + i) || {}).value || ''
-            };
-            // Residential fields
-            var rmo = document.getElementById('rr_rent_mo_' + i);
-            var mmo = document.getElementById('rr_market_mo_' + i);
-            if (rmo) { row.rent_mo = rmo.value.trim(); row.market_mo = (mmo||{}).value || ''; }
-            // Commercial fields
-            var rsf = document.getElementById('rr_rent_sf_' + i);
-            var msf = document.getElementById('rr_market_sf_' + i);
-            var ann = document.getElementById('rr_annual_' + i);
-            if (rsf) { row.rent_sf = rsf.value.trim(); row.market_sf = (msf||{}).value || ''; row.annual = (ann||{}).value || ''; }
-            rows.push(row);
-          }
-          return rows;
+        // ── Residential / Commercial Rent Roll (new Assumptions 2A/2B) ──
+        var _resRowCounter = 1;
+        var _commRowCounter = 1;
+
+        function _fmtUSD(n) {
+          try { return '$' + Math.round(n).toLocaleString(); }
+          catch(e) { return '$' + Math.round(n); }
         }
 
-        const COMP_LIMITS = { rent: 8, commercial: 5, sale: 5 };
-        const compCounts  = { rent: 0, commercial: 0, sale: 0 };
-
-        function addComp(type, prefill) {
-          const limit = COMP_LIMITS[type];
-          if (compCounts[type] >= limit) {
-            alert('Maximum ' + limit + ' ' + type + ' comps allowed.');
-            return;
-          }
-          compCounts[type]++;
-          const n = compCounts[type];
-          const container = document.getElementById(type + '-comps-container');
-          const div = document.createElement('div');
-          div.className = 'comp-row';
-          div.id = type + '-comp-' + n;
-          div.innerHTML = buildCompFields(type, n, prefill || {});
-          container.appendChild(div);
-          if (compCounts[type] >= limit) {
-            document.getElementById('btn-add-' + type).style.display = 'none';
-          }
-        }
-
-        function removeComp(type, n) {
-          const el = document.getElementById(type + '-comp-' + n);
-          if (el) el.remove();
-          compCounts[type]--;
-          document.getElementById('btn-add-' + type).style.display = '';
-        }
-
-        function buildCompFields(type, n, pre) {
-          const label = type === 'rent' ? 'Rent Comp' : type === 'commercial' ? 'Commercial Comp' : 'Sale Comp';
-          let fields = '';
-          if (type === 'rent') {
-            fields = `
-              <div class="fg2">
-                <div class="field"><label>Address</label><input class="fi" type="text" id="rent_comp_${n}_address" placeholder="123 Main St, Philadelphia PA" value="${pre.address||''}"></div>
-                <div class="field"><label>Distance (mi)</label><input class="fi" type="number" step="0.1" id="rent_comp_${n}_distance_miles" placeholder="0.3" value="${pre.distance_miles||''}"></div>
-              </div>
-              <div class="fg3">
-                <div class="field"><label>Unit Type</label>
-                  <select class="fi" id="rent_comp_${n}_unit_type">
-                    <option value="">— Select —</option>
-                    <option value="Studio" ${pre.unit_type==='Studio'?'selected':''}>Studio</option>
-                    <option value="1BR" ${pre.unit_type==='1BR'?'selected':''}>1BR</option>
-                    <option value="2BR" ${pre.unit_type==='2BR'?'selected':''}>2BR</option>
-                    <option value="3BR" ${pre.unit_type==='3BR'?'selected':''}>3BR</option>
-                    <option value="4BR+" ${pre.unit_type==='4BR+'?'selected':''}>4BR+</option>
-                  </select>
-                </div>
-                <div class="field"><label>Beds</label><input class="fi" type="number" id="rent_comp_${n}_beds" placeholder="2" value="${pre.beds||''}"></div>
-                <div class="field"><label>Baths</label><input class="fi" type="number" step="0.5" id="rent_comp_${n}_baths" placeholder="1" value="${pre.baths||''}"></div>
-              </div>
-              <div class="fg3">
-                <div class="field"><label>Sq Ft</label><input class="fi" type="number" id="rent_comp_${n}_sq_ft" placeholder="850" value="${pre.sq_ft||''}"></div>
-                <div class="field"><label>Monthly Rent ($)</label><input class="fi" type="number" id="rent_comp_${n}_monthly_rent" placeholder="1800" value="${pre.monthly_rent||''}"></div>
-                <div class="field"><label>Rent/SF ($)</label><input class="fi" type="number" step="0.01" id="rent_comp_${n}_rent_per_sf" placeholder="2.12" value="${pre.rent_per_sf||''}"></div>
-              </div>
-              <div class="fg2">
-                <div class="field"><label>Lease Date</label><input class="fi" type="date" id="rent_comp_${n}_lease_date" value="${pre.lease_date||''}"></div>
-                <div class="field"><label>Source</label><input class="fi" type="text" id="rent_comp_${n}_source" placeholder="CoStar, Redfin, Manual entry…" value="${pre.source||''}"></div>
-              </div>`;
-          } else if (type === 'commercial') {
-            fields = `
-              <div class="fg2">
-                <div class="field"><label>Address</label><input class="fi" type="text" id="commercial_comp_${n}_address" placeholder="456 Chestnut St, Philadelphia PA" value="${pre.address||''}"></div>
-                <div class="field"><label>Distance (mi)</label><input class="fi" type="number" step="0.1" id="commercial_comp_${n}_distance_miles" placeholder="0.5" value="${pre.distance_miles||''}"></div>
-              </div>
-              <div class="fg3">
-                <div class="field"><label>Use Type</label>
-                  <select class="fi" id="commercial_comp_${n}_use_type">
-                    <option value="">— Select —</option>
-                    <option value="Office" ${pre.use_type==='Office'?'selected':''}>Office</option>
-                    <option value="Retail" ${pre.use_type==='Retail'?'selected':''}>Retail</option>
-                    <option value="Medical" ${pre.use_type==='Medical'?'selected':''}>Medical</option>
-                    <option value="Industrial" ${pre.use_type==='Industrial'?'selected':''}>Industrial</option>
-                    <option value="Mixed-Use" ${pre.use_type==='Mixed-Use'?'selected':''}>Mixed-Use</option>
-                  </select>
-                </div>
-                <div class="field"><label>Sq Ft</label><input class="fi" type="number" id="commercial_comp_${n}_sq_ft" placeholder="3500" value="${pre.sq_ft||''}"></div>
-                <div class="field"><label>Asking Rent/SF ($)</label><input class="fi" type="number" step="0.01" id="commercial_comp_${n}_asking_rent_per_sf" placeholder="18.50" value="${pre.asking_rent_per_sf||''}"></div>
-              </div>
-              <div class="fg3">
-                <div class="field"><label>Lease Type</label>
-                  <select class="fi" id="commercial_comp_${n}_lease_type">
-                    <option value="">— Select —</option>
-                    <option value="NNN" ${pre.lease_type==='NNN'?'selected':''}>NNN</option>
-                    <option value="Gross" ${pre.lease_type==='Gross'?'selected':''}>Gross</option>
-                    <option value="MG" ${pre.lease_type==='MG'?'selected':''}>Modified Gross</option>
-                    <option value="FSG" ${pre.lease_type==='FSG'?'selected':''}>Full Service Gross</option>
-                  </select>
-                </div>
-                <div class="field"><label>Tenant Name</label><input class="fi" type="text" id="commercial_comp_${n}_tenant_name" placeholder="Tenant or Vacant" value="${pre.tenant_name||''}"></div>
-                <div class="field"><label>Lease Date</label><input class="fi" type="date" id="commercial_comp_${n}_lease_date" value="${pre.lease_date||''}"></div>
-              </div>
-              <div class="fg1">
-                <div class="field"><label>Source</label><input class="fi" type="text" id="commercial_comp_${n}_source" placeholder="CoStar, LoopNet, Crexi, Manual entry…" value="${pre.source||''}"></div>
-              </div>`;
-          } else {
-            fields = `
-              <div class="fg2">
-                <div class="field"><label>Address</label><input class="fi" type="text" id="sale_comp_${n}_address" placeholder="789 Market St, Philadelphia PA" value="${pre.address||''}"></div>
-                <div class="field"><label>Distance (mi)</label><input class="fi" type="number" step="0.1" id="sale_comp_${n}_distance_miles" placeholder="0.4" value="${pre.distance_miles||''}"></div>
-              </div>
-              <div class="fg3">
-                <div class="field"><label>Asset Type</label><input class="fi" type="text" id="sale_comp_${n}_asset_type" placeholder="Office, Retail, Multifamily…" value="${pre.asset_type||''}"></div>
-                <div class="field"><label>Sq Ft</label><input class="fi" type="number" id="sale_comp_${n}_sq_ft" placeholder="6000" value="${pre.sq_ft||''}"></div>
-                <div class="field"><label>Units</label><input class="fi" type="number" id="sale_comp_${n}_num_units" placeholder="0" value="${pre.num_units||''}"></div>
-              </div>
-              <div class="fg3">
-                <div class="field"><label>Sale Price ($)</label><input class="fi" type="number" id="sale_comp_${n}_sale_price" placeholder="1250000" value="${pre.sale_price||''}"></div>
-                <div class="field"><label>Price/SF ($)</label><input class="fi" type="number" step="0.01" id="sale_comp_${n}_price_per_sf" placeholder="208.33" value="${pre.price_per_sf||''}"></div>
-                <div class="field"><label>Price/Unit ($)</label><input class="fi" type="number" id="sale_comp_${n}_price_per_unit" placeholder="0" value="${pre.price_per_unit||''}"></div>
-              </div>
-              <div class="fg3">
-                <div class="field"><label>Cap Rate (%)</label><input class="fi" type="number" step="0.01" id="sale_comp_${n}_cap_rate" placeholder="6.50" value="${pre.cap_rate||''}"></div>
-                <div class="field"><label>Sale Date</label><input class="fi" type="date" id="sale_comp_${n}_sale_date" value="${pre.sale_date||''}"></div>
-                <div class="field"><label>Source</label><input class="fi" type="text" id="sale_comp_${n}_source" placeholder="CoStar, MLS, Manual entry…" value="${pre.source||''}"></div>
-              </div>`;
-          }
-          return `
-            <div class="comp-entry" style="background:#faf8f4;border:1px solid #ddd;border-radius:6px;padding:14px;margin-bottom:12px;position:relative;">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <div style="font-size:12px;font-weight:600;color:#5C3D26;">${label} #${n}</div>
-                <button type="button" onclick="removeComp('${type}',${n})" style="background:none;border:none;color:#8B2020;cursor:pointer;font-size:13px;padding:2px 6px;" title="Remove">✕ Remove</button>
-              </div>
-              ${fields}
-            </div>`;
-        }
-
-        function collectComps() {
-          const result = { rent_comps: [], commercial_comps: [], sale_comps: [] };
-          ['rent','commercial','sale'].forEach(type => {
-            const container = document.getElementById(type + '-comps-container');
-            if (!container) return;
-            const entries = container.querySelectorAll('.comp-entry');
-            entries.forEach((entry, i) => {
-              const n = i + 1;
-              const get = (field) => {
-                const el = document.getElementById(type + '_comp_' + n + '_' + field);
-                if (!el) return null;
-                const v = el.value.trim();
-                if (v === '' || v === '0') return null;
-                return isNaN(v) ? v : parseFloat(v);
-              };
-              let comp = {};
-              if (type === 'rent') {
-                comp = { address: get('address'), distance_miles: get('distance_miles'),
-                  unit_type: get('unit_type'), beds: get('beds'), baths: get('baths'),
-                  sq_ft: get('sq_ft'), monthly_rent: get('monthly_rent'),
-                  rent_per_sf: get('rent_per_sf'), lease_date: get('lease_date'), source: get('source') };
-              } else if (type === 'commercial') {
-                comp = { address: get('address'), distance_miles: get('distance_miles'),
-                  use_type: get('use_type'), sq_ft: get('sq_ft'),
-                  asking_rent_per_sf: get('asking_rent_per_sf'), lease_type: get('lease_type'),
-                  lease_date: get('lease_date'), tenant_name: get('tenant_name'), source: get('source') };
-              } else {
-                comp = { address: get('address'), distance_miles: get('distance_miles'),
-                  asset_type: get('asset_type'), sq_ft: get('sq_ft'), num_units: get('num_units'),
-                  sale_price: get('sale_price'), price_per_sf: get('price_per_sf'),
-                  price_per_unit: get('price_per_unit'), cap_rate: get('cap_rate'),
-                  sale_date: get('sale_date'), source: get('source') };
-              }
-              if (Object.values(comp).some(v => v !== null)) {
-                const key = type === 'rent' ? 'rent_comps' : type === 'commercial' ? 'commercial_comps' : 'sale_comps';
-                result[key].push(comp);
-              }
-            });
+        function updateGPRTotals() {
+          var resGpr = 0;
+          document.querySelectorAll('.res-rr-row').forEach(function(row){
+            var u  = parseFloat((row.querySelector('[name$="_units"]')||{}).value) || 0;
+            var pf = parseFloat((row.querySelector('[name$="_proforma_rent"]')||{}).value) || 0;
+            resGpr += u * pf * 12;
           });
-          return result;
+          var commGpr = 0;
+          document.querySelectorAll('.comm-rr-row').forEach(function(row){
+            var sf = parseFloat((row.querySelector('[name$="_sf"]')||{}).value) || 0;
+            var pf = parseFloat((row.querySelector('[name$="_proforma_rent_psf"]')||{}).value) || 0;
+            commGpr += sf * pf;
+          });
+          var r = document.getElementById('total_res_gpr_display');
+          var c = document.getElementById('total_comm_gpr_display');
+          var t = document.getElementById('total_gpr_display');
+          if (r) r.textContent  = _fmtUSD(resGpr);
+          if (c) c.textContent  = _fmtUSD(commGpr);
+          if (t) t.textContent  = _fmtUSD(resGpr + commGpr);
         }
 
-        function prefillCompsFromExtraction(compsData) {
-          if (!compsData) return;
-          (compsData.rent_comps || []).forEach(c => addComp('rent', c));
-          (compsData.commercial_comps || []).forEach(c => addComp('commercial', c));
-          (compsData.sale_comps || []).forEach(c => addComp('sale', c));
+        function addResRow() {
+          _resRowCounter++;
+          const n = _resRowCounter;
+          const div = document.createElement('div');
+          div.className = 'res-rr-row rr-grid-row rr-res-grid';
+          div.innerHTML = `
+            <select class="fi" name="res_row_${n}_type" oninput="updateGPRTotals()">
+              <option value="Studio">Studio</option>
+              <option value="1 Bed">1 Bed</option>
+              <option value="2 Bed">2 Bed</option>
+              <option value="3 Bed">3 Bed</option>
+              <option value="4 Bed">4 Bed</option>
+            </select>
+            <input class="fi" type="number" name="res_row_${n}_units" placeholder="0" oninput="updateGPRTotals()">
+            <input class="fi" type="number" name="res_row_${n}_current_rent" placeholder="0" oninput="updateGPRTotals()">
+            <input class="fi" type="number" name="res_row_${n}_proforma_rent" placeholder="0" oninput="updateGPRTotals()">
+            <input class="fi" type="text" name="res_row_${n}_notes" placeholder="Optional">
+            <button type="button" class="btn-add-comp" style="border-color:var(--red);color:var(--red)" onclick="removeResRow(this)">&#x2715; Remove</button>
+          `;
+          document.getElementById('res-rr-tbody').appendChild(div);
+          updateGPRTotals();
         }
-        // ── /Comp Entry Logic ─────────────────────────────────────────────
+
+        function addCommRow() {
+          _commRowCounter++;
+          const n = _commRowCounter;
+          const div = document.createElement('div');
+          div.className = 'comm-rr-row rr-grid-row rr-comm-grid';
+          div.innerHTML = `
+            <input class="fi" type="text" name="comm_row_${n}_tenant" placeholder="e.g. Suite 101">
+            <input class="fi" type="number" name="comm_row_${n}_sf" placeholder="0" oninput="updateGPRTotals()">
+            <select class="fi" name="comm_row_${n}_lease_type">
+              <option value="NNN">NNN</option>
+              <option value="NN">NN</option>
+              <option value="Gross">Gross</option>
+              <option value="Modified Gross">Modified Gross</option>
+            </select>
+            <input class="fi" type="number" name="comm_row_${n}_current_rent_psf" placeholder="0.00" oninput="updateGPRTotals()">
+            <input class="fi" type="number" name="comm_row_${n}_proforma_rent_psf" placeholder="0.00" oninput="updateGPRTotals()">
+            <input class="fi" type="number" name="comm_row_${n}_cam_psf" value="0" placeholder="0.00">
+            <input class="fi" type="text" name="comm_row_${n}_notes" placeholder="Optional">
+            <button type="button" class="btn-add-comp" style="border-color:var(--red);color:var(--red)" onclick="removeCommRow(this)">&#x2715; Remove</button>
+          `;
+          document.getElementById('comm-rr-tbody').appendChild(div);
+          updateGPRTotals();
+        }
+
+        function removeResRow(btn) {
+          btn.closest('.res-rr-row').remove();
+          updateGPRTotals();
+        }
+
+        function removeCommRow(btn) {
+          btn.closest('.comm-rr-row').remove();
+          updateGPRTotals();
+        }
 
       </script>
 </body>

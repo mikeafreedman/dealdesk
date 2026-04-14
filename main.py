@@ -295,6 +295,8 @@ class UnderwriteRequest(BaseModel):
 
     # Rent roll (from frontend form)
     rent_roll: Optional[List[Dict[str, Any]]] = None
+    residential_rent_roll: Optional[List[Dict[str, Any]]] = None
+    commercial_rent_roll: Optional[List[Dict[str, Any]]] = None
 
     # Top-level fields
     monthly_gross_rent: float = 0.0
@@ -582,14 +584,20 @@ async def underwrite(req: UnderwriteRequest):
         om_path = None
         rr_path = None
         fin_path = None
+        all_uploaded_paths: list[str] = []
         for uf in req.uploaded_files:
             saved_path = _save_base64_file(uf.name, uf.content_base64)
+            if saved_path and os.path.exists(saved_path):
+                all_uploaded_paths.append(saved_path)
+                logger.info("MAIN: queuing file for extraction: '%s' (type=%s)",
+                            saved_path, getattr(uf, 'type', 'unknown'))
             if uf.type == "om":
                 om_path = saved_path
             elif uf.type == "rent_roll":
                 rr_path = saved_path
             elif uf.type == "financials":
                 fin_path = saved_path
+        logger.info("MAIN: %d file(s) queued for extraction", len(all_uploaded_paths))
 
         # Merge frontend rent roll rows into extracted_docs.unit_mix
         if req.rent_roll:
@@ -623,6 +631,53 @@ async def underwrite(req: UnderwriteRequest):
                 deal.extracted_docs.unit_mix = rr_units
                 logger.info("RENT ROLL: %d units from frontend form", len(rr_units))
 
+        # ── New structured rent roll from frontend UI ─────────────
+        if req.residential_rent_roll or req.commercial_rent_roll:
+            new_unit_mix = []
+
+            for row in (req.residential_rent_roll or []):
+                units = float(row.get('units') or 0)
+                proforma = float(row.get('proforma_rent') or 0)
+                current = float(row.get('current_rent') or 0)
+                if units > 0 and proforma > 0:
+                    new_unit_mix.append({
+                        'unit_type':    row.get('type', 'Residential'),
+                        'count':        units,
+                        'monthly_rent': proforma,
+                        'market_rent':  proforma,
+                        'current_rent': current,
+                    })
+
+            for row in (req.commercial_rent_roll or []):
+                sf = float(row.get('sf') or 0)
+                proforma_psf = float(row.get('proforma_rent_psf') or 0)
+                current_psf = float(row.get('current_rent_psf') or 0)
+                if sf > 0 and proforma_psf > 0:
+                    monthly_equiv = (sf * proforma_psf) / 12
+                    new_unit_mix.append({
+                        'unit_type':    row.get('lease_type', 'Commercial'),
+                        'tenant':       row.get('tenant', ''),
+                        'sf':           sf,
+                        'monthly_rent': monthly_equiv,
+                        'market_rent':  monthly_equiv,
+                        'current_rent': (sf * current_psf) / 12,
+                        'cam_psf':      float(row.get('cam_psf') or 0),
+                    })
+
+            if new_unit_mix:
+                if deal.extracted_docs is None:
+                    from models.models import ExtractedDocumentData
+                    deal.extracted_docs = ExtractedDocumentData()
+                existing = deal.extracted_docs.unit_mix or []
+                deal.extracted_docs.unit_mix = new_unit_mix + existing
+                logger.info(
+                    "RENT ROLL: injected %d rows from frontend UI "
+                    "(%d residential, %d commercial)",
+                    len(new_unit_mix),
+                    len(req.residential_rent_roll or []),
+                    len(req.commercial_rent_roll or []),
+                )
+
         # Collect user inputs as flat dict for assemble_deal
         user_inputs = req.model_dump()
 
@@ -636,6 +691,7 @@ async def underwrite(req: UnderwriteRequest):
                     om_pdf_path=om_path,
                     rent_roll_pdf_path=rr_path,
                     financials_pdf_path=fin_path,
+                    uploaded_files=all_uploaded_paths,
                 )
 
             elif stage_name == "deal_data":

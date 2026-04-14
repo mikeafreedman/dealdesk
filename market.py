@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from io import StringIO
@@ -283,17 +284,37 @@ _HUD_OZ_URL = (
 
 
 def _geocode_fallback(addr, full_address: str) -> None:
-    """Apply fallback coordinates when geocoding fails."""
-    if "5600 chestnut" in full_address.lower():
-        addr.latitude = 39.9517
-        addr.longitude = -75.2294
-        logger.info("Geocode fallback: 5600 Chestnut hardcoded coords "
-                     "lat=39.9517, lon=-75.2294")
-    elif addr.latitude is None or addr.longitude is None:
+    """Try Google Maps geocoding; if unavailable use Philadelphia centroid."""
+    import os
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    if api_key:
+        try:
+            import urllib.parse
+            encoded = urllib.parse.quote(full_address)
+            geo_url = (
+                "https://maps.googleapis.com/maps/api/geocode/json"
+                f"?address={encoded}&key={api_key}"
+            )
+            resp = requests.get(geo_url, timeout=10)
+            results = resp.json().get("results", [])
+            if results:
+                loc = results[0]["geometry"]["location"]
+                addr.latitude = loc["lat"]
+                addr.longitude = loc["lng"]
+                logger.info(
+                    "GEOCODE fallback (Google Maps): lat=%.6f, lon=%.6f for '%s'",
+                    addr.latitude, addr.longitude, full_address)
+                return
+            else:
+                logger.warning("GEOCODE fallback (Google Maps): no results for '%s'", full_address)
+        except Exception as e:
+            logger.warning("GEOCODE fallback (Google Maps) failed: %s", e)
+    if addr.latitude is None or addr.longitude is None:
         addr.latitude = 39.9526
         addr.longitude = -75.1652
-        logger.info("Geocode fallback: Philadelphia centroid "
-                     "lat=39.9526, lon=-75.1652")
+        logger.warning(
+            "GEOCODE fallback: Philadelphia centroid used for '%s' — maps will be inaccurate",
+            full_address)
 
 
 def _census_geocode(deal: DealData) -> None:

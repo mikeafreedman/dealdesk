@@ -196,13 +196,17 @@ def _gpr_yr1(deal: DealData) -> float:
     # Fallback: compute from assumptions (num_units × avg monthly rent)
     # Try unit_mix (rent roll line items) next
     if deal.extracted_docs and deal.extracted_docs.unit_mix:
-        roll_total = sum(
-            (u.get("monthly_rent") or u.get("market_rent") or 0)
-            for u in deal.extracted_docs.unit_mix
-        )
+        roll_total = 0.0
+        for u in deal.extracted_docs.unit_mix:
+            rent = u.get("monthly_rent") or u.get("market_rent") or 0
+            count = u.get("count") or 1
+            roll_total += float(rent) * float(count)
         if roll_total > 0:
             gpr = roll_total * 12
-            logger.info(f"GPR: from unit_mix sum = ${gpr:,.0f}/yr")
+            logger.info(
+                f"GPR: from unit_mix sum = ${gpr:,.0f}/yr "
+                f"({len(deal.extracted_docs.unit_mix)} rows)"
+            )
             return gpr
 
     # Last fallback: assumptions-based estimate
@@ -213,25 +217,51 @@ def _gpr_yr1(deal: DealData) -> float:
         logger.info(f"GPR: from assumptions ({num_units} units × ${avg_rent}/mo) = ${gpr:,.0f}/yr")
         return gpr
 
-    # ── Fallback 4: Commercial/Office — GBA × assumed rent/SF ───────
-    # This fires when: no total_monthly_rent from frontend,
-    # no unit_mix from extraction, and no monthly_rent_per_unit.
-    # For commercial deals, estimate from GBA × market rent/SF.
-    gba = getattr(deal.assumptions, "gba_sf", None) or \
-          getattr(deal.assumptions, "gross_building_area", None) or 0
-    if gba and gba > 0:
-        # Use asking_rent_per_sf if on assumptions, else use
-        # a conservative commercial fallback of $16.67/SF/yr
-        rent_psf = getattr(deal.assumptions, "asking_rent_per_sf", None) or \
-                   getattr(deal.assumptions, "rent_per_sf", None) or 16.67
-        gpr = float(gba) * float(rent_psf)
+    # Fallback 4: use market data rent if available.
+    # Tries (a) MarketData PSF attributes — none exist today but kept for
+    # forward-compat — then (b) comps median PSF from commercial_comps /
+    # rent_comps, which is the real source of market PSF data.
+    market_rent_psf = (
+        getattr(deal.market_data, 'median_asking_rent_psf', None) or
+        getattr(deal.market_data, 'median_rent_psf', None) or
+        getattr(deal.market_data, 'hud_fmr_1br', None) or
+        None
+    )
+    if not market_rent_psf:
+        comps = getattr(deal, 'comps', None)
+        if comps is not None:
+            psf_vals = [c.asking_rent_per_sf for c in (comps.commercial_comps or [])
+                        if c.asking_rent_per_sf and c.asking_rent_per_sf > 0]
+            if not psf_vals:
+                psf_vals = [c.rent_per_sf for c in (comps.rent_comps or [])
+                            if c.rent_per_sf and c.rent_per_sf > 0]
+            if psf_vals:
+                psf_vals.sort()
+                n = len(psf_vals)
+                market_rent_psf = (psf_vals[n // 2] if n % 2
+                                   else (psf_vals[n // 2 - 1] + psf_vals[n // 2]) / 2)
+
+    gba = getattr(deal.assumptions, 'gba_sf', 0) or 0
+
+    if market_rent_psf and market_rent_psf > 0 and gba > 0:
+        gpr = gba * market_rent_psf
         logger.info(
-            f"GPR: commercial fallback from GBA × rent/SF = "
-            f"{gba:,} SF × ${rent_psf:.2f}/SF = ${gpr:,.0f}/yr"
+            f"GPR: from market data (GBA {gba} SF × ${market_rent_psf:.2f}/SF/yr "
+            f"from market research) = ${gpr:,.0f}/yr"
         )
         return gpr
 
-    logger.warning("GPR: all sources returned 0 -- no rental income data available")
+    # Fallback 5 (last resort): hardcoded conservative commercial estimate
+    if gba > 0:
+        rent_psf = 16.67
+        gpr = gba * rent_psf
+        logger.info(
+            f"GPR: final fallback — GBA {gba} SF × ${rent_psf}/SF/yr "
+            f"(no market data available) = ${gpr:,.0f}/yr"
+        )
+        return gpr
+
+    logger.warning("GPR: all fallbacks exhausted — returning 0")
     return 0.0
 
 

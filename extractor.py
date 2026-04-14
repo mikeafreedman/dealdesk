@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
+import os
+from typing import Any, List, Optional
 
 import anthropic
 import pymupdf4llm
@@ -293,50 +294,182 @@ def _apply_1c(data: dict, deal: DealData) -> None:
 # PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Scalar merge mapping: source JSON key → ExtractedDocumentData attribute
+_SCALAR_MAP = [
+    ("property_name",                "property_name"),
+    ("asking_price",                 "asking_price"),
+    ("year_built",                   "year_built"),
+    ("num_units",                    "num_units_extracted"),
+    ("total_units",                  "num_units_extracted"),
+    ("gross_building_area",          "gross_building_area"),
+    ("total_sf",                     "gba_sf_extracted"),
+    ("lot_size_sf",                  "lot_size_sf"),
+    ("lot_sf",                       "lot_sf_extracted"),
+    ("property_type",                "property_type_extracted"),
+    ("zoning_code",                  "zoning_code"),
+    ("occupancy_rate",               "occupancy_rate"),
+    ("total_monthly_rent_in_place",  "total_monthly_rent"),
+    ("avg_rent_per_unit",            "avg_rent_per_unit"),
+    ("avg_rent_per_sf",              "avg_rent_per_sf"),
+    ("gross_potential_rent",         "gross_potential_rent_extracted"),
+    ("noi",                          "noi_extracted"),
+    ("effective_gross_income",       "egi_extracted"),
+    ("total_expenses",               "total_expenses_extracted"),
+]
+
+# List merge mapping: source JSON key → ExtractedDocumentData attribute (append)
+_LIST_MAP = [
+    ("units",              "unit_mix"),
+    ("unit_mix_summary",   "unit_mix_summary"),
+    ("notable_tenants",    "notable_tenants"),
+    ("deal_highlights",    "deal_highlights"),
+]
+
+
+def _merge_extraction(ext, data: dict, source: str, file: str = "") -> None:
+    """Merge an extraction dict into ExtractedDocumentData.
+
+    Scalars: first-populated-wins (don't overwrite None/""/0).
+    Lists: always append.
+    Silently skips attributes that don't exist on the model.
+    """
+    if not data:
+        return
+    tag = f"EXTRACTOR [{source}]"
+    # Scalars
+    for src_key, attr in _SCALAR_MAP:
+        if src_key not in data:
+            continue
+        val = data.get(src_key)
+        if val is None or val == "" or val == 0:
+            continue
+        try:
+            current = getattr(ext, attr)
+        except AttributeError:
+            continue
+        if current is None or current == "" or current == 0:
+            try:
+                setattr(ext, attr, val)
+                logger.info("%s: set %s=%r (from %s)", tag, attr, val, file or src_key)
+            except AttributeError:
+                pass
+    # Lists
+    for src_key, attr in _LIST_MAP:
+        src_list = data.get(src_key)
+        if not src_list or not isinstance(src_list, list):
+            continue
+        try:
+            current = getattr(ext, attr)
+        except AttributeError:
+            continue
+        try:
+            if current is None:
+                setattr(ext, attr, list(src_list))
+            else:
+                current.extend(src_list)
+            logger.info("%s: appended %d items to %s (from %s)",
+                        tag, len(src_list), attr, file or src_key)
+        except AttributeError:
+            pass
+
+
 def extract_documents(
     deal: DealData,
     om_pdf_path: Optional[str] = None,
     rent_roll_pdf_path: Optional[str] = None,
     financials_pdf_path: Optional[str] = None,
+    construction_pdf_path: Optional[str] = None,
+    uploaded_files: Optional[List[Any]] = None,  # type: ignore[name-defined]
 ) -> DealData:
     """
-    Run document extraction prompts against uploaded PDFs.
+    Run document extraction prompts against every uploaded PDF.
 
-    Each prompt runs independently — a failure in one does not block the others.
-    On any parse failure, that section stays at ExtractedDocumentData defaults.
+    Every file — regardless of its original type label — is converted to text
+    and run through ALL three extraction prompts (1A, 1B, 1C). Results are
+    merged with scalar=first-populated-wins, list=append semantics.
     """
-    # ── Prompt 1A — Offering Memorandum ───────────────────────
-    if om_pdf_path:
-        om_md = pdf_to_markdown(om_pdf_path)
-        user_msg = USER_1A.format(om_text=om_md, images_json="[]")
-        result = _call_haiku(SYSTEM_1A, user_msg)
-        if result:
-            _apply_1a(result, deal)
-            logger.info("Prompt 1A complete — OM extracted")
-        else:
-            logger.warning("Prompt 1A failed — continuing with defaults")
+    # ── Collect every non-None path into `all_files`, deduped ─────────
+    all_files: list = []
 
-    # ── Prompt 1B — Rent Roll ─────────────────────────────────
-    if rent_roll_pdf_path:
-        rr_md = pdf_to_markdown(rent_roll_pdf_path)
-        user_msg = USER_1B.format(rent_roll_text=rr_md)
-        result = _call_haiku(SYSTEM_1B, user_msg)
-        if result:
-            _apply_1b(result, deal)
-            logger.info("Prompt 1B complete — Rent roll extracted")
+    def _add(path_like):
+        if path_like is None:
+            return
+        # Accept raw paths and also tuples/dicts/objects with a path attr
+        p = None
+        if isinstance(path_like, str):
+            p = path_like
+        elif isinstance(path_like, (tuple, list)) and path_like:
+            # allow (label, path) form
+            for item in path_like:
+                if isinstance(item, str):
+                    p = item
+                    break
+        elif isinstance(path_like, dict):
+            p = path_like.get("path") or path_like.get("file_path") or path_like.get("filepath")
         else:
-            logger.warning("Prompt 1B failed — continuing with defaults")
+            p = getattr(path_like, "path", None) or getattr(path_like, "file_path", None)
+        if p and p not in all_files:
+            all_files.append(p)
 
-    # ── Prompt 1C — Financial Statements ──────────────────────
-    if financials_pdf_path:
-        fin_md = pdf_to_markdown(financials_pdf_path)
-        user_msg = USER_1C.format(financial_statement_text=fin_md)
-        result = _call_haiku(SYSTEM_1C, user_msg)
-        if result:
-            _apply_1c(result, deal)
-            logger.info("Prompt 1C complete — Financials extracted")
-        else:
-            logger.warning("Prompt 1C failed — continuing with defaults")
+    for p in (om_pdf_path, rent_roll_pdf_path, financials_pdf_path, construction_pdf_path):
+        _add(p)
+    if uploaded_files:
+        try:
+            for f in uploaded_files:
+                _add(f)
+        except TypeError:
+            pass
+
+    logger.info("EXTRACTOR: %d file(s) to process", len(all_files))
+
+    ext = deal.extracted_docs
+    prompts = [
+        ("1A", SYSTEM_1A, USER_1A, {"images_json": "[]"}, "om_text"),
+        ("1B", SYSTEM_1B, USER_1B, {},                     "rent_roll_text"),
+        ("1C", SYSTEM_1C, USER_1C, {},                     "financial_statement_text"),
+    ]
+
+    for path in all_files:
+        try:
+            md = pdf_to_markdown(path)
+        except Exception as exc:
+            logger.warning("EXTRACTOR: pdf_to_markdown failed for '%s': %s", path, exc)
+            continue
+        if not md or len(md) < 50:
+            logger.warning("EXTRACTOR: skipping '%s' — only %d chars of text",
+                           path, len(md) if md else 0)
+            continue
+        logger.info("EXTRACTOR: extracted %d chars from '%s'", len(md), path)
+
+        for tag, system, user_tpl, extra_kwargs, text_kw in prompts:
+            try:
+                user_msg = user_tpl.format(**{text_kw: md, **extra_kwargs})
+                result = _call_haiku(system, user_msg)
+                if not result:
+                    logger.warning("EXTRACTOR: %s returned no result for '%s'", tag, path)
+                    continue
+                if tag == "1A":
+                    # Preserve legacy OM-specific behavior (comps, address, etc.)
+                    try:
+                        _apply_1a(result, deal)
+                    except Exception as exc:
+                        logger.warning("EXTRACTOR: _apply_1a failed for '%s': %s", path, exc)
+                    logger.info("EXTRACTOR: 1A complete for '%s'", path)
+                elif tag == "1B":
+                    n_units = len(result.get("units") or [])
+                    logger.info("EXTRACTOR: 1B complete for '%s' — %d units found",
+                                path, n_units)
+                else:
+                    # 1C: also run legacy mapper so expense_line_items/NNN get set
+                    try:
+                        _apply_1c(result, deal)
+                    except Exception as exc:
+                        logger.warning("EXTRACTOR: _apply_1c failed for '%s': %s", path, exc)
+                    logger.info("EXTRACTOR: 1C complete for '%s'", path)
+
+                _merge_extraction(ext, result, source=tag, file=path)
+            except Exception as exc:
+                logger.warning("EXTRACTOR: %s failed for '%s': %s", tag, path, exc)
 
     # Record extraction model in provenance
     deal.provenance.extractor_model = MODEL_HAIKU

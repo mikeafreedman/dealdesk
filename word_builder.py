@@ -1112,6 +1112,29 @@ def populate_table(table, data_rows, style="data"):
             _set_cell_text_color(cell, '2C1F14')
 
 
+def _remove_image_placeholder_boxes(doc) -> None:
+    """Remove sage-green single-cell placeholder boxes wrapping image frames that have no actual image."""
+    PLACEHOLDER_MARKERS = [
+        "Hero Shot", "Property Photo Gallery",
+        "Floor Plan", "Supply Pipeline",
+        "KPI Dashboard", "Insurance KPI Strip",
+        "Risk Matrix", "image_placements.json",
+        "Conditional block", "renders only when",
+        "Prompt 1A image extraction",
+        "plan=full width", "market.py output",
+    ]
+    tables_to_remove = []
+    for table in doc.tables:
+        if len(table.rows) == 1 and len(table.rows[0].cells) == 1:
+            text = table.rows[0].cells[0].text.strip()
+            if any(m.lower() in text.lower() for m in PLACEHOLDER_MARKERS):
+                tables_to_remove.append(table)
+    for table in tables_to_remove:
+        tbl = table._tbl
+        tbl.getparent().remove(tbl)
+    logger.info("PLACEHOLDER: removed %d image placeholder boxes", len(tables_to_remove))
+
+
 def _fix_dark_data_rows(doc) -> int:
     """Fix data rows that inherited the header's dark background after render."""
     count = 0
@@ -1533,37 +1556,83 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
     _safe_pop(20, [["No pipeline data available", "—", "—", "CoStar data required", "—", "—"]])
 
     # ── Table 22 (idx=21): Unit Mix Summary ───────────────────────
-    unit_mix = ext.unit_mix or []
+    units = ext.unit_mix or [] if ext else []
     unit_mix_rows = []
-    for u in unit_mix:
-        unit_mix_rows.append([
-            u.get("unit_type") or u.get("type", "—"),
-            "1",
-            f"{u.get('sf', 0):,.0f} SF" if u.get('sf') else "—",
-            f"${u.get('monthly_rent', 0):,.0f}/mo" if u.get('monthly_rent') else "Vacant",
-            f"${u.get('market_rent', 0):,.0f}" if u.get('market_rent') else "—",
-            "—",
-        ])
-    if not unit_mix_rows:
+    if units:
+        type_groups = {}
+        for u in units:
+            ut = u.get("unit_type") or u.get("type") or "Unit"
+            if ut not in type_groups:
+                type_groups[ut] = {"count": 0, "sf_total": 0, "rent_total": 0, "market_total": 0}
+            cnt = float(u.get("count") or 1)
+            type_groups[ut]["count"] += cnt
+            sf = float(u.get("sf") or 0)
+            type_groups[ut]["sf_total"] += sf * cnt
+            rent = float(u.get("monthly_rent") or 0)
+            type_groups[ut]["rent_total"] += rent * cnt
+            mkt = float(u.get("market_rent") or u.get("monthly_rent") or 0)
+            type_groups[ut]["market_total"] += mkt * cnt
+        total_gpr = fo.gross_potential_rent or 0
+        for ut, d in type_groups.items():
+            cnt = d["count"]
+            avg_sf = f"{d['sf_total'] / cnt:,.0f} SF" if d["sf_total"] > 0 and cnt > 0 else "—"
+            curr = f"${d['rent_total'] / cnt:,.0f}/mo" if d["rent_total"] > 0 and cnt > 0 else "Vacant"
+            mkt_r = f"${d['market_total'] / cnt:,.0f}/mo" if d["market_total"] > 0 and cnt > 0 else "—"
+            pct = f"{d['rent_total'] * 12 / total_gpr * 100:.1f}%" if total_gpr > 0 else "—"
+            unit_mix_rows.append([ut, str(int(cnt)), avg_sf, curr, mkt_r, pct])
+    else:
         gpr_yr1 = fo.gross_potential_rent or 0
-        unit_mix_rows = [["Commercial", "1", f"{gba:,.0f} SF", "Vacant",
-                          f"${gpr_yr1 / gba:.2f}/SF/yr" if gba > 0 and gpr_yr1 > 0 else "—", "100%"]]
+        n = deal.assumptions.num_units or 1
+        avg_mo = gpr_yr1 / 12 / n if n > 0 and gpr_yr1 > 0 else 0
+        gba_v = deal.assumptions.gba_sf or 0
+        avg_sf = f"{gba_v / n:,.0f} SF" if gba_v > 0 and n > 0 else "—"
+        at = deal.asset_type.value.lower()
+        label = ("2 Bed" if "multifamily" in at
+                 else "Commercial" if ("office" in at or "retail" in at or "industrial" in at)
+                 else "Unit")
+        unit_mix_rows = [[label, str(n), avg_sf,
+                          f"${avg_mo:,.0f}/mo" if avg_mo > 0 else "Vacant", "—", "100%"]]
     _safe_pop(21, unit_mix_rows)
 
     # ── Table 23 (idx=22): Full Rent Roll ─────────────────────────
     rr_rows = []
-    for u in unit_mix:
-        rr_rows.append([
-            u.get("unit_id", "—"), u.get("unit_type", "—"),
-            f"{u.get('sf', 0):,.0f}" if u.get('sf') else "—",
-            "Vacant" if u.get("is_vacant") or u.get("status") == "Vacant" else u.get("tenant_name", "—"),
-            f"${u.get('monthly_rent', 0):,.0f}" if u.get('monthly_rent') else "$0",
-            f"${u.get('market_rent', 0):,.0f}" if u.get('market_rent') else "—",
-            "—", "—",
-            u.get("status", "Vacant"),
-        ])
-    if not rr_rows:
-        rr_rows = [["1", "Office", f"{gba:,.0f}", "Vacant", "$0", "—", "—", "—", "Vacant"]]
+    if units:
+        row_num = 1
+        for u in units:
+            ut = u.get("unit_type") or u.get("type") or "Unit"
+            sf = u.get("sf") or "—"
+            tenant = u.get("tenant_name") or u.get("tenant") or "Occupied"
+            curr = u.get("monthly_rent")
+            mkt = u.get("market_rent") or curr
+            ls = u.get("lease_start") or "—"
+            le = u.get("lease_end") or "—"
+            status = u.get("status") or "Occupied"
+            cnt = int(float(u.get("count") or 1))
+            for _ in range(cnt):
+                rr_rows.append([
+                    str(row_num), ut, str(sf), tenant,
+                    f"${float(curr):,.0f}" if curr else "Vacant",
+                    f"${float(mkt):,.0f}" if mkt else "—",
+                    ls, le, status
+                ])
+                row_num += 1
+    else:
+        gpr_yr1 = fo.gross_potential_rent or 0
+        n = deal.assumptions.num_units or 1
+        avg_mo = gpr_yr1 / 12 / n if n > 0 and gpr_yr1 > 0 else 0
+        gba_v = deal.assumptions.gba_sf or 0
+        at = deal.asset_type.value.lower()
+        label = ("2 Bed" if "multifamily" in at
+                 else "Commercial" if ("office" in at or "retail" in at or "industrial" in at)
+                 else "Unit")
+        for j in range(n):
+            rr_rows.append([
+                str(j + 1), label,
+                f"{gba_v / n:,.0f}" if gba_v > 0 else "—",
+                "Occupied",
+                f"${avg_mo:,.0f}" if avg_mo > 0 else "$0",
+                "—", "—", "—", "Occupied"
+            ])
     _safe_pop(22, rr_rows)
 
     # ── Table 24 (idx=23): Income Summary ─────────────────────────
@@ -1639,14 +1708,33 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
     _safe_pop(28, uw_rows)
 
     # ── Table 30 (idx=29): Sources & Uses ─────────────────────────
+    total_uses = fo.total_uses or 0
+    def _pct(amt):
+        return f"{amt / total_uses * 100:.1f}%" if total_uses > 0 and amt else ""
+    su_prof_dd = sum(
+        (getattr(a, k, 0) or 0)
+        for k in ['legal_closing', 'title_insurance', 'legal_bank', 'appraisal',
+                  'environmental', 'surveyor', 'architect', 'structural',
+                  'civil_eng', 'meps', 'legal_zoning', 'geotech']
+    )
+    su_hard = (getattr(a, 'const_hard', 0) or 0) + (getattr(a, 'const_reserve', 0) or 0)
+    su_orig = (fo.initial_loan_amount or 0) * (getattr(a, 'origination_fee_pct', 0.01) or 0.01)
     su_rows = [
-        ["Purchase Price", f"${a.purchase_price:,.0f}", "", "Acquisition"],
-        ["Transfer Tax", f"${a.purchase_price * a.transfer_tax_rate:,.0f}", "", "PA buyer share"],
-        ["Professional & DD", f"${ctx.get('total_project_cost', 0) - a.purchase_price - a.purchase_price * a.transfer_tax_rate:,.0f}", "", "Legal, title, inspections"],
-        ["Senior Debt", f"${initial_loan:,.0f}", "", f"{a.ltv_pct * 100:.0f}% LTV"],
-        ["Total Equity Required", f"${total_equity:,.0f}", "", "GP + LP"],
-        ["GP Equity", f"${ctx.get('gp_equity', 0):,.0f}", f"{a.gp_equity_pct * 100:.0f}%", ""],
-        ["LP Equity", f"${ctx.get('lp_equity', 0):,.0f}", f"{a.lp_equity_pct * 100:.0f}%", ""],
+        ["Purchase Price", f"${a.purchase_price:,.0f}", _pct(a.purchase_price), "Acquisition"],
+        ["Transfer Tax",
+         f"${a.purchase_price * getattr(a, 'transfer_tax_rate', 0.02139):,.0f}",
+         "", "PA buyer share"],
+        ["Professional & DD", f"${su_prof_dd:,.0f}", "", "Legal, title, inspections"],
+        ["Construction Hard Costs", f"${su_hard:,.0f}", "", "Renovation + reserve"],
+        ["Origination Fee", f"${su_orig:,.0f}", "", "1% of loan"],
+        ["Senior Debt", f"${fo.initial_loan_amount or 0:,.0f}",
+         f"{(fo.initial_loan_amount or 0) / max(total_uses, 1) * 100:.0f}% LTV",
+         f"{getattr(a, 'ltv_pct', 0.70) * 100:.0f}% LTV"],
+        ["Total Equity Required", f"${fo.total_equity_required or 0:,.0f}", "", "GP + LP"],
+        ["GP Equity", f"${fo.gp_equity or 0:,.0f}",
+         f"{getattr(a, 'gp_equity_pct', 0.10) * 100:.0f}%", ""],
+        ["LP Equity", f"${fo.lp_equity or 0:,.0f}",
+         f"{getattr(a, 'lp_equity_pct', 0.90) * 100:.0f}%", ""],
     ]
     _safe_pop(29, su_rows)
 
@@ -1667,19 +1755,25 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
 
     # ── Table 33 (idx=32): 10-Year Pro Forma Summary ──────────────
     pf_rows = []
-    for i in range(min(hold, 10)):
-        if i < len(proforma):
-            yr = proforma[i]
-            pf_rows.append([
-                f"Year {i + 1}",
-                f"${yr.get('gpr', 0):,.0f}",
-                f"${yr.get('egi', 0):,.0f}",
-                f"${yr.get('opex', 0):,.0f}",
-                f"${yr.get('noi', 0):,.0f}",
-                f"${yr.get('debt_service', 0):,.0f}",
-                f"${yr.get('fcf', 0):,.0f}",
-                f"{yr.get('cash_on_cash', 0) * 100:.1f}%",
-            ])
+    for yr in (fo.pro_forma_years or []):
+        yr_num = yr.get("year", "")
+        gpr_v = yr.get("gpr", 0) or yr.get("gross_potential_rent", 0)
+        egi_v = yr.get("egi", 0) or yr.get("egr", 0) or yr.get("effective_gross_income", 0)
+        opex_v = yr.get("opex", 0) or yr.get("total_opex", 0) or yr.get("operating_expenses", 0)
+        noi_v = yr.get("noi", 0)
+        ds_v = yr.get("debt_service", 0) or yr.get("annual_debt_service", 0)
+        cfbt_v = yr.get("cfbt", 0) or yr.get("fcf", 0) or yr.get("free_cash_flow", 0) or yr.get("cash_flow_before_tax", 0)
+        coc_v = yr.get("coc", 0) or yr.get("cash_on_cash", 0)
+        pf_rows.append([
+            f"Year {yr_num}",
+            f"${gpr_v:,.0f}",
+            f"${egi_v:,.0f}",
+            f"${opex_v:,.0f}",
+            f"${noi_v:,.0f}",
+            f"${ds_v:,.0f}",
+            f"${cfbt_v:,.0f}",
+            f"{coc_v * 100:.1f}%" if isinstance(coc_v, float) else str(coc_v),
+        ])
     _safe_pop(32, pf_rows)
 
     # ── Table 36 (idx=35): Exit Analysis ──────────────────────────
@@ -1840,10 +1934,6 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
     if color_count > 0:
         logger.info("TABLE COLORS: fixed %d data cells from dark to parchment", color_count)
 
-    # Fix 11: remove remaining sage green placeholder boxes
-    _remove_empty_placeholders(doc, deal)
-    _remove_empty_single_cell_tables(doc)
-
     logger.info("TABLE POPULATE: completed all data tables")
 
 
@@ -1889,6 +1979,9 @@ def _populate_docx(deal: DealData) -> Path:
             except Exception:
                 pass
     _strip_highlight(tpl.docx)
+
+    # Remove sage-green image placeholder boxes that have no image
+    _remove_image_placeholder_boxes(tpl.docx)
 
     # ── Populate data tables after render ─────────────────────────
     _populate_data_tables(tpl.docx, deal, ctx)
