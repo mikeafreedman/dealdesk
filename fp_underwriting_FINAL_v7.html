@@ -302,6 +302,16 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         .btn-add-comp:hover { background: #e8dfc8; }
         .comp-entry .fi { font-size: 12px; }
 
+        /* Rent Roll table */
+        .rr-table{width:100%;border-collapse:collapse;font-size:12px}
+        .rr-table th{background:var(--walnut);color:#fff;font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:7px 8px;text-align:left;white-space:nowrap}
+        .rr-table td{padding:4px 4px;border-bottom:1px solid var(--rule)}
+        .rr-table .fi{font-size:12px;padding:5px 7px;width:100%;box-sizing:border-box}
+        .rr-table select.fi{appearance:auto;padding-right:6px}
+        .rr-row-num{font-size:11px;color:var(--muted);font-weight:600;text-align:center;min-width:24px}
+        .btn-remove-rr{background:none;border:none;color:var(--ghost);cursor:pointer;font-size:14px;padding:2px 6px;border-radius:3px}
+        .btn-remove-rr:hover{background:#f5e6e6;color:var(--red)}
+
       </style>
 </head>
 <body>
@@ -348,9 +358,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       <div class="progress-strip">
         <div class="ps-step active"><div class="ps-num">1</div> Property Info</div>
         <div class="ps-line"></div>
-        <div class="ps-step"><div class="ps-num">2</div> Deal Pricing</div>
-        <div class="ps-line"></div>
-        <div class="ps-step"><div class="ps-num">3</div> Documents</div>
+        <div class="ps-step"><div class="ps-num">2</div> Documents</div>
       </div>
 
       <!-- STEP 1: PROPERTY INFORMATION -->
@@ -414,177 +422,34 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         </div>
       </div>
 
-      <!-- STEP 2: DEAL PRICING -->
-      <div class="step-label" style="margin-top:8px">Step 02 — Deal Pricing</div>
+      <!-- Hidden: Deal Pricing inputs removed — canonical versions on Assumptions screen -->
 
-      <!-- Acquisition & Pricing -->
-      <div class="card">
-        <div class="card-head" onclick="toggleCard(this)">
-          <div class="card-head-left"><div><div class="card-title">Acquisition &amp; Pricing</div><div class="card-sub">Purchase price &amp; renovation or construction costs for this deal</div></div></div>
-          <div class="card-toggle open">&#9660;</div>
-        </div>
-        <div class="card-body open">
-          <div class="fg2">
-            <div class="field"><label>Purchase Price ($)</label><input class="fi" type="text" placeholder="2,500,000" id="f_purchase_price"></div>
-            <div class="field">
-              <label>Renovation / Construction Costs ($)</label>
-              <input class="fi" type="text" placeholder="1,200,000" id="f_reno_cost">
-              <span class="field-note">Hard &amp; soft costs combined — enter 0 if not applicable</span>
-            </div>
-          </div>
-        </div>
+      <!-- Hidden: Dev Period, For-Sale, and Carry Cost inputs kept for JS payload builder -->
+      <div style="display:none" aria-hidden="true" id="card-dev-period">
+        <input type="text" id="f_const_period" value="0">
+        <input type="text" id="f_const_loan_rate" value="0">
+        <input type="text" id="f_leaseup_period" value="0">
+        <input type="text" id="f_leaseup_vacancy" value="0">
+        <input type="text" id="f_leaseup_concessions" value="0">
+        <input type="text" id="f_leaseup_marketing" value="0">
+      </div>
+      <div style="display:none" aria-hidden="true" id="card-for-sale">
+        <input type="text" id="f_sale_price" value="0">
+        <input type="text" id="f_sale_const_period" value="0">
+        <input type="text" id="f_sale_mkt_period" value="0">
+        <input type="text" id="f_sale_commission_pct" value="0">
+        <input type="text" id="f_carry_loan_interest" value="0">
+        <input type="text" id="f_carry_re_taxes" value="0">
+        <input type="text" id="f_carry_insurance" value="0">
+        <input type="text" id="f_carry_utilities" value="0">
+        <input type="text" id="f_carry_maintenance" value="0">
+        <input type="text" id="f_carry_hoa" value="0">
+        <input type="text" id="f_carry_marketing" value="0">
+        <input type="text" id="f_carry_staging" value="0">
       </div>
 
-      <!-- CRITICAL #1 — Development Period & Carry Costs (value_add strategy) -->
-      <div class="card conditional-field" id="card-dev-period">
-        <div class="card-head" onclick="toggleCard(this)">
-          <div class="card-head-left"><div>
-            <div class="card-title">Development Period &amp; Carry Costs</div>
-            <div class="card-sub">Construction timeline, lease-up assumptions, and pre-stabilization carry costs — required for value-add and new construction deals</div>
-          </div></div>
-          <div class="card-toggle open">&#9660;</div>
-        </div>
-        <div class="card-body open">
-          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5;background:rgba(74,110,80,0.07);border:1px solid var(--sage-lt);border-radius:4px;padding:8px 12px;">
-            These fields drive the carry cost calculations in the Excel model (§11A). Enter 0 for any item not applicable.
-          </div>
-          <div class="fg2" style="margin-bottom:10px">
-            <div class="field">
-              <label>Construction / Reno Period (Months)</label>
-              <input class="fi" type="text" placeholder="12" id="f_const_period" oninput="">
-              <span class="field-note">Number of months from acquisition to stabilization</span>
-            </div>
-            <div class="field">
-              <label>Construction Loan Rate (%)</label>
-              <input class="fi" type="text" placeholder="8.00" id="f_const_loan_rate" oninput="">
-              <span class="field-note">Annual interest rate on construction / bridge loan</span>
-            </div>
-          </div>
-          <div class="fg2" style="margin-bottom:10px">
-            <div class="field">
-              <label>Lease-Up Period (Months)</label>
-              <input class="fi" type="text" placeholder="6" id="f_leaseup_period" oninput="">
-              <span class="field-note">Months to reach stabilized occupancy post-construction</span>
-            </div>
-            <div class="field">
-              <label>Lease-Up Vacancy Rate (%)</label>
-              <input class="fi" type="text" placeholder="25" id="f_leaseup_vacancy" oninput="">
-              <span class="field-note">Effective vacancy during lease-up period</span>
-            </div>
-          </div>
-          <div class="fg2">
-            <div class="field">
-              <label>Lease-Up Concessions ($)</label>
-              <input class="fi" type="text" placeholder="0" id="f_leaseup_concessions" oninput="">
-              <span class="field-note">Free rent or move-in concessions during lease-up</span>
-            </div>
-            <div class="field">
-              <label>Marketing During Lease-Up ($)</label>
-              <input class="fi" type="text" placeholder="0" id="f_leaseup_marketing" oninput="">
-              <span class="field-note">Additional marketing spend during lease-up only</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- CRITICAL #2 — For Sale / Disposition Inputs (for_sale strategy) -->
-      <div class="card conditional-field" id="card-for-sale">
-        <div class="card-head" onclick="toggleCard(this)">
-          <div class="card-head-left"><div>
-            <div class="card-title">Sale &amp; Disposition Assumptions</div>
-            <div class="card-sub">Gross sale price, construction / sale timeline, and carry costs — required for flip, land, and for-sale strategies</div>
-          </div></div>
-          <div class="card-toggle open">&#9660;</div>
-        </div>
-        <div class="card-body open">
-          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5;background:rgba(92,61,38,0.07);border:1px solid var(--earth-light);border-radius:4px;padding:8px 12px;">
-            These fields feed directly into the Sale Analysis tab of the Excel model. Enter 0 for any carry item not applicable.
-          </div>
-          <div class="fg2" style="margin-bottom:10px">
-            <div class="field">
-              <label>Gross Sale Price / ARV ($)<span class="req-badge" style="margin-left:6px">Required</span></label>
-              <input class="fi" type="text" placeholder="e.g. 1,800,000" id="f_sale_price" oninput="">
-              <span class="field-note">After-Renovation Value — gross price before closing costs and commissions</span>
-            </div>
-            <div class="field">
-              <label>Construction / Reno Period (Months)</label>
-              <input class="fi" type="text" placeholder="6" id="f_sale_const_period" oninput="">
-              <span class="field-note">Time from acquisition to ready-to-sell condition</span>
-            </div>
-          </div>
-          <div class="fg2" style="margin-bottom:10px">
-            <div class="field">
-              <label>Marketing / Sale Period (Months)</label>
-              <input class="fi" type="text" placeholder="3" id="f_sale_mkt_period" oninput="">
-              <span class="field-note">Expected time on market before closing</span>
-            </div>
-            <div class="field">
-              <label>Broker Commission (%)</label>
-              <input class="fi" type="text" placeholder="5.00" id="f_sale_commission_pct" oninput="">
-              <span class="field-note">Total broker commission on sale — typically 4–6%</span>
-            </div>
-          </div>
-          <div style="font-size:10.5px;font-weight:600;color:var(--earth-mid);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;margin-top:4px">Monthly Carry Costs During Hold</div>
-          <div class="fg3" style="margin-bottom:8px">
-            <div class="field">
-              <label>Loan Interest Carry ($/mo)</label>
-              <input class="fi" type="text" placeholder="0" id="f_carry_loan_interest" oninput="">
-            </div>
-            <div class="field">
-              <label>Real Estate Taxes ($/mo)</label>
-              <input class="fi" type="text" placeholder="0" id="f_carry_re_taxes" oninput="">
-            </div>
-            <div class="field">
-              <label>Insurance ($/mo)</label>
-              <input class="fi" type="text" placeholder="0" id="f_carry_insurance" oninput="">
-            </div>
-          </div>
-          <div class="fg3" style="margin-bottom:8px">
-            <div class="field">
-              <label>Utilities ($/mo)</label>
-              <input class="fi" type="text" placeholder="0" id="f_carry_utilities" oninput="">
-            </div>
-            <div class="field">
-              <label>Property Maintenance ($/mo)</label>
-              <input class="fi" type="text" placeholder="0" id="f_carry_maintenance" oninput="">
-            </div>
-            <div class="field">
-              <label>HOA / Condo Fees ($/mo)</label>
-              <input class="fi" type="text" placeholder="0" id="f_carry_hoa" oninput="">
-            </div>
-          </div>
-          <div class="fg2">
-            <div class="field">
-              <label>Marketing / Advertising (Total $)</label>
-              <input class="fi" type="text" placeholder="0" id="f_carry_marketing" oninput="">
-              <span class="field-note">One-time total, not monthly</span>
-            </div>
-            <div class="field">
-              <label>Staging / Showing Costs (Total $)</label>
-              <input class="fi" type="text" placeholder="0" id="f_carry_staging" oninput="">
-              <span class="field-note">One-time total, not monthly</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Assumptions Callout -->
-      <div class="assum-callout">
-        <div class="assum-callout-icon">
-          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-        </div>
-        <div class="assum-callout-body">
-          <div class="assum-callout-title">All other financial parameters are managed in Assumptions</div>
-          <div class="assum-callout-desc">Debt structure (LTV, interest rate, loan term, amortization), hold period &amp; exit cap rate, target returns, equity structure (LP/GP split, preferred return), promote waterfall tiers, refinancing, revenue &amp; expense growth, vacancy, management fee, fees, and return hurdles are all configured once as firm-wide defaults and applied automatically to every underwriting run. You can review or update them at any time.</div>
-          <button class="assum-callout-btn" onclick="showScreen('assumptions')">
-            <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-            Open Assumptions &#8594;
-          </button>
-        </div>
-      </div>
-
-      <!-- STEP 3: DOCUMENT UPLOAD -->
-      <div class="step-label" style="margin-top:8px">Step 03 — Supporting Documents</div>
+      <!-- STEP 2: DOCUMENT UPLOAD -->
+      <div class="step-label" style="margin-top:8px">Step 02 — Supporting Documents</div>
       <div class="card">
         <div class="card-head" onclick="toggleCard(this)">
           <div class="card-head-left"><div><div class="card-title">
@@ -640,7 +505,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         </div>
       </div>
       <!-- Report Sections Toggle -->
-      <div class="step-label" style="margin-top:8px">Step 04 — Report Sections</div>
+      <div class="step-label" style="margin-top:8px">Step 03 — Report Sections</div>
       <div class="card">
         <div class="card-head" onclick="toggleCard(this)">
           <div class="card-head-left"><div><div class="card-title">Report Section Selection</div><div class="card-sub">Toggle which of the 22 sections to include in the generated PDF report for this deal</div></div></div>
@@ -790,7 +655,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       <div class="assum-page-header">
         <div>
           <div class="assum-page-title">Underwriting Assumptions</div>
-          <div class="assum-page-sub">Firm-wide defaults applied to every underwriting run. Saved automatically and pre-populated in all future analyses. Deal-specific overrides are made directly on the New Underwrite screen.</div>
+          <div class="assum-page-sub">Firm-wide defaults applied to every underwriting run. Saved automatically and pre-populated in all future analyses.</div>
         </div>
         <div class="assum-save-strip">
           <div class="save-status saved" id="save-status">&#10003; All changes saved</div>
@@ -803,468 +668,296 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         <div>Changes here apply to all <strong>future</strong> underwriting runs only. Existing completed analyses are not retroactively affected. &nbsp;<span class="reset-link" onclick="resetAssumptions()">Reset all to system defaults &#8594;</span></div>
       </div>
 
-      <!-- §1: PROPERTY INFORMATION -->
-      <div class="assum-section-label">1 &mdash; Property Information</div>
+      <!-- Hidden: API-derived fields kept for JS payload builder -->
+      <div style="display:none" aria-hidden="true">
+        <input type="text" id="a_gba_sf" value="">
+        <input type="text" id="a_lot_sf" value="">
+        <input type="text" id="a_year_built" value="">
+        <input type="text" id="a_transfer_tax" value="2.139">
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           DEAL INFORMATION
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label">1 &mdash; Deal Information</div>
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Property &amp; Project Defaults</div><div class="assum-card-sub">Default property classification and physical characteristics used when not provided in the deal form</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">Deal &amp; Property Defaults</div><div class="assum-card-sub">Core deal parameters — purchase price, units, strategy, and hold period</div></div>
         <div class="assum-card-body">
           <div class="assum-row">
-            <div><div class="assum-row-label">Hold Period</div><div class="assum-row-desc">Default number of years the property is held before disposition. Drives the length of the pro forma cash flow model.</div></div>
-            <div class="field"><label>Hold (Years)</label><input class="fi" type="text" id="a_hold_period" value="10" oninput="markChanged()"><span class="field-note">Excel default: 10 years</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+            <div><div class="assum-row-label">Purchase Price</div><div class="assum-row-desc">Acquisition price for the property. Drives loan sizing, per-unit metrics, and going-in cap rate.</div></div>
+            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="f_purchase_price" value="0" oninput="markChanged()"><span class="field-note">Required for every deal</span></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Number of Units</div><div class="assum-row-desc">Default unit count used when not extracted from the offering memorandum. Drives per-unit calculations throughout the model.</div></div>
+            <div><div class="assum-row-label" id="lbl_num_units">Number of Units</div><div class="assum-row-desc" id="desc_num_units">Total residential units (multifamily) or rentable suites/spaces (commercial). Drives per-unit calculations throughout the model.</div></div>
             <div class="field"><label>Units</label><input class="fi" type="text" id="a_num_units" value="" oninput="markChanged()"><span class="field-note">Overridden by AI extraction from OM</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Gross Building Area (SF)</div><div class="assum-row-desc">Total gross building area in square feet. Used for price-per-SF calculations.</div></div>
-            <div class="field"><label>GBA (SF)</label><input class="fi" type="text" id="a_gba_sf" value="" oninput="markChanged()"><span class="field-note">Overridden by AI extraction from OM</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Lot Size (SF)</div><div class="assum-row-desc">Total lot / parcel area in square feet.</div></div>
-            <div class="field"><label>Lot Size (SF)</label><input class="fi" type="text" id="a_lot_sf" value="" oninput="markChanged()"><span class="field-note">Overridden by AI extraction from OM</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Year Built</div><div class="assum-row-desc">Year the primary structure was originally constructed.</div></div>
-            <div class="field"><label>Year Built</label><input class="fi" type="text" id="a_year_built" value="" oninput="markChanged()"><span class="field-note">Overridden by AI extraction from OM</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+            <div><div class="assum-row-label">Hold Period</div><div class="assum-row-desc">Number of years the property is held before disposition. Drives the length of the pro forma cash flow model.</div></div>
+            <div class="field"><label>Hold (Years)</label><input class="fi" type="text" id="a_hold_period" value="10" oninput="markChanged()"><span class="field-note">Excel default: 10 years</span></div>
           </div>
         </div>
       </div>
 
-      <!-- §2: ACQUISITION -->
-      <div class="assum-section-label">2 &mdash; Acquisition</div>
+      <!-- ═══════════════════════════════════════════════════════════
+           UNDERWRITING ASSUMPTIONS
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label">2 &mdash; Underwriting Assumptions</div>
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Acquisition Cost Defaults</div><div class="assum-card-sub">Default transfer tax, closing costs, and professional fee assumptions applied to every deal</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">Income, Growth &amp; Vacancy</div><div class="assum-card-sub">Core underwriting parameters for revenue and expense projections</div></div>
         <div class="assum-card-body">
           <div class="assum-row">
-            <div><div class="assum-row-label">Transfer Tax Rate — Buyer's Share</div><div class="assum-row-desc">The buyer's portion of the total PA transfer tax. Total PA rate is 2% state + 3.278% Philadelphia city = ~4.278% combined, typically split 50/50 between buyer and seller. The buyer's share is entered here (~2.139%). Adjust for municipalities with different splits.</div></div>
-            <div class="field"><label>Buyer's Rate (%)</label><input class="fi" type="text" id="a_transfer_tax" value="2.139" oninput="markChanged()"><span class="field-note">Buyer pays ~½ of total 4.278% = 2.139%</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Closing Costs ($)</div><div class="assum-row-desc">Fixed closing cost estimate covering title insurance, bank legal, appraisal, and lender fees. Added to Sources &amp; Uses.</div></div>
-            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_closing_costs_fixed" value="75000" oninput="markChanged()"><span class="field-note">Excel default: $75,000</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Tenant Buyout</div><div class="assum-row-desc">Cost to buy out existing tenants at acquisition. Applied as a uses item in Sources &amp; Uses. Enter $0 if not applicable.</div></div>
-            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_tenant_buyout" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- §3: SOURCES & USES — PROFESSIONAL & DD COSTS -->
-      <div class="assum-section-label">3 &mdash; Sources &amp; Uses — Professional &amp; Due Diligence</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Professional &amp; Due Diligence Costs</div><div class="assum-card-sub">Default soft cost budget items for legal, title, and technical due diligence — enter $0 for items not applicable</div></div>
-        <div class="assum-card-body">
-          <div class="fg2" style="margin-bottom:4px">
-            <div class="field"><label>Legal — Closing &amp; Borrowing ($)</label><input class="fi" type="text" id="a_legal_closing" value="25000" oninput="markChanged()"></div>
-            <div class="field"><label>Title Insurance ($)</label><input class="fi" type="text" id="a_title_insurance" value="8000" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:4px">
-            <div class="field"><label>Legal — Bank ($)</label><input class="fi" type="text" id="a_legal_bank" value="5000" oninput="markChanged()"></div>
-            <div class="field"><label>Appraisal ($)</label><input class="fi" type="text" id="a_appraisal" value="5000" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:4px">
-            <div class="field"><label>Environmental Phase I/II ($)</label><input class="fi" type="text" id="a_environmental" value="6000" oninput="markChanged()"></div>
-            <div class="field"><label>Surveyor ($)</label><input class="fi" type="text" id="a_surveyor" value="3500" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:4px">
-            <div class="field"><label>Architect ($)</label><input class="fi" type="text" id="a_architect" value="0" oninput="markChanged()"></div>
-            <div class="field"><label>Structural Engineer ($)</label><input class="fi" type="text" id="a_structural" value="0" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:4px">
-            <div class="field"><label>Civil Engineer ($)</label><input class="fi" type="text" id="a_civil_eng" value="0" oninput="markChanged()"></div>
-            <div class="field"><label>MEPs ($)</label><input class="fi" type="text" id="a_meps" value="0" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2">
-            <div class="field"><label>Legal — Zoning ($)</label><input class="fi" type="text" id="a_legal_zoning" value="0" oninput="markChanged()"></div>
-            <div class="field"><label>GeoTech ($)</label><input class="fi" type="text" id="a_geotech" value="0" oninput="markChanged()"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- §4: FINANCING COSTS -->
-      <div class="assum-section-label">4 &mdash; Sources &amp; Uses — Financing, Soft Costs &amp; Hard Costs</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Financing &amp; Carry Costs</div><div class="assum-card-sub">Default acquisition fee, mortgage carry, mezzanine, and other financing cost items</div></div>
-        <div class="assum-card-body">
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Acquisition Fee ($)</label><input class="fi" type="text" id="a_acq_fee_fixed" value="25000" oninput="markChanged()"><span class="field-note">Excel default: $25,000</span></div>
-            <div class="field"><label>Mortgage Interest (Carry) ($)</label><input class="fi" type="text" id="a_mortgage_carry" value="0" oninput="markChanged()"><span class="field-note">Interest carry during lease-up period</span></div>
-          </div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Mortgage Fees / Origination ($)</label><input class="fi" type="text" id="a_mortgage_fees" value="17500" oninput="markChanged()"><span class="field-note">Calculated from origination % above</span></div>
-            <div class="field"><label>Mezzanine Interest ($)</label><input class="fi" type="text" id="a_mezz_interest" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Soft Costs</div><div class="assum-card-sub">Default soft cost budget items — working capital, marketing, carry, and development costs</div></div>
-        <div class="assum-card-body">
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Working Capital ($)</label><input class="fi" type="text" id="a_working_capital" value="15000" oninput="markChanged()"></div>
-            <div class="field"><label>Marketing ($)</label><input class="fi" type="text" id="a_marketing" value="5000" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Real Estate Tax (Carry) ($)</label><input class="fi" type="text" id="a_re_tax_carry" value="0" oninput="markChanged()"></div>
-            <div class="field"><label>Property / BR / Contractor Ins. ($)</label><input class="fi" type="text" id="a_prop_ins_carry" value="0" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Development Fee ($)</label><input class="fi" type="text" id="a_dev_fee" value="0" oninput="markChanged()"></div>
-            <div class="field"><label>Development Equity Pref Return ($)</label><input class="fi" type="text" id="a_dev_pref" value="0" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2">
-            <div class="field"><label>Permits / Expediting ($)</label><input class="fi" type="text" id="a_permits" value="0" oninput="markChanged()"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Hard Costs</div><div class="assum-card-sub">Default construction and hard cost budget items — enter $0 for items not applicable to stabilized hold deals</div></div>
-        <div class="assum-card-body">
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Stormwater Management System ($)</label><input class="fi" type="text" id="a_stormwater" value="0" oninput="markChanged()"></div>
-            <div class="field"><label>Demolition &amp; Site Work ($)</label><input class="fi" type="text" id="a_demo" value="0" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Construction — Hard Costs ($)</label><input class="fi" type="text" id="a_const_hard" value="0" oninput="markChanged()"></div>
-            <div class="field"><label>Construction — Reserve ($)</label><input class="fi" type="text" id="a_const_reserve" value="0" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2">
-            <div class="field"><label>GC Profit &amp; Overhead ($)</label><input class="fi" type="text" id="a_gc_overhead" value="0" oninput="markChanged()"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Sources — Additional Capital</div><div class="assum-card-sub">Default additional capital source assumptions for mezzanine debt, tax credits, and grants</div></div>
-        <div class="assum-card-body">
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Mezzanine Debt ($)</label><input class="fi" type="text" id="a_mezz_debt" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
-            <div class="field"><label>Tax Credit Equity ($)</label><input class="fi" type="text" id="a_tax_credit_eq" value="0" oninput="markChanged()"><span class="field-note">LIHTC or historic tax credits</span></div>
-          </div>
-          <div class="fg2">
-            <div class="field"><label>Grants / Subsidies ($)</label><input class="fi" type="text" id="a_grants" value="0" oninput="markChanged()"><span class="field-note">City, state, or federal grants</span></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- §5: INITIAL FINANCING -->
-      <div class="assum-section-label">5 &mdash; Initial Financing</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Permanent Loan Parameters</div><div class="assum-card-sub">Default loan sizing, terms, and origination fee for the initial permanent loan</div></div>
-        <div class="assum-card-body">
-          <div class="assum-row">
-            <div><div class="assum-row-label">Loan-to-Value (LTV)</div><div class="assum-row-desc">LTV ratio for the permanent loan. The model uses the lower of this LTV or the DSCR-constrained maximum.</div></div>
-            <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_ltv_pct" value="70.00" oninput="markChanged()"><span class="field-note">Agency range: 65–75%</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Interest Rate</div><div class="assum-row-desc">Annual interest rate on the permanent loan. Used to calculate monthly debt service and DSCR.</div></div>
-            <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_interest_rate" value="6.50" oninput="markChanged()"><span class="field-note">Adjust to current market conditions</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Amortization Period</div><div class="assum-row-desc">Full amortization schedule in years — determines P&amp;I payment size alongside the interest rate.</div></div>
-            <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_amort_years" value="30" oninput="markChanged()"><span class="field-note">Most commercial loans: 25–30 yrs</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Loan Term</div><div class="assum-row-desc">Balloon / maturity term of the permanent loan in years.</div></div>
-            <div class="field"><label>Term (Years)</label><input class="fi" type="text" id="a_loan_term" value="10" oninput="markChanged()"><span class="field-note">Typical: 5, 7, or 10-year term</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Origination Fee</div><div class="assum-row-desc">Lender origination / loan fee as a percentage of the initial loan amount. Applied as a financing cost in Sources &amp; Uses.</div></div>
-            <div class="field"><label>Fee (%)</label><input class="fi" type="text" id="a_origination_fee" value="1.00" oninput="markChanged()"><span class="field-note">Excel default: 1.0%</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Interest-Only Period</div><div class="assum-row-desc">Number of months of interest-only payments at the start of the loan before principal amortization begins.</div></div>
-            <div class="field"><label>I/O Period (Months)</label><input class="fi" type="text" id="a_io_period" value="0" oninput="markChanged()"><span class="field-note">0 = fully amortizing from day 1</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- §6-8: REFINANCING EVENTS -->
-      <div class="assum-section-label">6–8 &mdash; Refinancing Events</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Refinancing Events</div><div class="assum-card-sub">Model up to 3 cash-out refinance events — each toggled independently with its own loan parameters</div></div>
-        <div class="assum-card-body">
-          <div style="font-size:11px;color:var(--muted);margin-bottom:16px;line-height:1.5">Toggle each event on to include it as a default in every new underwriting run. Events fire in the year specified and replace the outstanding loan balance.</div>
-
-          <!-- Refi Event 1 -->
-          <div class="refi-event-header">
-            <div class="refi-event-num">Refi Event 1</div>
-            <label class="toggle" style="margin-left:auto"><input type="checkbox" id="a_refi1_on" checked onchange="toggleRefiEvent(1);markChanged()"><span class="toggle-slider"></span></label>
-            <div class="refi-on-lbl" id="refi1_lbl" style="color:var(--green)">On</div>
-          </div>
-          <div class="refi-event-fields" id="refi1_fields">
-            <div class="fg3" style="margin-bottom:8px">
-              <div class="field"><label>Year</label><input class="fi" type="text" id="a_refi1_year" value="5" oninput="markChanged()"></div>
-              <div class="field"><label>Appraised Value ($)</label><input class="fi" type="text" id="a_refi1_appraised" value="3200000" oninput="markChanged()"></div>
-              <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_refi1_ltv" value="70" oninput="markChanged()"></div>
-            </div>
-            <div class="fg3" style="margin-bottom:8px">
-              <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_refi1_rate" value="6.00" oninput="markChanged()"></div>
-              <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_refi1_amort" value="30" oninput="markChanged()"></div>
-              <div class="field"><label>Loan Term (Years)</label><input class="fi" type="text" id="a_refi1_term" value="10" oninput="markChanged()"></div>
-            </div>
-            <div class="fg2" style="margin-top:2px">
-              <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi1_orig_fee" value="1.00" oninput="markChanged()"></div>
-              <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi1_prepay" value="1.00" oninput="markChanged()"><span class="field-note">% of outstanding balance at payoff</span></div>
-            </div>
-            <div class="fg2" style="margin-top:8px">
-              <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi1_closing" value="25000" oninput="markChanged()"></div>
-            </div>
-          </div>
-
-          <div style="height:1px;background:var(--rule);margin:16px 0"></div>
-
-          <!-- Refi Event 2 -->
-          <div class="refi-event-header">
-            <div class="refi-event-num">Refi Event 2</div>
-            <label class="toggle" style="margin-left:auto"><input type="checkbox" id="a_refi2_on" onchange="toggleRefiEvent(2);markChanged()"><span class="toggle-slider"></span></label>
-            <div class="refi-on-lbl" id="refi2_lbl">Off</div>
-          </div>
-          <div class="refi-event-fields refi-collapsed" id="refi2_fields">
-            <div class="fg3" style="margin-bottom:8px">
-              <div class="field"><label>Year</label><input class="fi" type="text" id="a_refi2_year" value="8" oninput="markChanged()"></div>
-              <div class="field"><label>Appraised Value ($)</label><input class="fi" type="text" id="a_refi2_appraised" value="3800000" oninput="markChanged()"></div>
-              <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_refi2_ltv" value="65" oninput="markChanged()"></div>
-            </div>
-            <div class="fg3" style="margin-bottom:8px">
-              <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_refi2_rate" value="5.50" oninput="markChanged()"></div>
-              <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_refi2_amort" value="30" oninput="markChanged()"></div>
-              <div class="field"><label>Loan Term (Years)</label><input class="fi" type="text" id="a_refi2_term" value="10" oninput="markChanged()"></div>
-            </div>
-            <div class="fg2" style="margin-top:2px">
-              <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi2_orig_fee" value="1.00" oninput="markChanged()"></div>
-              <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi2_prepay" value="1.00" oninput="markChanged()"></div>
-            </div>
-            <div class="fg2" style="margin-top:8px">
-              <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi2_closing" value="25000" oninput="markChanged()"></div>
-            </div>
-          </div>
-
-          <div style="height:1px;background:var(--rule);margin:16px 0"></div>
-
-          <!-- Refi Event 3 -->
-          <div class="refi-event-header">
-            <div class="refi-event-num">Refi Event 3</div>
-            <label class="toggle" style="margin-left:auto"><input type="checkbox" id="a_refi3_on" onchange="toggleRefiEvent(3);markChanged()"><span class="toggle-slider"></span></label>
-            <div class="refi-on-lbl" id="refi3_lbl">Off</div>
-          </div>
-          <div class="refi-event-fields refi-collapsed" id="refi3_fields">
-            <div class="fg3" style="margin-bottom:8px">
-              <div class="field"><label>Year</label><input class="fi" type="text" id="a_refi3_year" value="0" oninput="markChanged()"></div>
-              <div class="field"><label>Appraised Value ($)</label><input class="fi" type="text" id="a_refi3_appraised" value="0" oninput="markChanged()"></div>
-              <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_refi3_ltv" value="65" oninput="markChanged()"></div>
-            </div>
-            <div class="fg3" style="margin-bottom:8px">
-              <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_refi3_rate" value="5.50" oninput="markChanged()"></div>
-              <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_refi3_amort" value="30" oninput="markChanged()"></div>
-              <div class="field"><label>Loan Term (Years)</label><input class="fi" type="text" id="a_refi3_term" value="10" oninput="markChanged()"></div>
-            </div>
-            <div class="fg2" style="margin-top:2px">
-              <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi3_orig_fee" value="1.00" oninput="markChanged()"></div>
-              <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi3_prepay" value="0" oninput="markChanged()"></div>
-            </div>
-            <div class="fg2" style="margin-top:8px">
-              <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi3_closing" value="0" oninput="markChanged()"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- §9: INCOME -->
-      <div class="assum-section-label">9 &mdash; Operating Assumptions — Income</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Income &amp; Growth Assumptions</div><div class="assum-card-sub">Vacancy, rent growth, loss to lease, and ancillary income defaults</div></div>
-        <div class="assum-card-body">
-          <div class="assum-row">
-            <div><div class="assum-row-label">Vacancy &amp; Bad Debt Rate</div><div class="assum-row-desc">Combined vacancy and credit loss as a percentage of gross potential rent. Applied as a deduction from GPR to arrive at Effective Gross Income.</div></div>
+            <div><div class="assum-row-label">Vacancy &amp; Bad Debt Rate</div><div class="assum-row-desc">Combined vacancy and credit loss as a percentage of GPR. Applied as a deduction to arrive at Effective Gross Income.</div></div>
             <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_vacancy" value="7.50" oninput="markChanged()"><span class="field-note">Excel default: 7.5% (incl. bad debt)</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
           </div>
           <div class="assum-row">
             <div><div class="assum-row-label">Annual Rent Growth</div><div class="assum-row-desc">Year-over-year percentage increase applied to all rental income beginning in Year 2.</div></div>
-            <div class="field"><label>Growth (% / yr)</label><input class="fi" type="text" id="a_rev_growth" value="3.00" oninput="markChanged()"><span class="field-note">Philadelphia metro avg: 2.5–3.5% / yr</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
+            <div class="field"><label>Growth (% / yr)</label><input class="fi" type="text" id="a_rev_growth" value="3.00" oninput="markChanged()"><span class="field-note">Philadelphia metro avg: 2.5–3.5%</span></div>
           </div>
           <div class="assum-row">
             <div><div class="assum-row-label">Annual Expense Growth</div><div class="assum-row-desc">Year-over-year percentage increase applied to all operating expense line items beginning in Year 2.</div></div>
             <div class="field"><label>Growth (% / yr)</label><input class="fi" type="text" id="a_exp_growth" value="3.00" oninput="markChanged()"><span class="field-note">CPI-based; Excel default: 3.0%</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
           </div>
           <div class="assum-row">
             <div><div class="assum-row-label">Loss to Lease</div><div class="assum-row-desc">Percentage discount from market rent representing the gap between in-place rents and current market rents.</div></div>
             <div class="field"><label>Loss to Lease (%)</label><input class="fi" type="text" id="a_loss_to_lease" value="3.00" oninput="markChanged()"><span class="field-note">Excel default: 3.0%</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">CAM Reimbursements (Year 1)</div><div class="assum-row-desc">Common area maintenance reimbursements received from commercial tenants in Year 1. Enter $0 for pure residential properties.</div></div>
-            <div class="field"><label>Amount ($ / yr)</label><input class="fi" type="text" id="a_cam_reimbursements" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0 (residential deals)</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Fee Income (Year 1)</div><div class="assum-row-desc">Ancillary fee income in Year 1 (laundry, parking, storage, etc.).</div></div>
-            <div class="field"><label>Amount ($ / yr)</label><input class="fi" type="text" id="a_fee_income" value="6000" oninput="markChanged()"><span class="field-note">Excel default: $6,000</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- §10: FIXED EXPENSES -->
-      <div class="assum-section-label">10 &mdash; Operating Expenses — Fixed (Year 1)</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Fixed Operating Expenses</div><div class="assum-card-sub">Year 1 fixed expense line items — grown annually by the expense growth rate</div></div>
-        <div class="assum-card-body">
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Real Estate Taxes ($)</label><input class="fi" type="text" id="a_re_taxes" value="45000" oninput="markChanged()"></div>
-            <div class="field"><label>Insurance ($)</label><input class="fi" type="text" id="a_insurance" value="18000" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Gas ($)</label><input class="fi" type="text" id="a_gas" value="12000" oninput="markChanged()"></div>
-            <div class="field"><label>Water &amp; Sewer ($)</label><input class="fi" type="text" id="a_water_sewer" value="14000" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Electric ($)</label><input class="fi" type="text" id="a_electric" value="10000" oninput="markChanged()"></div>
-            <div class="field"><label>License / Inspections ($)</label><input class="fi" type="text" id="a_license" value="2500" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2">
-            <div class="field"><label>Trash Removal ($)</label><input class="fi" type="text" id="a_trash" value="8000" oninput="markChanged()"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- §11: VARIABLE EXPENSES -->
-      <div class="assum-section-label">11 &mdash; Operating Expenses — Variable (Year 1)</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Variable Operating Expenses</div><div class="assum-card-sub">Year 1 variable expense line items including management fee — grown annually by expense growth rate</div></div>
-        <div class="assum-card-body">
-          <div class="assum-row">
-            <div><div class="assum-row-label">Management Fee</div><div class="assum-row-desc">Property management fee as a percentage of Effective Gross Income charged by the management company.</div></div>
-            <div class="field"><label>Fee (% of EGI)</label><input class="fi" type="text" id="a_mgmt_fee" value="6.00" oninput="markChanged()"><span class="field-note">Excel default: 6%; industry: 5–8%</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div style="height:1px;background:var(--rule);margin:12px 0"></div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Salaries ($)</label><input class="fi" type="text" id="a_salaries" value="24000" oninput="markChanged()"></div>
-            <div class="field"><label>Repairs ($)</label><input class="fi" type="text" id="a_repairs" value="8000" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Exterminator ($)</label><input class="fi" type="text" id="a_exterminator" value="3600" oninput="markChanged()"></div>
-            <div class="field"><label>Cleaning / Maintenance ($)</label><input class="fi" type="text" id="a_cleaning" value="6000" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Turnover ($)</label><input class="fi" type="text" id="a_turnover" value="5000" oninput="markChanged()"></div>
-            <div class="field"><label>Advertising ($)</label><input class="fi" type="text" id="a_advertising" value="4000" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2" style="margin-bottom:8px">
-            <div class="field"><label>Landscape / Snow ($)</label><input class="fi" type="text" id="a_landscape" value="6000" oninput="markChanged()"></div>
-            <div class="field"><label>Admin / Legal / Acct. ($)</label><input class="fi" type="text" id="a_admin" value="5000" oninput="markChanged()"></div>
-          </div>
-          <div class="fg2">
-            <div class="field"><label>Office / Phone / Supplies ($)</label><input class="fi" type="text" id="a_office" value="3000" oninput="markChanged()"></div>
-            <div class="field"><label>Miscellaneous ($)</label><input class="fi" type="text" id="a_misc_expense" value="2000" oninput="markChanged()"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- §12: BELOW THE LINE -->
-      <div class="assum-section-label">12 &mdash; Below-the-Line Items</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Below-the-Line &amp; Reserve Items</div><div class="assum-card-sub">Capital reserves and below-NOI deductions applied annually</div></div>
-        <div class="assum-card-body">
-          <div class="assum-row">
-            <div><div class="assum-row-label">Capital Reserves</div><div class="assum-row-desc">Annual per-unit replacement reserve for capital expenditures. Applied as a below-the-line NOI deduction. Lenders typically require $200–$400/unit/year.</div></div>
-            <div class="field"><label>Reserve ($ / Unit / Yr)</label><input class="fi" type="text" id="a_cap_reserve" value="400" oninput="markChanged()"><span class="field-note">Excel default: $400/unit/yr</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Commissions (Year 1)</div><div class="assum-row-desc">Leasing commissions paid in Year 1 for tenant procurement. Applied as a below-the-line deduction.</div></div>
-            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_commissions" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Renovations (Year 1)</div><div class="assum-row-desc">Initial renovation budget applied in Year 1 as a below-the-line cash outflow. For value-add deals not fully captured in Sources &amp; Uses hard costs.</div></div>
-            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_renovations_yr1" value="0" oninput="markChanged()"><span class="field-note">Excel default: $0</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-        </div>
-      </div>
-      <div class="assum-section-label">13 &mdash; Exit Assumptions</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Exit &amp; Disposition Defaults</div><div class="assum-card-sub">Exit cap rate and disposition costs applied at the end of the hold period</div></div>
-        <div class="assum-card-body">
-          <div class="assum-row">
-            <div><div class="assum-row-label">Exit Cap Rate</div><div class="assum-row-desc">Capitalization rate applied to Year N+1 NOI to calculate terminal sale value. Typically 25–50 bps above the entry cap.</div></div>
+            <div><div class="assum-row-label">Exit Cap Rate</div><div class="assum-row-desc">Capitalization rate applied to Year N+1 NOI to calculate terminal sale value. Typically 25–50 bps above entry cap.</div></div>
             <div class="field"><label>Exit Cap (%)</label><input class="fi" type="text" id="a_exit_cap_rate" value="7.00" oninput="markChanged()"><span class="field-note">Excel default: 7.0%</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge market">Market-Based</div></div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Disposition Costs</div><div class="assum-row-desc">Total transaction costs at disposition as a percentage of gross sale price (broker commission, transfer tax, legal, and closing costs).</div></div>
-            <div class="field"><label>Disposition Costs (%)</label><input class="fi" type="text" id="a_disp_fee" value="2.00" oninput="markChanged()"><span class="field-note">Excel default: 2.0% of sale price</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
           </div>
         </div>
       </div>
 
-      <!-- §14: WATERFALL / PARTNERSHIP -->
-      <div class="assum-section-label">14 &mdash; Waterfall &amp; Partnership Structure</div>
+      <!-- ═══════════════════════════════════════════════════════════
+           CONSTRUCTION & RENOVATION
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label">3 &mdash; Construction &amp; Renovation</div>
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Equity Structure</div><div class="assum-card-sub">GP/LP split, waterfall type, and preferred return</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">Construction &amp; Renovation Costs</div><div class="assum-card-sub">Hard costs recorded in Sources &amp; Uses and below-the-line renovation CapEx</div></div>
         <div class="assum-card-body">
           <div class="assum-row">
-            <div><div class="assum-row-label">GP Equity Contribution</div><div class="assum-row-desc">Percentage of total equity contributed by the general partner / sponsor. Set to 0% for no GP co-invest.</div></div>
-            <div class="field"><label>GP Equity (%)</label><input class="fi" type="text" id="a_gp_equity_pct" value="10" oninput="markChanged()"><span class="field-note">0% = no GP co-invest</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+            <div><div class="assum-row-label">Construction Budget &mdash; Hard Costs (S&amp;U)</div><div class="assum-row-desc">GC contract amount &mdash; recorded in Sources &amp; Uses hard costs.</div></div>
+            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_const_hard" value="0" oninput="markChanged()"><span class="field-note">GC contract amount &mdash; goes into Sources &amp; Uses</span></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">LP Equity Contribution</div><div class="assum-row-desc">Percentage of total equity contributed by limited partner investors. Must sum to 100% with GP equity.</div></div>
-            <div class="field"><label>LP Equity (%)</label><input class="fi" type="text" id="a_lp_equity_pct" value="90" oninput="markChanged()"><span class="field-note">Must sum to 100% with GP</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+            <div><div class="assum-row-label">Year-1 Renovation / CapEx (Pro Forma Below-the-Line)</div><div class="assum-row-desc">Annual CapEx charge in Year 1 of the Pro Forma. Separate from the S&amp;U construction budget.</div></div>
+            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_renovations_yr1" value="0" oninput="markChanged()"><span class="field-note">Pro Forma below-the-line item &mdash; NOT the S&amp;U construction budget</span></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Preferred Return (Tier 1 Hurdle)</div><div class="assum-row-desc">Annual preferred return paid to LP investors before promote kicks in. LP receives 100% of distributions up to this threshold.</div></div>
-            <div class="field"><label>Pref Return (%)</label><input class="fi" type="text" id="a_pref_return" value="8.00" oninput="markChanged()"><span class="field-note">Standard LP pref: 6–8% annually</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+            <div><div class="assum-row-label">Construction Contingency Reserve</div><div class="assum-row-desc">Reserve for construction cost overruns. Recorded as a line item in Sources &amp; Uses.</div></div>
+            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_const_reserve" value="0" oninput="markChanged()"><span class="field-note">Typically 5–10% of hard costs</span></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Waterfall Type</div><div class="assum-row-desc">Select Full (tiered promote) or Simple (single LP/GP split across all distributions above preferred return). Full is the default for institutional structures.</div></div>
+            <div><div class="assum-row-label">Construction Period (Months)</div><div class="assum-row-desc">Set to 0 for stabilized acquisitions. Drives carry cost calculation.</div></div>
+            <div class="field"><label>Const. Period (Mo)</label><input class="fi" type="text" id="a_construction_months" value="0" oninput="markChanged()"><span class="field-note">0 = no construction period</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Lease-Up Period (Months)</div><div class="assum-row-desc">Months from CO/delivery to stabilized occupancy. Drives pre-stabilization vacancy.</div></div>
+            <div class="field"><label>Lease-Up (Mo)</label><input class="fi" type="text" id="a_leaseup_months" value="0" oninput="markChanged()"><span class="field-note">Value-add: typically 6&ndash;18 mo</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           LEASING COST ASSUMPTIONS
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label">3B &mdash; Leasing Cost Assumptions</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Leasing Cost Assumptions</div><div class="assum-card-sub">TI allowances, leasing commissions, and renewal defaults applied to the rent roll</div></div>
+        <div class="assum-card-body">
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>TI &mdash; New Lease ($/SF)</label><input class="fi" type="text" id="a_ti_new_psf" value="0" oninput="markChanged()"><span class="field-note">$0 if no TI offered</span></div>
+            <div class="field"><label>TI &mdash; Renewal ($/SF)</label><input class="fi" type="text" id="a_ti_renewal_psf" value="0" oninput="markChanged()"><span class="field-note">Typically lower than new lease TI</span></div>
+            <div class="field"><label>Commission &mdash; New (%&nbsp;GLV)</label><input class="fi" type="text" id="a_commission_new_pct" value="5.0" oninput="markChanged()"><span class="field-note">% of rent &times; SF &times; term. Standard: 4&ndash;6%</span></div>
+          </div>
+          <div class="fg3">
+            <div class="field"><label>Commission &mdash; Renewal (%&nbsp;GLV)</label><input class="fi" type="text" id="a_commission_renewal_pct" value="2.5" oninput="markChanged()"><span class="field-note">Standard: 2&ndash;3%</span></div>
+            <div class="field"><label>Default Renewal Prob. (%)</label><input class="fi" type="text" id="a_renewal_probability_default" value="70" oninput="markChanged()"><span class="field-note">Override per tenant in Rent Roll</span></div>
+            <div class="field"><label>Lease Term &mdash; New (Yrs)</label><input class="fi" type="text" id="a_lease_term_years" value="5" oninput="markChanged()"><span class="field-note">Used for GLV calc. Commercial: 3&ndash;10 yr</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           INITIAL FINANCING
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label">4 &mdash; Initial Financing</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Permanent Loan Parameters</div><div class="assum-card-sub">Loan sizing, terms, and origination fee for the initial permanent loan</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">Loan-to-Value (LTV)</div><div class="assum-row-desc">LTV ratio for the permanent loan. The model uses the lower of this LTV or the DSCR-constrained maximum.</div></div>
+            <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_ltv_pct" value="70.00" oninput="markChanged()"><span class="field-note">Agency range: 65–75%</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Interest Rate</div><div class="assum-row-desc">Annual interest rate on the permanent loan. Used to calculate monthly debt service and DSCR.</div></div>
+            <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_interest_rate" value="6.50" oninput="markChanged()"><span class="field-note">Adjust to current market conditions</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Amortization Period</div><div class="assum-row-desc">Full amortization schedule in years &mdash; determines P&amp;I payment size alongside the interest rate.</div></div>
+            <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_amort_years" value="30" oninput="markChanged()"><span class="field-note">Most commercial loans: 25–30 yrs</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Loan Term</div><div class="assum-row-desc">Balloon / maturity term of the permanent loan in years.</div></div>
+            <div class="field"><label>Term (Years)</label><input class="fi" type="text" id="a_loan_term" value="10" oninput="markChanged()"><span class="field-note">Typical: 5, 7, or 10-year term</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Interest-Only Period</div><div class="assum-row-desc">Months of interest-only payments before principal amortization begins.</div></div>
+            <div class="field"><label>I/O Period (Months)</label><input class="fi" type="text" id="a_io_period" value="0" oninput="markChanged()"><span class="field-note">0 = fully amortizing from day 1</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Origination Fee</div><div class="assum-row-desc">Lender origination fee as a percentage of the initial loan amount. Applied as a financing cost in Sources &amp; Uses.</div></div>
+            <div class="field"><label>Fee (%)</label><input class="fi" type="text" id="a_origination_fee" value="1.00" oninput="markChanged()"><span class="field-note">Excel default: 1.0%</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           REFINANCE EVENTS
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label">5 &mdash; Refinance Event 1</div>
+      <div class="assum-card">
+        <div class="assum-card-head" style="display:flex;align-items:center;justify-content:space-between">
+          <div><div class="assum-card-title">Refinance 1</div><div class="assum-card-sub">Cash-out refinance replacing the initial permanent loan</div></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <label class="toggle"><input type="checkbox" id="a_refi1_on" checked onchange="toggleRefiEvent(1);markChanged()"><span class="toggle-slider"></span></label>
+            <div class="refi-on-lbl" id="refi1_lbl" style="color:var(--green)">On</div>
+          </div>
+        </div>
+        <div class="assum-card-body" id="refi1_fields">
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Timing (Year)</label><input class="fi" type="text" id="a_refi1_year" value="5" oninput="markChanged()"></div>
+            <div class="field"><label>Appraisal Cap Rate (%)</label><input class="fi" type="number" id="a_refi1_cap_rate" step="0.001" min="0" max="100" oninput="markChanged()"><span class="field-note">Defaults to exit cap rate</span></div>
+            <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_refi1_ltv" value="70" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
             <div class="field">
-              <label>Waterfall Type</label>
-              <select class="fi" id="a_waterfall_type" oninput="markChanged()">
-                <option value="1">Full — Tiered Promote (default)</option>
-                <option value="0">Simple — Single LP/GP Split</option>
-              </select>
-              <span class="field-note">Excel: 1 = Full waterfall; 0 = Simple split</span>
+              <label>Appraised Value ($)</label>
+              <div class="computed-field" id="a_refi1_appraised_display" style="background:#E8F0E9;padding:6px 10px;border-radius:4px;font-style:italic;color:#5C3D26">—</div>
+              <input type="hidden" id="a_refi1_appraised" value="0">
+              <span class="field-note">Calculated: NOI in refi year &divide; appraisal cap rate</span>
             </div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Interest Rate (%)</label><input class="fi" type="text" id="a_refi1_rate" value="6.00" oninput="markChanged()"></div>
+            <div class="field"><label>Amortization (Years)</label><input class="fi" type="text" id="a_refi1_amort" value="30" oninput="markChanged()"></div>
+            <div class="field"><label>Loan Term (Years)</label><input class="fi" type="text" id="a_refi1_term" value="10" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3">
+            <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi1_orig_fee" value="1.00" oninput="markChanged()"></div>
+            <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi1_prepay" value="1.00" oninput="markChanged()"><span class="field-note">% of outstanding balance</span></div>
+            <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi1_closing" value="25000" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="assum-section-label">6 &mdash; Refinance Event 2</div>
+      <div class="assum-card">
+        <div class="assum-card-head" style="display:flex;align-items:center;justify-content:space-between">
+          <div><div class="assum-card-title">Refinance 2</div><div class="assum-card-sub">Second refinance event &mdash; replaces outstanding loan from Refi 1 or initial loan</div></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <label class="toggle"><input type="checkbox" id="a_refi2_on" onchange="toggleRefiEvent(2);markChanged()"><span class="toggle-slider"></span></label>
+            <div class="refi-on-lbl" id="refi2_lbl">Off</div>
+          </div>
+        </div>
+        <div class="assum-card-body refi-collapsed" id="refi2_fields">
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Timing (Year)</label><input class="fi" type="text" id="a_refi2_year" value="8" oninput="markChanged()"></div>
+            <div class="field"><label>Appraisal Cap Rate (%)</label><input class="fi" type="number" id="a_refi2_cap_rate" step="0.001" min="0" max="100" oninput="markChanged()"><span class="field-note">Defaults to exit cap rate</span></div>
+            <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_refi2_ltv" value="65" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field">
+              <label>Appraised Value ($)</label>
+              <div class="computed-field" id="a_refi2_appraised_display" style="background:#E8F0E9;padding:6px 10px;border-radius:4px;font-style:italic;color:#5C3D26">—</div>
+              <input type="hidden" id="a_refi2_appraised" value="0">
+              <span class="field-note">Calculated: NOI in refi year &divide; appraisal cap rate</span>
+            </div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Interest Rate (%)</label><input class="fi" type="text" id="a_refi2_rate" value="5.50" oninput="markChanged()"></div>
+            <div class="field"><label>Amortization (Years)</label><input class="fi" type="text" id="a_refi2_amort" value="30" oninput="markChanged()"></div>
+            <div class="field"><label>Loan Term (Years)</label><input class="fi" type="text" id="a_refi2_term" value="10" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3">
+            <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi2_orig_fee" value="1.00" oninput="markChanged()"></div>
+            <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi2_prepay" value="1.00" oninput="markChanged()"></div>
+            <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi2_closing" value="25000" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="assum-section-label">7 &mdash; Refinance Event 3</div>
+      <div class="assum-card">
+        <div class="assum-card-head" style="display:flex;align-items:center;justify-content:space-between">
+          <div><div class="assum-card-title">Refinance 3</div><div class="assum-card-sub">Third refinance event &mdash; replaces outstanding loan from Refi 2 or prior</div></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <label class="toggle"><input type="checkbox" id="a_refi3_on" onchange="toggleRefiEvent(3);markChanged()"><span class="toggle-slider"></span></label>
+            <div class="refi-on-lbl" id="refi3_lbl">Off</div>
+          </div>
+        </div>
+        <div class="assum-card-body refi-collapsed" id="refi3_fields">
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Timing (Year)</label><input class="fi" type="text" id="a_refi3_year" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Appraisal Cap Rate (%)</label><input class="fi" type="number" id="a_refi3_cap_rate" step="0.001" min="0" max="100" oninput="markChanged()"><span class="field-note">Defaults to exit cap rate</span></div>
+            <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_refi3_ltv" value="65" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field">
+              <label>Appraised Value ($)</label>
+              <div class="computed-field" id="a_refi3_appraised_display" style="background:#E8F0E9;padding:6px 10px;border-radius:4px;font-style:italic;color:#5C3D26">—</div>
+              <input type="hidden" id="a_refi3_appraised" value="0">
+              <span class="field-note">Calculated: NOI in refi year &divide; appraisal cap rate</span>
+            </div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Interest Rate (%)</label><input class="fi" type="text" id="a_refi3_rate" value="5.50" oninput="markChanged()"></div>
+            <div class="field"><label>Amortization (Years)</label><input class="fi" type="text" id="a_refi3_amort" value="30" oninput="markChanged()"></div>
+            <div class="field"><label>Loan Term (Years)</label><input class="fi" type="text" id="a_refi3_term" value="10" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3">
+            <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi3_orig_fee" value="1.00" oninput="markChanged()"></div>
+            <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi3_prepay" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi3_closing" value="0" oninput="markChanged()"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           CAPITAL STRUCTURE & WATERFALL
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label">8 &mdash; Capital Structure &amp; Waterfall</div>
+      <div class="assum-card">
+        <div class="assum-card-head"><div class="assum-card-title">Equity Structure</div><div class="assum-card-sub">GP/LP split, preferred return, and waterfall type</div></div>
+        <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">GP Equity (%)</div><div class="assum-row-desc">Percentage of total equity contributed by the general partner / sponsor.</div></div>
+            <div class="field"><label>GP Equity (%)</label><input class="fi" type="text" id="a_gp_equity_pct" value="10" oninput="updateLpFromGp();markChanged()"><span class="field-note">0% = no GP co-invest</span></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Simple Split — LP Share</div><div class="assum-row-desc">LP distribution percentage when using a simple (non-tiered) waterfall structure. Only active when Waterfall Type = Simple.</div></div>
-            <div class="field"><label>LP Split (%)</label><input class="fi" type="text" id="a_simple_lp" value="80" oninput="markChanged()"><span class="field-note">Only used when Waterfall Type = Simple</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
+            <div><div class="assum-row-label">LP Equity (%)</div><div class="assum-row-desc">Auto-computed as 100% minus GP equity.</div></div>
+            <div class="field"><label>LP Equity (%)</label><input class="fi" type="text" id="a_lp_equity_pct" value="90" oninput="markChanged()" readonly style="background:var(--sage-lt);cursor:default"><span class="field-note">100% &minus; GP%</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Preferred Return (Tier 1 Hurdle)</div><div class="assum-row-desc">Annual preferred return paid to LP investors before promote kicks in. LP receives 100% up to this threshold.</div></div>
+            <div class="field"><label>Pref Return (%)</label><input class="fi" type="text" id="a_pref_return" value="8.00" oninput="markChanged()"><span class="field-note">Standard LP pref: 6–8%</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Disposition Costs</div><div class="assum-row-desc">Total transaction costs at disposition as a percentage of gross sale price.</div></div>
+            <div class="field"><label>Disposition Costs (%)</label><input class="fi" type="text" id="a_disp_fee" value="2.00" oninput="markChanged()"><span class="field-note">Excel default: 2.0% of sale price</span></div>
           </div>
         </div>
       </div>
 
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">LP / GP Promote Tiers — Full Waterfall</div><div class="assum-card-sub">IRR or EM hurdle per tier and LP/GP distribution splits — up to 5 tiers above preferred return</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">LP / GP Promote Tiers &mdash; Full Waterfall</div><div class="assum-card-sub">IRR or EM hurdle per tier and LP/GP distribution splits &mdash; up to 5 tiers above preferred return</div></div>
         <div class="assum-card-body">
-          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">Select IRR % or Equity Multiple (EM×) as the hurdle metric independently for each tier. Distributions cascade in order from Tier 1 through Tier 5.</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">Distributions cascade from Tier 1 (pref return) through Tier 5 (residual).</div>
+          <!-- Hidden: waterfall type & simple split kept for payload -->
+          <div style="display:none">
+            <select id="a_waterfall_type"><option value="1" selected>Full</option><option value="0">Simple</option></select>
+            <input type="text" id="a_simple_lp" value="80">
+          </div>
           <div style="display:grid;grid-template-columns:60px 130px 1fr 1fr 1fr;gap:10px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--rule)">
             <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase">Tier</div>
             <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase">Hurdle Type</div>
@@ -1301,101 +994,157 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
             <input class="fi" type="text" placeholder="80" id="a_t4_gp" value="80" oninput="markChanged()">
           </div>
           <div class="tier-row" style="grid-template-columns:60px 130px 1fr 1fr 1fr">
-            <div class="tier-label" style="font-size:10px">Above T4</div>
+            <div class="tier-label" style="font-size:10px">Residual</div>
             <div><div class="hurdle-type-toggle" id="ht5"><button class="ht-btn active" onclick="setHurdleType(5,'irr',this)">IRR %</button><button class="ht-btn" onclick="setHurdleType(5,'em',this)">EM &times;</button></div><div class="hurdle-unit" id="hu5">% IRR</div></div>
-            <input class="fi" type="text" placeholder="Any above T4" id="a_t5_hurdle" value="" oninput="markChanged()" style="background:var(--sage-lt);font-size:10px" disabled title="Tier 5 captures anything above the Tier 4 upper bound">
+            <input class="fi" type="text" placeholder="Above T4" id="a_t5_hurdle" value="" oninput="markChanged()" style="background:var(--sage-lt);font-size:10px" disabled title="Residual tier — no upper bound">
             <input class="fi" type="text" placeholder="10" id="a_t5_lp" value="10" oninput="markChanged()">
             <input class="fi" type="text" placeholder="90" id="a_t5_gp" value="90" oninput="markChanged()">
           </div>
+          <div style="display:none"><input type="text" id="a_t5_lp_legacy" value="10"><input type="text" id="a_t5_gp_legacy" value="90"></div>
           <div style="font-size:10.5px;color:var(--muted);line-height:1.5;margin-top:6px;padding:6px 8px;background:rgba(178,201,180,0.15);border-radius:3px">
-            Tier 5 (Above T4) captures all returns above the Tier 4 hurdle — no upper bound. LP/GP splits apply to all residual distributions above the Tier 4 threshold.
-          </div>
-          <div class="tier-row" style="grid-template-columns:60px 130px 1fr 1fr 1fr;border-bottom:none;display:none">
-            <div class="tier-label">Above T5</div>
-            <div style="font-size:10.5px;color:var(--muted);padding-top:4px">LP residual</div>
-            <div></div>
-            <input class="fi" type="text" placeholder="10" id="a_t5_lp_legacy" value="10" oninput="markChanged()">
-            <input class="fi" type="text" placeholder="90" id="a_t5_gp_legacy" value="90" oninput="markChanged()">
+            Residual tier captures all returns above the Tier 4 hurdle. LP/GP splits apply to all remaining distributions.
           </div>
         </div>
       </div>
 
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Equity Multiple (EM) Hurdles</div><div class="assum-card-sub">EM threshold values used when the waterfall hurdle type is set to EM × instead of IRR % for any tier</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">Equity Multiple (EM) Hurdles</div><div class="assum-card-sub">EM thresholds used when a tier's hurdle type is set to EM&times;</div></div>
         <div class="assum-card-body">
-          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">These EM hurdle values are referenced by the model when a promote tier is configured to use Equity Multiple (EM×) rather than IRR as its distribution trigger.</div>
           <div class="fg3">
-            <div class="field"><label>EM Tier 1 Hurdle (&times;)</label><input class="fi" type="text" id="a_em_t1" value="2.0" oninput="markChanged()"><span class="field-note">Excel default: 2.0×</span></div>
-            <div class="field"><label>EM Tier 2 Hurdle (&times;)</label><input class="fi" type="text" id="a_em_t2" value="2.5" oninput="markChanged()"><span class="field-note">Excel default: 2.5×</span></div>
-            <div class="field"><label>EM Tier 3 Hurdle (&times;)</label><input class="fi" type="text" id="a_em_t3" value="3.0" oninput="markChanged()"><span class="field-note">Excel default: 3.0×</span></div>
+            <div class="field"><label>EM Tier 1 (&times;)</label><input class="fi" type="text" id="a_em_t1" value="2.0" oninput="markChanged()"><span class="field-note">2.0&times;</span></div>
+            <div class="field"><label>EM Tier 2 (&times;)</label><input class="fi" type="text" id="a_em_t2" value="2.5" oninput="markChanged()"><span class="field-note">2.5&times;</span></div>
+            <div class="field"><label>EM Tier 3 (&times;)</label><input class="fi" type="text" id="a_em_t3" value="3.0" oninput="markChanged()"><span class="field-note">3.0&times;</span></div>
           </div>
         </div>
       </div>
 
-      <!-- §15: SENSITIVITY ANALYSIS -->
-      <div class="assum-section-label">15 &mdash; Sensitivity Analysis Ranges</div>
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Sensitivity Matrix Axes</div><div class="assum-card-sub">Define the low, high, and step values for the rent growth vs. exit cap rate sensitivity heatmap</div></div>
+      <!-- ═══════════════════════════════════════════════════════════
+           RENT ROLL — MANUAL ENTRY (Change C)
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="assum-section-label" style="cursor:pointer;display:flex;align-items:center;gap:8px" onclick="toggleRentRollSection()">
+        9 &mdash; Rent Roll &mdash; Manual Entry
+        <span id="rr-section-arrow" style="font-size:12px;transition:transform .2s;transform:rotate(-90deg)">&#9660;</span>
+      </div>
+      <div class="assum-card" id="rr-section-card" style="display:none">
+        <div class="assum-card-head">
+          <div class="assum-card-title">Rent Roll &mdash; Manual Entry</div>
+          <div class="assum-card-sub">Unit-level rent data for in-place income, lease expiration schedule, and occupancy</div>
+        </div>
         <div class="assum-card-body">
-          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">These define the axes of the sensitivity matrix in the Excel model. Values are displayed as a heatmap with IRR (or EM) outputs at each combination.</div>
-          <div class="fg3" style="margin-bottom:12px">
-            <div class="field"><label>Rent Growth — Low (%)</label><input class="fi" type="text" id="a_sens_rg_low" value="0.00" oninput="markChanged()"></div>
-            <div class="field"><label>Rent Growth — High (%)</label><input class="fi" type="text" id="a_sens_rg_high" value="5.00" oninput="markChanged()"></div>
-            <div class="field"><label>Rent Growth — Step (%)</label><input class="fi" type="text" id="a_sens_rg_step" value="1.00" oninput="markChanged()"></div>
+          <div style="font-size:11px;color:var(--earth-mid);margin-bottom:14px;line-height:1.5;background:rgba(74,110,80,0.07);border:1px solid var(--sage-lt);border-radius:4px;padding:8px 12px;">
+            Only required if a rent roll was NOT included in your uploaded documents (offering memorandum, T-12, leases, etc.). If a rent roll was uploaded, leave this section blank &mdash; DealDesk will extract it automatically from your documents.
           </div>
-          <div class="fg3">
-            <div class="field"><label>Exit Cap — Low (%)</label><input class="fi" type="text" id="a_sens_cap_low" value="5.50" oninput="markChanged()"></div>
-            <div class="field"><label>Exit Cap — High (%)</label><input class="fi" type="text" id="a_sens_cap_high" value="8.50" oninput="markChanged()"></div>
-            <div class="field"><label>Exit Cap — Step (%)</label><input class="fi" type="text" id="a_sens_cap_step" value="0.50" oninput="markChanged()"></div>
+          <div id="rr-asset-note" style="font-size:11px;color:var(--muted);margin-bottom:10px;display:none;font-style:italic">
+            Select asset type on the New Underwrite screen to customize this table.
+          </div>
+          <div style="overflow-x:auto">
+            <table class="rr-table" id="rr-table">
+              <thead id="rr-thead">
+                <tr>
+                  <th style="width:28px">#</th>
+                  <th>Unit / Suite</th>
+                  <th>Type</th>
+                  <th>SF</th>
+                  <th class="rr-col-resi">Rent ($/mo)</th>
+                  <th class="rr-col-resi">Market ($/mo)</th>
+                  <th class="rr-col-comm" style="display:none">Rent ($/SF/yr)</th>
+                  <th class="rr-col-comm" style="display:none">Market ($/SF/yr)</th>
+                  <th class="rr-col-comm" style="display:none">Annual Rent ($)</th>
+                  <th>Lease Expiry</th>
+                  <th>Status</th>
+                  <th style="width:55px">Term (Yr)</th>
+                  <th style="width:55px">Exp. Yr</th>
+                  <th style="width:55px">Renew %</th>
+                  <th style="width:55px">Down Mo</th>
+                  <th style="width:30px"></th>
+                </tr>
+              </thead>
+              <tbody id="rr-tbody"></tbody>
+            </table>
+          </div>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:12px">
+            <button type="button" class="btn-add-comp" onclick="addRentRollRow()" id="btn-add-rr">+ Add Row</button>
+            <button type="button" class="btn-add-comp" onclick="clearAllRentRoll()" style="border-color:var(--red);color:var(--red)">Clear All</button>
+            <span style="font-size:11px;color:var(--muted)" id="rr-count">3 of 20 rows</span>
           </div>
         </div>
       </div>
 
-      <!-- RETURN THRESHOLDS -->
-      <div class="assum-section-label">Return Thresholds &amp; Underwriting Standards</div>
-
-      <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Minimum Return &amp; Underwriting Hurdles</div><div class="assum-card-sub">Firm-wide minimum thresholds — deals below these levels are flagged in the DD summary and investment recommendation</div></div>
-        <div class="assum-card-body">
-
-          <div class="assum-row">
-            <div><div class="assum-row-label">Minimum Equity Multiple (EM)</div><div class="assum-row-desc">Minimum LP equity multiple (total distributions ÷ contributed equity) over the full hold period. Deals below this are flagged as a return risk.</div></div>
-            <div class="field"><label>Minimum EM (&times;)</label><input class="fi" type="text" id="a_min_em" value="1.80" oninput="markChanged()"><span class="field-note">Firm target: 1.8–2.0&times; over hold</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-
-          <div class="assum-row">
-            <div><div class="assum-row-label">Minimum LP IRR</div><div class="assum-row-desc">Minimum acceptable levered LP internal rate of return over the hold period. Deals below this threshold receive a negative investment recommendation.</div></div>
-            <div class="field"><label>Minimum IRR (%)</label><input class="fi" type="text" id="a_min_irr" value="12.00" oninput="markChanged()"><span class="field-note">Firm target: 15% LP IRR; floor at 12%</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-
-          <div class="assum-row">
-            <div><div class="assum-row-label">Minimum Cash-on-Cash Return</div><div class="assum-row-desc">Minimum Year 1 stabilized cash-on-cash return. Below this, the deal is flagged as insufficient current income for LP distributions.</div></div>
-            <div class="field"><label>Minimum CoC (%)</label><input class="fi" type="text" id="a_min_coc" value="7.00" oninput="markChanged()"><span class="field-note">Firm target: 7–8% Year 1 CoC</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-
-          <div class="assum-row">
-            <div><div class="assum-row-label">Minimum DSCR</div><div class="assum-row-desc">Minimum acceptable Debt Service Coverage Ratio in Year 1 on a stabilized basis. Below this, DSCR is flagged as a lender and DD risk.</div></div>
-            <div class="field"><label>Minimum DSCR (&times;)</label><input class="fi" type="text" id="a_min_dscr" value="1.25" oninput="markChanged()"><span class="field-note">Most lenders require 1.20–1.30&times;</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-
-          <div class="assum-row">
-            <div><div class="assum-row-label">Minimum Stabilized Cap Rate</div><div class="assum-row-desc">Minimum stabilized cap rate required for a deal to clear underwriting. Deals below this are flagged as overpriced relative to market.</div></div>
-            <div class="field"><label>Minimum Cap Rate (%)</label><input class="fi" type="text" id="a_min_cap" value="5.50" oninput="markChanged()"><span class="field-note">Flag below-market cap acquisitions</span></div>
-            <div><div class="source-label">Source Type</div><div class="source-badge firm">Firm Default</div></div>
-          </div>
-
-        </div>
+      <!-- Hidden: removed S&U fields kept for JS payload builder -->
+      <div style="display:none" aria-hidden="true">
+        <input type="text" id="a_closing_costs_fixed" value="75000">
+        <input type="text" id="a_tenant_buyout" value="0">
+        <input type="text" id="a_legal_closing" value="25000">
+        <input type="text" id="a_title_insurance" value="8000">
+        <input type="text" id="a_legal_bank" value="5000">
+        <input type="text" id="a_appraisal" value="5000">
+        <input type="text" id="a_environmental" value="6000">
+        <input type="text" id="a_surveyor" value="3500">
+        <input type="text" id="a_architect" value="0">
+        <input type="text" id="a_structural" value="0">
+        <input type="text" id="a_civil_eng" value="0">
+        <input type="text" id="a_meps" value="0">
+        <input type="text" id="a_legal_zoning" value="0">
+        <input type="text" id="a_geotech" value="0">
+        <input type="text" id="a_acq_fee_fixed" value="25000">
+        <input type="text" id="a_mortgage_carry" value="0">
+        <input type="text" id="a_mortgage_fees" value="17500">
+        <input type="text" id="a_mezz_interest" value="0">
+        <input type="text" id="a_working_capital" value="15000">
+        <input type="text" id="a_marketing" value="5000">
+        <input type="text" id="a_re_tax_carry" value="0">
+        <input type="text" id="a_prop_ins_carry" value="0">
+        <input type="text" id="a_dev_fee" value="0">
+        <input type="text" id="a_dev_pref" value="0">
+        <input type="text" id="a_permits" value="0">
+        <input type="text" id="a_stormwater" value="0">
+        <input type="text" id="a_demo" value="0">
+        <input type="text" id="a_gc_overhead" value="0">
+        <input type="text" id="a_mezz_debt" value="0">
+        <input type="text" id="a_tax_credit_eq" value="0">
+        <input type="text" id="a_grants" value="0">
+        <input type="text" id="a_cam_reimbursements" value="0">
+        <input type="text" id="a_fee_income" value="0">
+        <input type="text" id="a_re_taxes" value="45000">
+        <input type="text" id="a_insurance" value="18000">
+        <input type="text" id="a_gas" value="12000">
+        <input type="text" id="a_water_sewer" value="14000">
+        <input type="text" id="a_electric" value="10000">
+        <input type="text" id="a_license" value="2500">
+        <input type="text" id="a_trash" value="8000">
+        <input type="text" id="a_mgmt_fee" value="6.00">
+        <input type="text" id="a_salaries" value="24000">
+        <input type="text" id="a_repairs" value="8000">
+        <input type="text" id="a_exterminator" value="3600">
+        <input type="text" id="a_cleaning" value="6000">
+        <input type="text" id="a_turnover" value="5000">
+        <input type="text" id="a_advertising" value="4000">
+        <input type="text" id="a_landscape" value="6000">
+        <input type="text" id="a_admin" value="5000">
+        <input type="text" id="a_office" value="3000">
+        <input type="text" id="a_misc_expense" value="2000">
+        <input type="text" id="a_cap_reserve" value="400">
+        <input type="text" id="a_commissions" value="0">
+        <input type="text" id="a_sens_rg_low" value="0.00">
+        <input type="text" id="a_sens_rg_high" value="5.00">
+        <input type="text" id="a_sens_rg_step" value="1.00">
+        <input type="text" id="a_sens_cap_low" value="5.50">
+        <input type="text" id="a_sens_cap_high" value="8.50">
+        <input type="text" id="a_sens_cap_step" value="0.50">
+        <input type="text" id="a_min_em" value="1.80">
+        <input type="text" id="a_min_irr" value="12.00">
+        <input type="text" id="a_min_coc" value="7.00">
+        <input type="text" id="a_min_dscr" value="1.25">
+        <input type="text" id="a_min_cap" value="5.50">
+        <input type="text" id="a_target_irr" value="15.00">
+        <input type="text" id="f_reno_cost" value="0">
       </div>
 
       <!-- DEFAULT REPORT SECTIONS -->
       <div class="assum-section-label">Default Report Sections</div>
 
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">PDF Report Section Defaults</div><div class="assum-card-sub">Toggle which of the 22 sections are included in every generated PDF report by default — overridden per deal on the New Underwrite screen</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">PDF Report Section Defaults</div><div class="assum-card-sub">Toggle which of the 22 sections are included in every generated PDF report by default</div></div>
         <div class="assum-card-body">
           <div style="font-size:11.5px;color:var(--muted);margin-bottom:16px;line-height:1.5">
             Sections toggled <strong>on</strong> are included in every report by default. Sections toggled <strong>off</strong> are excluded unless re-enabled per deal.
@@ -1410,10 +1159,8 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       <div class="assum-card">
         <div class="assum-card-head"><div class="assum-card-title">Deal Completion Alerts</div><div class="assum-card-sub">Configure email and Slack notifications sent when each underwriting run completes</div></div>
         <div class="assum-card-body">
-
-          <!-- Email -->
           <div class="assum-row">
-            <div><div class="assum-row-label">Email Notifications</div><div class="assum-row-desc">Send a formatted HTML summary email with key metrics and download links when a run completes. Uses Python smtplib — configure SMTP credentials in secrets.toml.</div></div>
+            <div><div class="assum-row-label">Email Notifications</div><div class="assum-row-desc">Send a summary email when a run completes. Configure SMTP in secrets.toml.</div></div>
             <div class="field">
               <label>Enable Email Alerts</label>
               <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
@@ -1423,17 +1170,15 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
             </div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Email Recipients</div><div class="assum-row-desc">Comma-separated list of email addresses. All addresses receive the same notification when a run completes.</div></div>
+            <div><div class="assum-row-label">Email Recipients</div><div class="assum-row-desc">Comma-separated list of email addresses.</div></div>
             <div class="field">
               <label>Recipients</label>
               <input class="fi" type="text" id="a_notify_email_recipients" placeholder="analyst@firm.com, partner@firm.com" oninput="markChanged()">
               <span class="field-note">Comma-separated. Leave blank to disable.</span>
             </div>
           </div>
-
-          <!-- Slack -->
           <div class="assum-row" style="border-top:1px solid var(--rule);padding-top:14px;margin-top:4px">
-            <div><div class="assum-row-label">Slack Notifications</div><div class="assum-row-desc">Send a concise plain-text deal alert to a Slack channel via Incoming Webhook. No emoji — professional team notification format.</div></div>
+            <div><div class="assum-row-label">Slack Notifications</div><div class="assum-row-desc">Incoming Webhook alert to a Slack channel.</div></div>
             <div class="field">
               <label>Enable Slack Alerts</label>
               <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
@@ -1443,14 +1188,13 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
             </div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Slack Webhook URL</div><div class="assum-row-desc">Incoming Webhook URL from your Slack app configuration. Stored in .streamlit/secrets.toml — never committed to version control. The field here is a convenience reference only.</div></div>
+            <div><div class="assum-row-label">Slack Webhook URL</div></div>
             <div class="field">
               <label>Webhook URL</label>
               <input class="fi" type="text" id="a_notify_slack_webhook" placeholder="https://hooks.slack.com/services/..." oninput="markChanged()">
               <span class="field-note">Configure in secrets.toml for security.</span>
             </div>
           </div>
-
         </div>
       </div>
 
@@ -1541,15 +1285,15 @@ const DEFAULTS = {
   a_ltv_pct:'70.00', a_interest_rate:'6.50', a_amort_years:'30',
   a_loan_term:'10', a_origination_fee:'1.00', a_io_period:'0',
   // §6–8 Refi events (year, appraised value, ltv, rate, amort, term, orig fee, prepay, closing)
-  a_refi1_year:'5',  a_refi1_appraised:'3200000', a_refi1_ltv:'70', a_refi1_rate:'6.00',
+  a_refi1_year:'5',  a_refi1_appraised:'3200000', a_refi1_cap_rate:'', a_refi1_ltv:'70', a_refi1_rate:'6.00',
   a_refi1_amort:'30', a_refi1_term:'10', a_refi1_orig_fee:'1.00', a_refi1_prepay:'1.00', a_refi1_closing:'25000',
-  a_refi2_year:'8',  a_refi2_appraised:'3800000', a_refi2_ltv:'65', a_refi2_rate:'5.50',
+  a_refi2_year:'8',  a_refi2_appraised:'3800000', a_refi2_cap_rate:'', a_refi2_ltv:'65', a_refi2_rate:'5.50',
   a_refi2_amort:'30', a_refi2_term:'10', a_refi2_orig_fee:'1.00', a_refi2_prepay:'1.00', a_refi2_closing:'25000',
-  a_refi3_year:'0',  a_refi3_appraised:'0',       a_refi3_ltv:'65', a_refi3_rate:'5.50',
+  a_refi3_year:'0',  a_refi3_appraised:'0',       a_refi3_cap_rate:'', a_refi3_ltv:'65', a_refi3_rate:'5.50',
   a_refi3_amort:'30', a_refi3_term:'10', a_refi3_orig_fee:'1.00', a_refi3_prepay:'0',    a_refi3_closing:'0',
   // §8 Income
   a_vacancy:'7.50', a_rev_growth:'3.00', a_exp_growth:'3.00',
-  a_loss_to_lease:'3.00', a_cam_reimbursements:'0', a_fee_income:'6000',
+  a_loss_to_lease:'3.00', a_cam_reimbursements:'0', a_fee_income:'0',
   // §9 Fixed expenses
   a_re_taxes:'45000', a_insurance:'18000', a_gas:'12000',
   a_water_sewer:'14000', a_electric:'10000', a_license:'2500', a_trash:'8000',
@@ -1560,6 +1304,10 @@ const DEFAULTS = {
   a_office:'3000', a_misc_expense:'2000',
   // §11 Below-the-line
   a_cap_reserve:'400', a_commissions:'0', a_renovations_yr1:'0',
+  // §11B Leasing costs
+  a_ti_new_psf:'0', a_ti_renewal_psf:'0', a_commission_new_pct:'5.0', a_commission_renewal_pct:'2.5',
+  a_renewal_probability_default:'70', a_lease_term_years:'5',
+  a_construction_months:'0', a_leaseup_months:'0',
   // §12 Exit
   a_exit_cap_rate:'7.00', a_disp_fee:'2.00',
   // §13 Waterfall / Partnership
@@ -1904,7 +1652,7 @@ function setOutputMode(mode) {
 
 // Restore output mode on load
 document.addEventListener('DOMContentLoaded', () => setOutputMode(currentOutputMode));
-function handleAssetType() {}
+function handleAssetType() { updateRentRollColumns(); }
 
 
 
@@ -2139,6 +1887,7 @@ async function submitRun() {
       a_refi1_on:             _chk('a_refi1_on'),
       a_refi1_year:           _num('a_refi1_year'),
       a_refi1_appraised:      _num('a_refi1_appraised'),
+      a_refi1_cap_rate:       _num('a_refi1_cap_rate') || null,
       a_refi1_ltv:            _num('a_refi1_ltv'),
       a_refi1_rate:           _num('a_refi1_rate'),
       a_refi1_amort:          _num('a_refi1_amort'),
@@ -2149,6 +1898,7 @@ async function submitRun() {
       a_refi2_on:             _chk('a_refi2_on'),
       a_refi2_year:           _num('a_refi2_year'),
       a_refi2_appraised:      _num('a_refi2_appraised'),
+      a_refi2_cap_rate:       _num('a_refi2_cap_rate') || null,
       a_refi2_ltv:            _num('a_refi2_ltv'),
       a_refi2_rate:           _num('a_refi2_rate'),
       a_refi2_amort:          _num('a_refi2_amort'),
@@ -2159,6 +1909,7 @@ async function submitRun() {
       a_refi3_on:             _chk('a_refi3_on'),
       a_refi3_year:           _num('a_refi3_year'),
       a_refi3_appraised:      _num('a_refi3_appraised'),
+      a_refi3_cap_rate:       _num('a_refi3_cap_rate') || null,
       a_refi3_ltv:            _num('a_refi3_ltv'),
       a_refi3_rate:           _num('a_refi3_rate'),
       a_refi3_amort:          _num('a_refi3_amort'),
@@ -2193,6 +1944,13 @@ async function submitRun() {
       a_cap_reserve:          _num('a_cap_reserve'),
       a_commissions:          _num('a_commissions'),
       a_renovations_yr1:      _num('a_renovations_yr1'),
+      a_ti_new_psf:           _num('a_ti_new_psf') || null,
+      a_ti_renewal_psf:       _num('a_ti_renewal_psf') || null,
+      a_commission_new_pct:   _num('a_commission_new_pct') || null,
+      a_commission_renewal_pct: _num('a_commission_renewal_pct') || null,
+      a_lease_term_years:     _num('a_lease_term_years'),
+      a_construction_months:  _num('a_construction_months'),
+      a_leaseup_months:       _num('a_leaseup_months'),
       a_exit_cap_rate:        _num('a_exit_cap_rate'),
       a_disp_fee:             _num('a_disp_fee'),
       a_gp_equity_pct:        _num('a_gp_equity_pct'),
@@ -2226,6 +1984,7 @@ async function submitRun() {
       // Uploaded files
       uploaded_files:   uploadedFiles,
           comps:           collectComps(),
+          rent_roll:       collectRentRoll(),
     };
 
     // ── POST to FastAPI ───────────────────────────────────────
@@ -2322,12 +2081,232 @@ renderDealSectionToggles();
 loadAssumptions();
 showScreen('new');
 // Restore strategy-conditional cards if strategy was pre-filled
+// ── Refi cap rate sync with exit cap rate ────────────────────
+(function() {
+  const exitCapField = document.getElementById('a_exit_cap_rate');
+  const refiCapFields = [
+    document.getElementById('a_refi1_cap_rate'),
+    document.getElementById('a_refi2_cap_rate'),
+    document.getElementById('a_refi3_cap_rate')
+  ];
+  const userOverridden = [false, false, false];
+
+  refiCapFields.forEach((field, i) => {
+    if (field) field.addEventListener('input', () => { userOverridden[i] = true; });
+  });
+
+  if (exitCapField) {
+    exitCapField.addEventListener('input', () => {
+      refiCapFields.forEach((field, i) => {
+        if (field && !userOverridden[i]) field.value = exitCapField.value;
+      });
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    refiCapFields.forEach((field, i) => {
+      if (field && !userOverridden[i] && exitCapField && exitCapField.value) {
+        field.value = exitCapField.value;
+      }
+    });
+  });
+})();
+
 document.addEventListener('DOMContentLoaded', () => {
   setOutputMode(currentOutputMode);
   handleStrategy();
+  // Initialize rent roll with 3 blank rows
+  updateRentRollColumns();
+  for (var _rri = 0; _rri < 3; _rri++) addRentRollRow();
 });
 
         // ── Comp Entry Logic ─────────────────────────────────────────────
+        /* ── Rent Roll rows ────────────────────────────────────── */
+        const RR_MAX = 20;
+        let rrCount = 0;
+        let rrMode = 'resi'; // 'resi' or 'comm'
+
+        function isCommercialAsset() {
+          var at = (document.getElementById('f_asset_type') || {}).value || '';
+          return ['Office','Retail','Industrial'].indexOf(at) >= 0;
+        }
+
+        function getRrMode() {
+          var at = (document.getElementById('f_asset_type') || {}).value || '';
+          if (!at) return 'both';
+          return isCommercialAsset() ? 'comm' : 'resi';
+        }
+
+        function updateRentRollColumns() {
+          var mode = getRrMode();
+          rrMode = mode === 'comm' ? 'comm' : 'resi';
+          var showResi = mode !== 'comm';
+          var showComm = mode === 'comm' || mode === 'both';
+          document.querySelectorAll('.rr-col-resi').forEach(function(el) { el.style.display = showResi ? '' : 'none'; });
+          document.querySelectorAll('.rr-col-comm').forEach(function(el) { el.style.display = showComm ? '' : 'none'; });
+          var note = document.getElementById('rr-asset-note');
+          if (note) note.style.display = mode === 'both' ? '' : 'none';
+          // Update unit label dynamically
+          var lbl = document.getElementById('lbl_num_units');
+          var desc = document.getElementById('desc_num_units');
+          if (lbl) lbl.textContent = isCommercialAsset() ? 'Rentable Suites / Spaces' : 'Number of Units';
+          if (desc) desc.textContent = isCommercialAsset()
+            ? 'Total rentable suites or spaces. Drives per-unit calculations throughout the model.'
+            : 'Total residential units. Drives per-unit calculations throughout the model.';
+        }
+
+        function calcAnnualRent(n) {
+          var sf = parseFloat((document.getElementById('rr_sf_' + n) || {}).value) || 0;
+          var rsf = parseFloat((document.getElementById('rr_rent_sf_' + n) || {}).value) || 0;
+          var el = document.getElementById('rr_annual_' + n);
+          if (el) el.value = sf && rsf ? (sf * rsf).toFixed(0) : '';
+        }
+
+        function addRentRollRow(prefill) {
+          if (rrCount >= RR_MAX) return;
+          rrCount++;
+          var n = rrCount;
+          var tbody = document.getElementById('rr-tbody');
+          var tr = document.createElement('tr');
+          tr.id = 'rr_row_' + n;
+          var d = prefill || {};
+          var mode = getRrMode();
+          var showResi = mode !== 'comm';
+          var showComm = mode === 'comm' || mode === 'both';
+          tr.innerHTML =
+            '<td class="rr-row-num">' + n + '</td>' +
+            '<td><input class="fi" type="text" id="rr_unit_' + n + '" placeholder="e.g. 1A" value="' + (d.unit||'') + '" oninput="markChanged()"></td>' +
+            '<td><select class="fi" id="rr_type_' + n + '" oninput="markChanged()">' +
+              '<option value="">—</option>' +
+              '<option value="Studio">Studio</option><option value="1BR">1 BR</option>' +
+              '<option value="2BR">2 BR</option><option value="3BR">3 BR</option>' +
+              '<option value="4BR">4 BR</option><option value="Commercial">Commercial</option>' +
+              '<option value="Other">Other</option>' +
+            '</select></td>' +
+            '<td><input class="fi" type="text" id="rr_sf_' + n + '" placeholder="750" value="' + (d.sf||'') + '" oninput="calcAnnualRent(' + n + ');markChanged()"></td>' +
+            // Residential columns
+            '<td class="rr-col-resi"' + (showResi?'':' style="display:none"') + '><input class="fi" type="text" id="rr_rent_mo_' + n + '" placeholder="1,200" value="' + (d.rent_mo||'') + '" oninput="markChanged()"></td>' +
+            '<td class="rr-col-resi"' + (showResi?'':' style="display:none"') + '><input class="fi" type="text" id="rr_market_mo_' + n + '" placeholder="1,400" value="' + (d.market_mo||'') + '" oninput="markChanged()"></td>' +
+            // Commercial columns
+            '<td class="rr-col-comm"' + (showComm?'':' style="display:none"') + '><input class="fi" type="text" id="rr_rent_sf_' + n + '" placeholder="28.00" value="' + (d.rent_sf||'') + '" oninput="calcAnnualRent(' + n + ');markChanged()"></td>' +
+            '<td class="rr-col-comm"' + (showComm?'':' style="display:none"') + '><input class="fi" type="text" id="rr_market_sf_' + n + '" placeholder="32.00" value="' + (d.market_sf||'') + '" oninput="markChanged()"></td>' +
+            '<td class="rr-col-comm"' + (showComm?'':' style="display:none"') + '><input class="fi" type="text" id="rr_annual_' + n + '" value="" readonly style="background:var(--sage-lt);cursor:default" tabindex="-1"></td>' +
+            // Common columns
+            '<td><input class="fi" type="text" id="rr_expiry_' + n + '" placeholder="MM/YYYY" value="' + (d.expiry||'') + '" oninput="markChanged()"></td>' +
+            '<td><select class="fi" id="rr_status_' + n + '" oninput="markChanged()" onchange="onStatusChange(' + n + ')">' +
+              '<option value="Occupied">Occupied</option>' +
+              '<option value="Vacant">Vacant</option>' +
+              '<option value="Month-to-Month">Month-to-Month</option>' +
+            '</select></td>' +
+            // Leasing fields
+            '<td><input class="fi" type="text" id="rr_lease_term_' + n + '" placeholder="5" value="' + (d.lease_term||'') + '" oninput="markChanged()" style="width:50px"></td>' +
+            '<td><input class="fi" type="text" id="rr_expiry_year_' + n + '" placeholder="5" value="' + (d.expiry_year||'') + '" oninput="markChanged()" style="width:50px"></td>' +
+            '<td><input class="fi" type="text" id="rr_renewal_prob_' + n + '" placeholder="70" value="' + (d.renewal_prob||'') + '" oninput="markChanged()" style="width:50px"></td>' +
+            '<td><input class="fi" type="text" id="rr_downtime_' + n + '" placeholder="3" value="' + (d.downtime||'') + '" oninput="markChanged()" style="width:50px"></td>' +
+            '<td><button type="button" class="btn-remove-rr" onclick="removeRentRollRow(' + n + ')" title="Remove row">&times;</button></td>';
+          tbody.appendChild(tr);
+          document.getElementById('rr-count').textContent = rrCount + ' of ' + RR_MAX + ' rows';
+          if (rrCount >= RR_MAX) document.getElementById('btn-add-rr').style.display = 'none';
+        }
+
+        function removeRentRollRow(n) {
+          var row = document.getElementById('rr_row_' + n);
+          if (row) row.remove();
+          renumberRentRoll();
+          markChanged();
+        }
+
+        function renumberRentRoll() {
+          var rows = document.querySelectorAll('#rr-tbody tr');
+          rrCount = rows.length;
+          rows.forEach(function(tr, i) {
+            var num = i + 1;
+            tr.id = 'rr_row_' + num;
+            tr.querySelector('.rr-row-num').textContent = num;
+            // Rename all input/select IDs
+            var els = tr.querySelectorAll('input, select');
+            var fields = ['unit','type','sf','rent_mo','market_mo','rent_sf','market_sf','annual','expiry','status','lease_term','expiry_year','renewal_prob','downtime'];
+            var fi = 0;
+            els.forEach(function(el) {
+              if (fi < fields.length) { el.id = 'rr_' + fields[fi] + '_' + num; fi++; }
+            });
+            var btn = tr.querySelector('.btn-remove-rr');
+            if (btn) btn.setAttribute('onclick', 'removeRentRollRow(' + num + ')');
+          });
+          document.getElementById('rr-count').textContent = rrCount + ' of ' + RR_MAX + ' rows';
+          document.getElementById('btn-add-rr').style.display = rrCount >= RR_MAX ? 'none' : '';
+        }
+
+        function onStatusChange(n) {
+          var status = (document.getElementById('rr_status_' + n) || {}).value;
+          var expiryYr = document.getElementById('rr_expiry_year_' + n);
+          if (expiryYr) {
+            if (status === 'Vacant') {
+              expiryYr.value = '0';
+              expiryYr.disabled = true;
+              expiryYr.title = 'Vacant — initial lease-up commission charged in Year 1';
+            } else {
+              expiryYr.disabled = false;
+              expiryYr.title = '';
+            }
+          }
+        }
+
+        function clearAllRentRoll() {
+          document.getElementById('rr-tbody').innerHTML = '';
+          rrCount = 0;
+          // Re-add 3 blank rows
+          for (var i = 0; i < 3; i++) addRentRollRow();
+          document.getElementById('rr-count').textContent = rrCount + ' of ' + RR_MAX + ' rows';
+          document.getElementById('btn-add-rr').style.display = '';
+          markChanged();
+        }
+
+        function toggleRentRollSection() {
+          var card = document.getElementById('rr-section-card');
+          var arrow = document.getElementById('rr-section-arrow');
+          if (!card) return;
+          var show = card.style.display === 'none';
+          card.style.display = show ? '' : 'none';
+          if (arrow) arrow.style.transform = show ? 'rotate(0deg)' : 'rotate(-90deg)';
+        }
+
+        function updateLpFromGp() {
+          var gp = parseFloat((document.getElementById('a_gp_equity_pct') || {}).value) || 0;
+          var lp = document.getElementById('a_lp_equity_pct');
+          if (lp) lp.value = (100 - gp).toFixed(0);
+        }
+
+        function collectRentRoll() {
+          var rows = [];
+          for (var i = 1; i <= rrCount; i++) {
+            var el = document.getElementById('rr_unit_' + i);
+            if (!el) continue;
+            var row = {
+              unit:   el.value.trim(),
+              type:   (document.getElementById('rr_type_' + i) || {}).value || '',
+              sf:     (document.getElementById('rr_sf_' + i) || {}).value || '',
+              expiry: (document.getElementById('rr_expiry_' + i) || {}).value || '',
+              status: (document.getElementById('rr_status_' + i) || {}).value || '',
+              lease_term:    (document.getElementById('rr_lease_term_' + i) || {}).value || '',
+              expiry_year:   (document.getElementById('rr_expiry_year_' + i) || {}).value || '',
+              renewal_prob:  (document.getElementById('rr_renewal_prob_' + i) || {}).value || '',
+              downtime:      (document.getElementById('rr_downtime_' + i) || {}).value || ''
+            };
+            // Residential fields
+            var rmo = document.getElementById('rr_rent_mo_' + i);
+            var mmo = document.getElementById('rr_market_mo_' + i);
+            if (rmo) { row.rent_mo = rmo.value.trim(); row.market_mo = (mmo||{}).value || ''; }
+            // Commercial fields
+            var rsf = document.getElementById('rr_rent_sf_' + i);
+            var msf = document.getElementById('rr_market_sf_' + i);
+            var ann = document.getElementById('rr_annual_' + i);
+            if (rsf) { row.rent_sf = rsf.value.trim(); row.market_sf = (msf||{}).value || ''; row.annual = (ann||{}).value || ''; }
+            rows.push(row);
+          }
+          return rows;
+        }
+
         const COMP_LIMITS = { rent: 8, commercial: 5, sale: 5 };
         const compCounts  = { rent: 0, commercial: 0, sale: 0 };
 

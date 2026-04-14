@@ -9,6 +9,9 @@ Usage:  python main.py
 
 import base64
 import logging
+import os
+import sys
+import socket
 import tempfile
 import traceback
 import uuid
@@ -46,7 +49,12 @@ from excel_builder import populate_excel
 from word_builder import generate_report
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(name)s  %(levelname)s  %(message)s")
+_fmt = "%(asctime)s  %(name)s  %(levelname)s  %(message)s"
+_stream_handler = logging.StreamHandler()
+_stream_handler.stream = open(sys.stdout.fileno(), mode="w", encoding="utf-8", closefd=False)
+logging.basicConfig(level=logging.INFO, format=_fmt, force=True,
+                    handlers=[_stream_handler,
+                              logging.FileHandler("server_output.log", mode="w", encoding="utf-8")])
 
 # ── Pipeline stage definitions ────────────────────────────────────────────
 
@@ -91,7 +99,7 @@ class UnderwriteRequest(BaseModel):
     f_state: str = ""
     f_zip: str = ""
     f_asset_type: str = "Multifamily"
-    f_strategy: str = "stabilized"
+    f_strategy: str = "stabilized_hold"
     f_deal_name: str = ""
     f_description: str = ""
     f_purchase_price: float = 0.0
@@ -173,6 +181,7 @@ class UnderwriteRequest(BaseModel):
     a_refi1_orig_fee: float = 1.0
     a_refi1_prepay: float = 1.0
     a_refi1_closing: float = 25000.0
+    a_refi1_cap_rate: Optional[float] = None
 
     # Refi 2
     a_refi2_on: bool = False
@@ -185,6 +194,7 @@ class UnderwriteRequest(BaseModel):
     a_refi2_orig_fee: float = 1.0
     a_refi2_prepay: float = 1.0
     a_refi2_closing: float = 25000.0
+    a_refi2_cap_rate: Optional[float] = None
 
     # Refi 3
     a_refi3_on: bool = False
@@ -197,6 +207,7 @@ class UnderwriteRequest(BaseModel):
     a_refi3_orig_fee: float = 1.0
     a_refi3_prepay: float = 0.0
     a_refi3_closing: float = 0.0
+    a_refi3_cap_rate: Optional[float] = None
 
     # Income
     a_vacancy: float = 7.5
@@ -204,7 +215,7 @@ class UnderwriteRequest(BaseModel):
     a_exp_growth: float = 3.0
     a_loss_to_lease: float = 3.0
     a_cam_reimbursements: float = 0.0
-    a_fee_income: float = 6000.0
+    a_fee_income: float = 0.0
 
     # Fixed expenses
     a_re_taxes: float = 45000.0
@@ -273,6 +284,18 @@ class UnderwriteRequest(BaseModel):
     a_min_cap: float = 0.055
     a_target_irr: float = 15.0
 
+    # Leasing cost assumptions
+    a_ti_new_psf:              Optional[float] = None
+    a_ti_renewal_psf:          Optional[float] = None
+    a_commission_new_pct:      Optional[float] = None
+    a_commission_renewal_pct:  Optional[float] = None
+    a_lease_term_years:        Optional[float] = None
+    a_construction_months:     Optional[float] = None
+    a_leaseup_months:          Optional[float] = None
+
+    # Rent roll (from frontend form)
+    rent_roll: Optional[List[Dict[str, Any]]] = None
+
     # Top-level fields
     monthly_gross_rent: float = 0.0
     investor_mode: bool = False
@@ -314,8 +337,14 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
     )
 
     # Build refi events
+    exit_cap_decimal = req.a_exit_cap_rate / 100.0
+    refi_cap_rates = [
+        float(req.a_refi1_cap_rate or req.a_exit_cap_rate or 7.0) / 100.0,
+        float(req.a_refi2_cap_rate or req.a_exit_cap_rate or 7.0) / 100.0,
+        float(req.a_refi3_cap_rate or req.a_exit_cap_rate or 7.0) / 100.0,
+    ]
     refi_events = []
-    for prefix, defaults in [
+    for i, (prefix, defaults) in enumerate([
         ("refi1", (req.a_refi1_on, req.a_refi1_year, req.a_refi1_appraised,
                    req.a_refi1_ltv, req.a_refi1_rate, req.a_refi1_amort,
                    req.a_refi1_term, req.a_refi1_orig_fee, req.a_refi1_prepay,
@@ -328,12 +357,13 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
                    req.a_refi3_ltv, req.a_refi3_rate, req.a_refi3_amort,
                    req.a_refi3_term, req.a_refi3_orig_fee, req.a_refi3_prepay,
                    req.a_refi3_closing)),
-    ]:
+    ]):
         active, year, appraised, ltv, rate, amort, term, orig_fee, prepay, closing = defaults
         refi_events.append(RefiEvent(
             active=active,
             year=year,
             appraised_value=appraised,
+            cap_rate=refi_cap_rates[i],
             ltv=ltv / 100.0,
             rate=rate / 100.0,
             amort_years=amort,
@@ -403,10 +433,10 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         origination_fee_pct=req.a_origination_fee / 100.0,
         io_period_months=req.a_io_period,
         refi_events=refi_events,
-        # Development period (value_add)
-        const_period_months=req.f_const_period,
+        # Development period — visible assumptions field overrides hidden dev-period card
+        const_period_months=int(req.a_construction_months or 0) or req.f_const_period,
         const_loan_rate=req.f_const_loan_rate,
-        leaseup_period_months=req.f_leaseup_period,
+        leaseup_period_months=int(req.a_leaseup_months or 0) or req.f_leaseup_period,
         leaseup_vacancy_rate=req.f_leaseup_vacancy,
         leaseup_concessions=req.f_leaseup_concessions,
         leaseup_marketing=req.f_leaseup_marketing,
@@ -455,6 +485,12 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         # Below-the-line
         cap_reserve_per_unit=req.a_cap_reserve,
         commissions_yr1=req.a_commissions,
+        # Leasing cost assumptions
+        ti_new_psf=float(req.a_ti_new_psf or 0.0),
+        ti_renewal_psf=float(req.a_ti_renewal_psf or 0.0),
+        commission_new_pct=float(req.a_commission_new_pct or 5.0) / 100.0,
+        commission_renewal_pct=float(req.a_commission_renewal_pct or 2.5) / 100.0,
+        lease_term_years=float(req.a_lease_term_years or 5),
         # Exit
         exit_cap_rate=req.a_exit_cap_rate / 100.0,
         disposition_costs_pct=req.a_disp_fee / 100.0,
@@ -485,6 +521,10 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
     )
 
     deal.assumptions = assumptions
+    logger.info("DEAL INPUT hard_costs=%s (from form: const_hard=%s, reno=%s)",
+                assumptions.const_hard, req.a_const_hard, req.f_reno_cost)
+    logger.info("FORM INPUT a_const_hard=%s, f_reno_cost=%s",
+                req.a_const_hard, req.f_reno_cost)
 
     # Sections config
     if req.sections_config:
@@ -528,6 +568,11 @@ async def underwrite(req: UnderwriteRequest):
     """Run the full underwriting pipeline and return the PDF report."""
     try:
         logger.info("Payload f_purchase_price = %s (type: %s)", req.f_purchase_price, type(req.f_purchase_price).__name__)
+        logger.info(f"PAYLOAD DEBUG — f_purchase_price: {req.f_purchase_price}, "
+                    f"f_asking_price: {getattr(req, 'f_asking_price', 'NOT FOUND')}, "
+                    f"a_purchase_price: {getattr(req, 'a_purchase_price', 'NOT FOUND')}, "
+                    f"asset_type: {getattr(req, 'asset_type', 'NOT FOUND')}, "
+                    f"f_address: {getattr(req, 'f_address', 'NOT FOUND')}")
 
         OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -546,6 +591,38 @@ async def underwrite(req: UnderwriteRequest):
             elif uf.type == "financials":
                 fin_path = saved_path
 
+        # Merge frontend rent roll rows into extracted_docs.unit_mix
+        if req.rent_roll:
+            rr_units = []
+            for row in req.rent_roll:
+                if not row.get("unit") and not row.get("sf"):
+                    continue
+                status = row.get("status", "Occupied")
+                is_vacant = status == "Vacant"
+                sf = float(row.get("sf") or 0)
+                rent_mo = float(row.get("rent_mo") or 0)
+                rent_sf = float(row.get("rent_sf") or 0)
+                market_mo = float(row.get("market_mo") or 0)
+                market_sf = float(row.get("market_sf") or 0)
+                rr_units.append({
+                    "unit_id": row.get("unit", ""),
+                    "unit_type": row.get("type", ""),
+                    "sf": sf,
+                    "monthly_rent": rent_mo if rent_mo > 0 else (rent_sf * sf / 12.0 if rent_sf > 0 else 0),
+                    "market_rent": market_mo if market_mo > 0 else market_sf,
+                    "current_rent_sf": rent_sf,
+                    "status": status,
+                    "is_vacant": is_vacant,
+                    "lease_term_years": float(row.get("lease_term") or 5),
+                    "lease_expiry_year": int(float(row.get("expiry_year") or 0)),
+                    "market_rent_sf": market_sf if market_sf > 0 else market_mo,
+                    "renewal_probability": float(row.get("renewal_prob") or 70) / 100.0,
+                    "downtime_months": int(float(row.get("downtime") or 3)),
+                })
+            if rr_units:
+                deal.extracted_docs.unit_mix = rr_units
+                logger.info("RENT ROLL: %d units from frontend form", len(rr_units))
+
         # Collect user inputs as flat dict for assemble_deal
         user_inputs = req.model_dump()
 
@@ -563,7 +640,9 @@ async def underwrite(req: UnderwriteRequest):
 
             elif stage_name == "deal_data":
                 deal = assemble_deal(deal, user_inputs)
-                if req.monthly_gross_rent:
+                logger.info(f"[DEAL_DATA] GBA: {getattr(deal.assumptions, 'gba_sf', 'MISSING')} / "
+                            f"{getattr(deal.assumptions, 'gross_building_area', 'MISSING')}")
+                if req.monthly_gross_rent and float(req.monthly_gross_rent) > 0:
                     deal.extracted_docs.total_monthly_rent = float(req.monthly_gross_rent)
 
             elif stage_name == "market":
@@ -573,9 +652,23 @@ async def underwrite(req: UnderwriteRequest):
                 deal = analyze_insurance(deal)
 
             elif stage_name == "financials":
+                logger.info("PIPELINE: Starting financials computation")
                 deal = run_financials(deal)
+                try:
+                    _fo = deal.financial_outputs
+                    logger.info("FINANCIALS COMPLETE: fo=%s, noi_yr1=%s",
+                                _fo is not None,
+                                getattr(_fo, 'noi_yr1', 'MISSING'))
+                except Exception as _fe:
+                    logger.error("FINANCIALS COMPLETE log failed: %s", _fe)
 
             elif stage_name == "excel_builder":
+                logger.info("PIPELINE: Starting excel_builder")
+                _gpr = getattr(getattr(deal, 'financial_outputs', None), 'gross_potential_rent', 'MISSING')
+                logger.info(f"[DIAG] GPR Yr1 = ${_gpr:,.0f}" if isinstance(_gpr, (int, float)) else f"[DIAG] GPR Yr1 = {_gpr}")
+                logger.info(f"[DIAG] unit_mix count = {len(getattr(getattr(deal, 'extracted_docs', None), 'unit_mix', None) or [])}")
+                logger.info(f"[DIAG] assumptions.num_units = {getattr(getattr(deal, 'assumptions', None), 'num_units', 'MISSING')}")
+                logger.info(f"[DIAG] assumptions.monthly_rent = {getattr(getattr(deal, 'assumptions', None), 'monthly_rent', 'MISSING')}")
                 xlsx_path: Path = populate_excel(deal)
                 deal.output_xlsx_path = str(xlsx_path)
 
@@ -622,5 +715,18 @@ async def download_excel(deal_id: str):
 
 # ── Entry point ──────────────────────────────────────────────────────────
 
+def find_free_port(start=8000):
+    for port in range(start, start + 10):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("0.0.0.0", port))
+                return port
+            except OSError:
+                continue
+    return start + 10
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    PORT = int(os.environ.get("PORT", 0)) or find_free_port()
+    print(f"Starting server on port {PORT}")
+    uvicorn.run(app, host="0.0.0.0", port=PORT, log_config=None)

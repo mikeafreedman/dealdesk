@@ -173,9 +173,31 @@ def _fmt(val, fallback: str = "Not available") -> str:
 
 
 def _total_project_cost(deal: DealData) -> float:
-    """Estimate total project cost: purchase price + closing + construction hard costs."""
+    """Estimate total project cost for the insurance prompt.
+
+    If financials.py has already run, use fo.total_uses (authoritative).
+    Otherwise compute from assumptions — same line items as the Excel S&U tab.
+    Renovations are below-the-line, not in S&U, so excluded here.
+    """
+    fo = deal.financial_outputs
+    if fo.total_uses and fo.total_uses > 0:
+        return fo.total_uses
+
     a = deal.assumptions
-    return a.purchase_price + a.closing_costs_fixed + a.const_hard
+    transfer_tax = a.purchase_price * a.transfer_tax_rate
+    professional = (a.legal_closing + a.title_insurance + a.legal_bank +
+                    a.appraisal + a.environmental + a.architect +
+                    a.structural + a.geotech + a.surveyor + a.civil_eng +
+                    a.meps + a.legal_zoning)
+    financing = (a.acq_fee_fixed + a.mortgage_carry + a.mezz_interest)
+    origination = a.purchase_price * a.ltv_pct * a.origination_fee_pct
+    soft = (a.working_capital + a.marketing + a.re_tax_carry +
+            a.prop_ins_carry + a.dev_fee + a.dev_pref + a.permits)
+    hard = (a.stormwater + a.demo + a.const_hard +
+            a.const_reserve + a.gc_overhead)
+    return (a.purchase_price + transfer_tax +
+            a.tenant_buyout + professional + financing + origination +
+            soft + hard)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

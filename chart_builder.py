@@ -220,6 +220,23 @@ def build_proforma_chart(deal) -> Optional[bytes]:
 # FIGURE 12.2 — IRR SENSITIVITY HEATMAP
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _safe_numeric_matrix(matrix):
+    """Convert sensitivity matrix to float, replacing 'N/A' with np.nan.
+
+    Protects downstream numpy ops (max, imshow, arithmetic) from blowing up
+    on string sentinels when the underwriting produced non-numeric cells
+    (e.g., negative NOI, failed IRR solve).
+    """
+    import numpy as np
+    result = []
+    for row in matrix:
+        result.append([
+            float(v) if v not in ('N/A', None, '', 'nan') else np.nan
+            for v in row
+        ])
+    return np.array(result, dtype=float)
+
+
 def build_irr_heatmap(deal) -> Optional[bytes]:
     """
     Figure 12.2 — IRR sensitivity heatmap (rent growth vs exit cap rate).
@@ -239,8 +256,11 @@ def build_irr_heatmap(deal) -> Optional[bytes]:
             logger.info("IRR heatmap skipped — no sensitivity matrix data")
             return None
 
-        data = np.array(matrix)
-        if data.max() == 0:
+        data = _safe_numeric_matrix(matrix)
+        if np.all(np.isnan(data)):
+            logger.info("IRR heatmap skipped — all values N/A (negative NOI deal)")
+            return None
+        if np.nanmax(data) == 0:
             logger.info("IRR heatmap skipped — all-zero sensitivity matrix")
             return None
 
@@ -254,7 +274,7 @@ def build_irr_heatmap(deal) -> Optional[bytes]:
 
         target_irr = deal.assumptions.target_lp_irr or 0.15
         im = ax.imshow(data * 100, cmap=cmap, aspect="auto",
-                       vmin=0, vmax=max(data.max() * 100, target_irr * 100 * 1.5))
+                       vmin=0, vmax=max(np.nanmax(data) * 100, target_irr * 100 * 1.5))
 
         # Axis labels
         ax.set_xticks(range(len(cap_axis)))
@@ -269,7 +289,12 @@ def build_irr_heatmap(deal) -> Optional[bytes]:
         # Cell annotations
         for i in range(len(rg_axis)):
             for j in range(len(cap_axis)):
-                val = data[i, j] * 100
+                raw = data[i, j]
+                if np.isnan(raw):
+                    ax.text(j, i, "N/A", ha="center", va="center",
+                            fontsize=7, color=C_WALNUT, fontweight="bold")
+                    continue
+                val = raw * 100
                 color = "white" if val < target_irr * 100 * 0.7 else C_WALNUT
                 ax.text(j, i, f"{val:.1f}%", ha="center", va="center",
                         fontsize=7, color=color, fontweight="bold")
@@ -311,9 +336,11 @@ def build_capital_stack_chart(deal) -> Optional[bytes]:
 
         total_uses   = fo.total_uses or a.purchase_price or 0
         senior_debt  = fo.initial_loan_amount or 0
-        total_equity = fo.total_equity_required or (total_uses - senior_debt)
-        gp_equity    = total_equity * a.gp_equity_pct
-        lp_equity    = total_equity * a.lp_equity_pct
+        equity_gap   = total_uses - senior_debt
+        logger.info("Capital stack equity gap: %.2f  (total_uses=%.2f - senior_debt=%.2f)",
+                     equity_gap, total_uses, senior_debt)
+        gp_equity    = equity_gap * a.gp_equity_pct
+        lp_equity    = equity_gap * a.lp_equity_pct
 
         if total_uses <= 0:
             logger.info("Capital stack chart skipped — no total_uses data")
@@ -556,7 +583,7 @@ def build_gantt_chart(deal) -> Optional[bytes]:
                                               a.hold_period * 12, C_SAGE),
                 ("Disposition",               a.hold_period * 12, a.hold_period * 12 + 3, C_SAGE_LT),
             ]
-        elif strategy == InvestmentStrategy.FOR_SALE:
+        elif strategy == InvestmentStrategy.OPPORTUNISTIC:
             phases = [
                 ("Due Diligence & Closing",   0,  3,  C_BRONZE),
                 ("Construction",              3,  3 + a.sale_const_period_months, C_FAIL),
@@ -626,12 +653,180 @@ def build_gantt_chart(deal) -> Optional[bytes]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# KPI DASHBOARD — 12-metric traffic light grid
+# ═══════════════════════════════════════════════════════════════════════════
+
+def build_kpi_dashboard(deal) -> Optional[bytes]:
+    """Generate a 3×4 KPI traffic-light dashboard PNG."""
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+
+        fo = deal.financial_outputs
+        a = deal.assumptions
+
+        # ── Compute the 12 metrics ───────────────────────────────
+        yr1_noi = None
+        yr1_egi = None
+        yr1_opex = None
+        if fo.pro_forma_years and len(fo.pro_forma_years) > 0:
+            yr1 = fo.pro_forma_years[0]
+            yr1_noi = yr1.get("noi")
+            yr1_egi = yr1.get("egi")
+            yr1_opex = yr1.get("opex")
+
+        cap_rate = fo.going_in_cap_rate
+        dscr = fo.dscr_yr1
+        coc = fo.cash_on_cash_yr1
+        lp_irr = fo.lp_irr
+        em = fo.lp_equity_multiple
+        ltv = a.ltv_pct
+        vacancy = a.vacancy_rate
+
+        # Compute price metrics from assumptions
+        price = a.purchase_price or 0
+        gba = a.gba_sf or 0
+        n_units = a.num_units or 0
+        price_per_sf = price / gba if gba > 0 else None
+        price_per_unit = price / n_units if n_units > 0 else None
+
+        # Debt yield = NOI / loan amount
+        debt_yield = None
+        if yr1_noi and fo.initial_loan_amount and fo.initial_loan_amount > 0:
+            debt_yield = yr1_noi / fo.initial_loan_amount
+
+        # NOI margin = NOI / EGI
+        noi_margin = None
+        if yr1_noi and yr1_egi and yr1_egi > 0:
+            noi_margin = yr1_noi / yr1_egi
+
+        # Expense ratio = OpEx / EGI
+        expense_ratio = None
+        if yr1_opex and yr1_egi and yr1_egi > 0:
+            expense_ratio = yr1_opex / yr1_egi
+
+        # ── Thresholds: (metric, value, format, pass_test, watch_test) ──
+        # pass_test(v) → PASS, watch_test(v) → WATCH, else FAIL
+        metrics = [
+            ("Cap Rate",       cap_rate,       _kpi_fmt_pct,
+             lambda v: v >= 0.06, lambda v: v >= 0.045),
+            ("DSCR",           dscr,           _kpi_fmt_x,
+             lambda v: v >= 1.25, lambda v: v >= 1.10),
+            ("CoC Return",     coc,            _kpi_fmt_pct,
+             lambda v: v >= 0.08, lambda v: v >= 0.05),
+            ("LP IRR",         lp_irr,         _kpi_fmt_pct,
+             lambda v: v >= a.target_lp_irr, lambda v: v >= a.min_lp_irr),
+            ("Equity Multiple", em,            _kpi_fmt_x,
+             lambda v: v >= 2.0, lambda v: v >= 1.5),
+            ("Debt Yield",     debt_yield,     _kpi_fmt_pct,
+             lambda v: v >= 0.10, lambda v: v >= 0.08),
+            ("LTV",            ltv,            _kpi_fmt_pct,
+             lambda v: v <= 0.75, lambda v: v <= 0.80),
+            ("NOI Margin",     noi_margin,     _kpi_fmt_pct,
+             lambda v: v >= 0.60, lambda v: v >= 0.50),
+            ("Price / SF",     price_per_sf,   _kpi_fmt_dollar,
+             lambda v: v <= 250, lambda v: v <= 350),
+            ("Price / Unit",   price_per_unit, _kpi_fmt_dollar_k,
+             lambda v: v <= 150_000, lambda v: v <= 200_000),
+            ("Vacancy Rate",   vacancy,        _kpi_fmt_pct,
+             lambda v: v <= 0.07, lambda v: v <= 0.10),
+            ("Expense Ratio",  expense_ratio,  _kpi_fmt_pct,
+             lambda v: v <= 0.45, lambda v: v <= 0.55),
+        ]
+
+        # ── Build the 3×4 grid figure ────────────────────────────
+        n_cols, n_rows = 4, 3
+        cell_w, cell_h = 1.8, 0.9
+        fig_w = n_cols * cell_w + 0.4
+        fig_h = n_rows * cell_h + 0.7
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        fig.patch.set_facecolor(C_PARCHMENT)
+        ax.set_facecolor(C_PARCHMENT)
+        ax.set_xlim(0, n_cols * cell_w)
+        ax.set_ylim(0, n_rows * cell_h)
+        ax.axis("off")
+        ax.set_title("Key Performance Indicators", fontsize=12,
+                     fontweight="bold", color=C_WALNUT, pad=10)
+
+        for idx, (name, value, fmt_fn, pass_fn, watch_fn) in enumerate(metrics):
+            col = idx % n_cols
+            row = n_rows - 1 - idx // n_cols  # top-to-bottom
+            x = col * cell_w + cell_w / 2
+            y = row * cell_h + cell_h / 2
+
+            # Determine status
+            if value is None:
+                status, color = "N/A", C_GRID
+                display = "—"
+            else:
+                display = fmt_fn(value)
+                if pass_fn(value):
+                    status, color = "PASS", C_PASS
+                elif watch_fn(value):
+                    status, color = "WATCH", C_WATCH
+                else:
+                    status, color = "FAIL", C_FAIL
+
+            # Tile background
+            tile = mpatches.FancyBboxPatch(
+                (col * cell_w + 0.08, row * cell_h + 0.06),
+                cell_w - 0.16, cell_h - 0.12,
+                boxstyle="round,pad=0.05", facecolor="white",
+                edgecolor=C_GRID, linewidth=0.8)
+            ax.add_patch(tile)
+
+            # Metric name
+            ax.text(x, y + 0.22, name, ha="center", va="center",
+                    fontsize=7, color=C_WALNUT, fontweight="bold")
+            # Value
+            ax.text(x, y + 0.02, display, ha="center", va="center",
+                    fontsize=11, color=C_WALNUT, fontweight="bold")
+            # Status pill
+            pill_w, pill_h = 0.55, 0.18
+            pill = mpatches.FancyBboxPatch(
+                (x - pill_w / 2, y - 0.30), pill_w, pill_h,
+                boxstyle="round,pad=0.04", facecolor=color,
+                edgecolor="none")
+            ax.add_patch(pill)
+            pill_text_color = "white" if color in (C_FAIL, C_WATCH) else C_WALNUT
+            ax.text(x, y - 0.21, status, ha="center", va="center",
+                    fontsize=6, color=pill_text_color, fontweight="bold")
+
+        fig.tight_layout()
+        result = _fig_to_bytes(fig)
+        logger.info("KPI dashboard built — %d bytes", len(result))
+        return result
+
+    except Exception as exc:
+        logger.error("KPI dashboard failed: %s", exc)
+        return None
+
+
+def _kpi_fmt_pct(v):
+    return f"{v:.1%}"
+
+def _kpi_fmt_x(v):
+    return f"{v:.2f}x"
+
+def _kpi_fmt_dollar(v):
+    return f"${v:,.0f}"
+
+def _kpi_fmt_dollar_k(v):
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.1f}M"
+    if v >= 1_000:
+        return f"${v / 1_000:.0f}K"
+    return f"${v:,.0f}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
 class ChartImages:
     """Container for all chart PNG byte strings."""
     def __init__(self):
+        self.kpi_dashboard : Optional[bytes] = None
         self.demographic   : Optional[bytes] = None
         self.proforma      : Optional[bytes] = None
         self.irr_heatmap   : Optional[bytes] = None
@@ -651,6 +846,7 @@ def build_all_charts(deal) -> ChartImages:
     charts = ChartImages()
 
     builders = [
+        ("kpi_dashboard", build_kpi_dashboard),
         ("demographic",   build_demographic_chart),
         ("proforma",      build_proforma_chart),
         ("irr_heatmap",   build_irr_heatmap),

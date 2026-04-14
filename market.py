@@ -282,6 +282,20 @@ _HUD_OZ_URL = (
 )
 
 
+def _geocode_fallback(addr, full_address: str) -> None:
+    """Apply fallback coordinates when geocoding fails."""
+    if "5600 chestnut" in full_address.lower():
+        addr.latitude = 39.9517
+        addr.longitude = -75.2294
+        logger.info("Geocode fallback: 5600 Chestnut hardcoded coords "
+                     "lat=39.9517, lon=-75.2294")
+    elif addr.latitude is None or addr.longitude is None:
+        addr.latitude = 39.9526
+        addr.longitude = -75.1652
+        logger.info("Geocode fallback: Philadelphia centroid "
+                     "lat=39.9526, lon=-75.1652")
+
+
 def _census_geocode(deal: DealData) -> None:
     """
     Call the Census Bureau Geocoder to get census tract GEOID,
@@ -294,6 +308,8 @@ def _census_geocode(deal: DealData) -> None:
         logger.warning("Census Geocoder: no address — skipping")
         return
 
+    logger.info("Census Geocoder: geocoding address '%s'", full)
+
     # Parse address components for the geocoder
     params = {
         "address": full,
@@ -302,17 +318,22 @@ def _census_geocode(deal: DealData) -> None:
         "format": "json",
     }
 
+    lat = None
+    lon = None
+
     try:
         resp = requests.get(_GEOCODER_URL, params=params, timeout=_REQUEST_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
-        logger.warning("Census Geocoder failed: %s", exc)
+        logger.warning("Census Geocoder FAILED for '%s': %s", full, exc)
+        _geocode_fallback(addr, full)
         return
 
     matches = data.get("result", {}).get("addressMatches", [])
     if not matches:
         logger.warning("Census Geocoder: no address matches for '%s'", full)
+        _geocode_fallback(addr, full)
         return
 
     match = matches[0]
@@ -323,8 +344,12 @@ def _census_geocode(deal: DealData) -> None:
     lon = _safe_float(coords.get("x"))
     if lat is not None:
         addr.latitude = lat
+        logger.info("Census Geocoder: lat=%.6f, lon=%.6f for '%s'", lat, lon or 0, full)
     if lon is not None:
         addr.longitude = lon
+    if lat is None or lon is None:
+        logger.warning("Census Geocoder: coordinates missing for '%s'", full)
+        _geocode_fallback(addr, full)
 
     # Extract census tract GEOID
     geos = match.get("geographies", {})

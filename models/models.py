@@ -10,8 +10,8 @@ Status:   PENDING APPROVAL
 
 from __future__ import annotations
 from enum import Enum
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, model_validator
+from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -30,15 +30,15 @@ class AssetType(str, Enum):
 
 class InvestmentStrategy(str, Enum):
     """
-    3-strategy canonical taxonomy — effective April 6, 2026.
+    3-strategy canonical taxonomy — effective April 7, 2026.
     Replaces the prior 7-strategy system.
-      stabilized → Buy & Hold, Stabilized Hold
-      value_add  → Value-Add Renovation, Ground-Up Build, KD&R, Adaptive Reuse
-      for_sale   → Flip for Sale, Land Subdivision, Land Development
+      stabilized_hold → Buy & Hold, Stabilized Hold
+      value_add       → Value-Add Renovation, Ground-Up Build, KD&R, Adaptive Reuse
+      opportunistic   → Flip for Sale, Land Subdivision, Land Development
     """
-    STABILIZED = "stabilized"
-    VALUE_ADD  = "value_add"
-    FOR_SALE   = "for_sale"
+    STABILIZED_HOLD = "stabilized_hold"
+    VALUE_ADD       = "value_add"
+    OPPORTUNISTIC   = "opportunistic"
 
 
 class WaterfallType(int, Enum):
@@ -144,6 +144,23 @@ class MarketData(BaseModel):
     debt_market_narrative:     Optional[str] = None   # Prompt 5B output
 
 
+class RentRollUnit(BaseModel):
+    """One tenant/unit in the rent roll — used by the lease event engine."""
+    unit_id:              str   = ""
+    unit_type:            str   = ""
+    sf:                   float = 0.0
+    monthly_rent:         float = 0.0       # residential $/mo or commercial $/mo
+    annual_rent:          float = 0.0       # commercial: rent_sf × sf
+    current_rent_sf:      float = 0.0       # commercial: $/SF/yr
+    lease_term_years:     float = 5.0
+    lease_expiry_year:    int   = 0         # hold year when lease expires (1–10), 0=unknown
+    market_rent_sf:       float = 0.0       # market rent at renewal
+    renewal_probability:  float = 0.70
+    is_vacant:            bool  = False
+    downtime_months:      int   = 3
+    status:               str   = "Occupied"
+
+
 class RefiEvent(BaseModel):
     """
     One refinancing event. Use List[RefiEvent] (max 3) instead of 33 flat fields.
@@ -152,6 +169,7 @@ class RefiEvent(BaseModel):
     active:          bool  = False
     year:            int   = 0
     appraised_value: float = 0.0
+    cap_rate:        float = 0.07
     ltv:             float = 0.70
     rate:            float = 0.065
     amort_years:     int   = 30
@@ -277,9 +295,9 @@ class FinancialAssumptions(BaseModel):
 
     # §6–8 Refinancing events — List[RefiEvent], max 3
     refi_events: List[RefiEvent] = Field(default_factory=lambda: [
-        RefiEvent(active=False, year=5,  appraised_value=3200000, ltv=0.70, rate=0.060, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=25000),
-        RefiEvent(active=False, year=8,  appraised_value=3800000, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=25000),
-        RefiEvent(active=False, year=0,  appraised_value=0,       ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.00, closing_costs=0),
+        RefiEvent(active=False, year=5,  appraised_value=3200000, cap_rate=0.07, ltv=0.70, rate=0.060, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=25000),
+        RefiEvent(active=False, year=8,  appraised_value=3800000, cap_rate=0.07, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=25000),
+        RefiEvent(active=False, year=0,  appraised_value=0,       cap_rate=0.07, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.00, closing_costs=0),
     ])
 
     # §8 Income
@@ -288,7 +306,7 @@ class FinancialAssumptions(BaseModel):
     expense_growth_rate: float = 0.03   # Referenced by Prompt 5B
     loss_to_lease:       float = 0.03
     cam_reimbursements:  float = 0.0
-    fee_income:          float = 6000.0
+    fee_income:          float = 0.0     # was 6000.0 — default to $0
 
     # §9 Fixed expenses (Year 1)
     re_taxes:            float = 45000.0
@@ -316,6 +334,12 @@ class FinancialAssumptions(BaseModel):
     cap_reserve_per_unit: float = 400.0
     commissions_yr1:     float = 0.0
     renovations_yr1:     float = 0.0
+
+    # §11B Leasing cost assumptions
+    ti_new_psf:              float = 0.0    # TI allowance — new lease ($/SF)
+    ti_renewal_psf:          float = 0.0    # TI allowance — renewal ($/SF)
+    commission_new_pct:      float = 0.05   # Leasing commission — new lease (% of GLV)
+    commission_renewal_pct:  float = 0.025  # Leasing commission — renewal (% of GLV)
 
     # §12 Exit
     exit_cap_rate:         float = 0.07
@@ -375,6 +399,8 @@ class FinancialOutputs(BaseModel):
     total_sources:           Optional[float] = None
     total_equity_required:   Optional[float] = None
     initial_loan_amount:     Optional[float] = None
+    gp_equity:               Optional[float] = None
+    lp_equity:               Optional[float] = None
     gross_potential_rent:    Optional[float] = None
     effective_gross_income:  Optional[float] = None
     total_operating_expenses: Optional[float]= None
@@ -394,12 +420,20 @@ class FinancialOutputs(BaseModel):
     gross_sale_price:        Optional[float] = None
     net_sale_proceeds:       Optional[float] = None
     net_equity_at_exit:      Optional[float] = None
-    sensitivity_matrix:      Optional[List[List[float]]] = None
+    sensitivity_matrix:      Optional[List[List[Union[float, str]]]] = None
+    sensitivity_em_matrix:   Optional[List[List[float]]] = None
+    sensitivity_noi_matrix:  Optional[List[List[float]]] = None
+    sensitivity_coc_matrix:  Optional[List[List[float]]] = None
     sensitivity_axis_rent_growth: Optional[List[float]] = None
     sensitivity_axis_exit_cap:    Optional[List[float]] = None
     monte_carlo_results:     Optional[Dict[str, Any]] = None
     monte_carlo_narrative:   Optional[str] = None   # Prompt 5A output
     pro_forma_years:         Optional[List[Dict[str, float]]] = None
+    loan_balance_at_refi:    Optional[List[Optional[float]]] = None  # amortized balance at each refi event
+    lease_events:            Optional[Dict[int, Dict[str, Any]]] = None  # {year: {commission, ti, downtime_loss, ...}}
+    sensitivity_stabilized_year: Optional[int]   = None
+    sensitivity_stabilized_noi:  Optional[float] = None
+    sensitivity_note:            Optional[str]   = None
 
 
 
@@ -669,9 +703,9 @@ class DealData(BaseModel):
         word_builder.py  → reads all fields; generates PDF report
 
     Excel template routing:
-        strategy=stabilized → Hold_Template_v3.xlsx
-        strategy=value_add  → Hold_Template_v3.xlsx  (Value_Add template TBD)
-        strategy=for_sale   → Sale_Template_v3.xlsx
+        strategy=stabilized_hold → Hold_Template_v3.xlsx
+        strategy=value_add       → Hold_Template_v3.xlsx
+        strategy=opportunistic   → Sale_Template_v3.xlsx
 
     Investor mode flag:
         investor_mode=False → full internal report (22 sections)
@@ -691,7 +725,37 @@ class DealData(BaseModel):
 
     # Classification
     asset_type:          AssetType           = AssetType.MULTIFAMILY
-    investment_strategy: InvestmentStrategy  = InvestmentStrategy.STABILIZED
+    investment_strategy: InvestmentStrategy  = InvestmentStrategy.STABILIZED_HOLD
+
+    @field_validator("asset_type", mode="before")
+    @classmethod
+    def _coerce_asset_type(cls, v: Any) -> AssetType:
+        if isinstance(v, AssetType):
+            return v
+        if isinstance(v, str):
+            low = v.strip().lower().replace(" ", "-")
+            for member in AssetType:
+                if low == member.value.lower().replace(" ", "-"):
+                    return member
+        raise ValueError(
+            f"Unknown asset_type {v!r}. "
+            f"Valid: {[m.value for m in AssetType]}"
+        )
+
+    @field_validator("investment_strategy", mode="before")
+    @classmethod
+    def _coerce_investment_strategy(cls, v: Any) -> InvestmentStrategy:
+        if isinstance(v, InvestmentStrategy):
+            return v
+        if isinstance(v, str):
+            low = v.strip().lower().replace(" ", "_").replace("-", "_")
+            for member in InvestmentStrategy:
+                if low == member.value.lower():
+                    return member
+        raise ValueError(
+            f"Unknown investment_strategy {v!r}. "
+            f"Valid: {[m.value for m in InvestmentStrategy]}"
+        )
 
     # Address
     address: PropertyAddress = Field(default_factory=PropertyAddress)
@@ -764,30 +828,14 @@ class DealData(BaseModel):
     def strategy_key(self) -> str:
         """
         Return the strategy string key used for template routing in config.py.
-        Maps InvestmentStrategy enum → EXCEL_TEMPLATE_MAP key.
+        Maps InvestmentStrategy enum → config template routing key.
         """
         mapping = {
-            InvestmentStrategy.STABILIZED: "stabilized",
-            InvestmentStrategy.VALUE_ADD:  "value_add",
-            InvestmentStrategy.FOR_SALE:   "for_sale",
+            InvestmentStrategy.STABILIZED_HOLD: "stabilized_hold",
+            InvestmentStrategy.VALUE_ADD:       "value_add",
+            InvestmentStrategy.OPPORTUNISTIC:   "opportunistic",
         }
-        return mapping.get(self.investment_strategy, "stabilized")
-
-    @property
-    def asset_type_key(self) -> str:
-        """
-        Return the asset type string key used for template routing in config.py.
-        Maps AssetType enum → EXCEL_TEMPLATE_MAP key.
-        """
-        mapping = {
-            AssetType.MULTIFAMILY:   "multifamily",
-            AssetType.MIXED_USE:     "mixed_use",
-            AssetType.RETAIL:        "retail",
-            AssetType.OFFICE:        "office",
-            AssetType.INDUSTRIAL:    "industrial",
-            AssetType.SINGLE_FAMILY: "single_family",
-        }
-        return mapping.get(self.asset_type, "multifamily")
+        return mapping.get(self.investment_strategy, "stabilized_hold")
 
     @property
     def cover_title(self) -> str:

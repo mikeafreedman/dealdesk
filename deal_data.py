@@ -59,21 +59,23 @@ _ASSET_TYPE_ALIASES: Dict[str, AssetType] = {
 }
 
 _STRATEGY_ALIASES: Dict[str, InvestmentStrategy] = {
-    "stabilized":     InvestmentStrategy.STABILIZED,
-    "buy and hold":   InvestmentStrategy.STABILIZED,
-    "buy & hold":     InvestmentStrategy.STABILIZED,
-    "hold":           InvestmentStrategy.STABILIZED,
-    "value_add":      InvestmentStrategy.VALUE_ADD,
-    "value-add":      InvestmentStrategy.VALUE_ADD,
-    "value add":      InvestmentStrategy.VALUE_ADD,
-    "renovation":     InvestmentStrategy.VALUE_ADD,
-    "ground-up":      InvestmentStrategy.VALUE_ADD,
-    "adaptive reuse": InvestmentStrategy.VALUE_ADD,
-    "kd&r":           InvestmentStrategy.VALUE_ADD,
-    "for_sale":       InvestmentStrategy.FOR_SALE,
-    "for sale":       InvestmentStrategy.FOR_SALE,
-    "flip":           InvestmentStrategy.FOR_SALE,
-    "subdivision":    InvestmentStrategy.FOR_SALE,
+    "stabilized":      InvestmentStrategy.STABILIZED_HOLD,
+    "stabilized_hold": InvestmentStrategy.STABILIZED_HOLD,
+    "buy and hold":    InvestmentStrategy.STABILIZED_HOLD,
+    "buy & hold":      InvestmentStrategy.STABILIZED_HOLD,
+    "hold":            InvestmentStrategy.STABILIZED_HOLD,
+    "value_add":       InvestmentStrategy.VALUE_ADD,
+    "value-add":       InvestmentStrategy.VALUE_ADD,
+    "value add":       InvestmentStrategy.VALUE_ADD,
+    "renovation":      InvestmentStrategy.VALUE_ADD,
+    "ground-up":       InvestmentStrategy.VALUE_ADD,
+    "adaptive reuse":  InvestmentStrategy.VALUE_ADD,
+    "kd&r":            InvestmentStrategy.VALUE_ADD,
+    "opportunistic":   InvestmentStrategy.OPPORTUNISTIC,
+    "for_sale":        InvestmentStrategy.OPPORTUNISTIC,
+    "for sale":        InvestmentStrategy.OPPORTUNISTIC,
+    "flip":            InvestmentStrategy.OPPORTUNISTIC,
+    "subdivision":     InvestmentStrategy.OPPORTUNISTIC,
 }
 
 
@@ -95,7 +97,7 @@ def _resolve_asset_type(raw: Any, default: AssetType = AssetType.MULTIFAMILY) ->
     return default
 
 
-def _resolve_strategy(raw: Any, default: InvestmentStrategy = InvestmentStrategy.STABILIZED) -> InvestmentStrategy:
+def _resolve_strategy(raw: Any, default: InvestmentStrategy = InvestmentStrategy.STABILIZED_HOLD) -> InvestmentStrategy:
     """Resolve a raw string to a canonical InvestmentStrategy enum, or return default."""
     if isinstance(raw, InvestmentStrategy):
         return raw
@@ -198,6 +200,24 @@ _BACKFILL_MAP: List[tuple] = [
 # Direct user-input fields on FinancialAssumptions (no extraction source)
 _ASSUMPTION_FIELDS = list(FinancialAssumptions.model_fields.keys())
 
+# ── 3-tier cost defaults ────────────────────────────────────────────────
+# For each dollar-value cost field:
+#   Tier 1: user override (already set by _build_deal from form)
+#   Tier 2: extracted value (via _COST_EXTRACTION_MAP below)
+#   Tier 3: percentage-based fallback (base_field, pct)
+#            None means zero_default — field must come from input/extraction
+#
+# Format: (assumptions_field, extracted_field_or_None, (base_field, pct) or None)
+_COST_DEFAULTS: List[tuple] = [
+    # Hard costs: must come from input or extraction, no % default
+    ("const_hard",          "construction_hard_costs_extracted", None),
+    ("renovations_yr1",     "renovation_cost_extracted",        None),
+    # Soft / closing costs: % of purchase_price fallback
+    ("closing_costs_fixed", "closing_costs_extracted",          ("purchase_price", 0.02)),
+    ("const_reserve",       None,                               ("const_hard", 0.05)),
+    ("acq_fee_fixed",       None,                               ("purchase_price", 0.015)),
+]
+
 
 def _merge_assumptions(assumptions: FinancialAssumptions, user_inputs: Dict[str, Any],
                        extracted: ExtractedDocumentData, provenance: Dict[str, str]) -> None:
@@ -262,6 +282,44 @@ def _merge_assumptions(assumptions: FinancialAssumptions, user_inputs: Dict[str,
         assumptions.purchase_price = extracted.asking_price
         provenance["purchase_price"] = "extracted:asking_price"
         logger.info("Backfilled purchase_price from extracted asking_price")
+
+    # Step 5: 3-tier cost defaults — Tier 1 (user) already applied above,
+    #         now try Tier 2 (extraction) then Tier 3 (% default).
+    #         NEVER sum two sources — one input, one output.
+    for field, ext_field, pct_rule in _COST_DEFAULTS:
+        current = getattr(assumptions, field, 0.0)
+
+        # Tier 1: user already set a non-zero value
+        if not _is_blank(current):
+            source = "user_override"
+            logger.info("ASSUMPTIONS %s source=%s value=%s", field, source, current)
+            continue
+
+        # Tier 2: extraction
+        if ext_field:
+            ext_val = getattr(extracted, ext_field, None)
+            if not _is_blank(ext_val):
+                setattr(assumptions, field, float(ext_val))
+                provenance[field] = f"extracted:{ext_field}"
+                logger.info("ASSUMPTIONS %s source=%s value=%s",
+                            field, "extracted", ext_val)
+                continue
+
+        # Tier 3: percentage-based fallback
+        if pct_rule:
+            base_field, pct = pct_rule
+            base_val = getattr(assumptions, base_field, 0.0)
+            if base_val and base_val > 0:
+                computed = round(base_val * pct, 2)
+                setattr(assumptions, field, computed)
+                provenance[field] = f"pct_default:{base_field}*{pct}"
+                logger.info("ASSUMPTIONS %s source=%s value=%s",
+                            field, "pct_default", computed)
+                continue
+
+        # No value from any tier
+        logger.info("ASSUMPTIONS %s source=%s value=%s",
+                    field, "zero_default", 0.0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

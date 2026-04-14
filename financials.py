@@ -13,8 +13,8 @@ Computes:
     7. 10,000-iteration Monte Carlo simulation
     8. Prompt 5A — Monte Carlo narrative (only AI call in this module)
 
-Insurance expense line: uses DealData.insurance.insurance_proforma_line_item
-if not None, otherwise falls back to DealData.assumptions.insurance.
+Insurance expense line: priority = (1) assumptions.insurance if > 0,
+(2) DealData.insurance.insurance_proforma_line_item if not None, (3) 0.0.
 
 Pipeline position: runs after risk.py (Stage 6), before excel_builder.py.
 """
@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import traceback
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -33,7 +34,7 @@ import anthropic
 import streamlit as st
 
 from config import ANTHROPIC_SECRET_KEY, MODEL_SONNET
-from models.models import DealData, InvestmentStrategy, WaterfallType
+from models.models import AssetType, DealData, InvestmentStrategy, WaterfallType
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +61,12 @@ def _monthly_payment(principal: float, annual_rate: float,
 def _loan_balance(principal: float, annual_rate: float,
                   amort_years: int, amort_months_elapsed: int) -> float:
     """Outstanding balance after *amort_months_elapsed* amortizing payments.
-    IO months are NOT counted — caller must subtract them first."""
-    if principal <= 0 or amort_years <= 0 or amort_months_elapsed <= 0:
+    IO months are NOT counted — caller must subtract them first.
+    If amort_years == 0 (IO loan), balance stays flat."""
+    if principal <= 0 or amort_months_elapsed <= 0:
         return principal
+    if amort_years <= 0:
+        return principal  # IO loan — no principal paydown
     r = annual_rate / 12
     if r <= 0:
         return max(0.0, principal - principal / (amort_years * 12) * amort_months_elapsed)
@@ -75,13 +79,21 @@ def _loan_balance(principal: float, annual_rate: float,
 
 def _year_debt_service(principal: float, annual_rate: float,
                        amort_years: int, io_months_remaining: int) -> float:
-    """Annual debt service for one year, mixing IO and amortizing months."""
+    """Annual debt service for one year.
+
+    If the year falls entirely within the IO period, return interest-only.
+    If entirely past IO, return full P&I.  If IO expires mid-year, blend.
+    If amort_years == 0 (interest-only loan), return IO for all 12 months.
+    """
     if principal <= 0:
         return 0.0
     r = annual_rate / 12
+    io_pmt = principal * r if r > 0 else 0.0
+    # Pure IO loan: always pay interest-only regardless of io_months_remaining
+    if amort_years <= 0:
+        return io_pmt * 12
     io_this_year = max(0, min(12, io_months_remaining))
     amort_this_year = 12 - io_this_year
-    io_pmt = principal * r if r > 0 else 0.0
     amort_pmt = _monthly_payment(principal, annual_rate, amort_years)
     return io_pmt * io_this_year + amort_pmt * amort_this_year
 
@@ -92,24 +104,41 @@ def _year_debt_service(principal: float, annual_rate: float,
 
 def _compute_sources_uses(deal: DealData) -> dict:
     a = deal.assumptions
-    is_sale = deal.investment_strategy == InvestmentStrategy.FOR_SALE
+    is_sale = deal.investment_strategy == InvestmentStrategy.OPPORTUNISTIC
 
     transfer_tax = a.purchase_price * a.transfer_tax_rate
     professional = (a.legal_closing + a.title_insurance + a.legal_bank +
                     a.appraisal + a.environmental + a.surveyor +
                     a.architect + a.structural + a.civil_eng +
                     a.meps + a.legal_zoning + a.geotech)
-    financing_soft = (a.acq_fee_fixed + a.mortgage_carry + a.mortgage_fees +
+    financing_soft = (a.acq_fee_fixed +
                       a.mezz_interest + a.working_capital + a.marketing +
                       a.re_tax_carry + a.prop_ins_carry + a.dev_fee +
                       a.dev_pref + a.permits + a.stormwater)
-    hard_costs = a.demo + a.const_hard + a.const_reserve + a.gc_overhead
-    initial_loan = a.purchase_price * a.ltv_pct
+    hard_costs = (a.demo + a.const_hard + a.const_reserve + a.gc_overhead)
+
+    # Total project cost before origination (used to size the loan)
+    total_project_cost = (a.purchase_price + transfer_tax +
+                          a.tenant_buyout + professional + financing_soft +
+                          hard_costs)
+    initial_loan = total_project_cost * a.ltv_pct
     origination_fee = initial_loan * a.origination_fee_pct
 
-    total_uses = (a.purchase_price + transfer_tax + a.closing_costs_fixed +
-                  a.tenant_buyout + professional + financing_soft +
-                  hard_costs + origination_fee)
+    total_uses = total_project_cost + origination_fee
+
+    logger.info("TPC FIX: total_project_cost=%s (closing_costs_fixed double-count removed)",
+                f"{total_project_cost:,.2f}")
+    logger.info(
+        "LOAN SIZING: total_project_cost=%s × LTV=%s = loan=%s",
+        f"{total_project_cost:,.2f}", f"{a.ltv_pct:.1%}", f"{initial_loan:,.2f}")
+    logger.info(
+        "S&U DETAIL: purchase=%s, transfer_tax=%s, "
+        "tenant_buyout=%s, professional=%s, financing_soft=%s, "
+        "hard_costs=%s, origination=%s -> TOTAL=%s",
+        a.purchase_price, transfer_tax,
+        a.tenant_buyout, professional, financing_soft,
+        hard_costs, origination_fee, total_uses
+    )
 
     # For-sale: add carry costs to uses
     if is_sale:
@@ -122,12 +151,24 @@ def _compute_sources_uses(deal: DealData) -> dict:
 
     non_equity_sources = initial_loan + a.mezz_debt + a.tax_credit_equity + a.grants
     total_equity = max(0.0, total_uses - non_equity_sources)
+    lp_equity = total_equity * a.lp_equity_pct
+    gp_equity = total_equity * a.gp_equity_pct
+    total_sources = non_equity_sources + total_equity
+    logger.info("S&U: total_uses=%.2f, senior_debt=%.2f",
+                total_uses, initial_loan)
+    logger.info("CTX: equity_gap=%.2f, gp_equity=%.2f, lp_equity=%.2f",
+                total_equity, gp_equity, lp_equity)
+    logger.info("S&U check: Uses=%s, Sources=%s, Gap=%s",
+                f"{total_uses:,.0f}", f"{total_sources:,.0f}",
+                f"{total_sources - total_uses:,.0f}")
 
     return {
         "total_uses": total_uses,
-        "total_sources": total_uses,          # sources ≡ uses
+        "total_sources": total_sources,
         "initial_loan": initial_loan,
         "total_equity_required": total_equity,
+        "lp_equity": lp_equity,
+        "gp_equity": gp_equity,
     }
 
 
@@ -136,15 +177,61 @@ def _compute_sources_uses(deal: DealData) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _get_insurance_expense(deal: DealData) -> float:
+    # User-set assumption always wins; AI-estimated proforma is fallback only
+    if deal.assumptions.insurance and deal.assumptions.insurance > 0:
+        return deal.assumptions.insurance
     if deal.insurance.insurance_proforma_line_item is not None:
         return deal.insurance.insurance_proforma_line_item
-    return deal.assumptions.insurance
+    return 0.0
 
 
 def _gpr_yr1(deal: DealData) -> float:
-    monthly = deal.extracted_docs.total_monthly_rent
+    # Primary source: extracted from uploaded documents
+    monthly = deal.extracted_docs.total_monthly_rent if deal.extracted_docs else None
     if monthly and monthly > 0:
-        return monthly * 12
+        gpr = monthly * 12
+        logger.info(f"GPR: from extracted docs = ${gpr:,.0f}/yr")
+        return gpr
+
+    # Fallback: compute from assumptions (num_units × avg monthly rent)
+    # Try unit_mix (rent roll line items) next
+    if deal.extracted_docs and deal.extracted_docs.unit_mix:
+        roll_total = sum(
+            (u.get("monthly_rent") or u.get("market_rent") or 0)
+            for u in deal.extracted_docs.unit_mix
+        )
+        if roll_total > 0:
+            gpr = roll_total * 12
+            logger.info(f"GPR: from unit_mix sum = ${gpr:,.0f}/yr")
+            return gpr
+
+    # Last fallback: assumptions-based estimate
+    num_units = deal.assumptions.num_units or 0
+    avg_rent = getattr(deal.assumptions, 'monthly_rent_per_unit', None) or 0
+    if num_units > 0 and avg_rent > 0:
+        gpr = num_units * avg_rent * 12
+        logger.info(f"GPR: from assumptions ({num_units} units × ${avg_rent}/mo) = ${gpr:,.0f}/yr")
+        return gpr
+
+    # ── Fallback 4: Commercial/Office — GBA × assumed rent/SF ───────
+    # This fires when: no total_monthly_rent from frontend,
+    # no unit_mix from extraction, and no monthly_rent_per_unit.
+    # For commercial deals, estimate from GBA × market rent/SF.
+    gba = getattr(deal.assumptions, "gba_sf", None) or \
+          getattr(deal.assumptions, "gross_building_area", None) or 0
+    if gba and gba > 0:
+        # Use asking_rent_per_sf if on assumptions, else use
+        # a conservative commercial fallback of $16.67/SF/yr
+        rent_psf = getattr(deal.assumptions, "asking_rent_per_sf", None) or \
+                   getattr(deal.assumptions, "rent_per_sf", None) or 16.67
+        gpr = float(gba) * float(rent_psf)
+        logger.info(
+            f"GPR: commercial fallback from GBA × rent/SF = "
+            f"{gba:,} SF × ${rent_psf:.2f}/SF = ${gpr:,.0f}/yr"
+        )
+        return gpr
+
+    logger.warning("GPR: all sources returned 0 -- no rental income data available")
     return 0.0
 
 
@@ -178,6 +265,175 @@ def _year_noi(gpr_yr1: float, year: int, a, insurance: float) -> Tuple[float, fl
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# §3B REFI APPRAISED VALUE HELPER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _refi_appraised_value(pro_forma_years: list,
+                          refi_year: int,
+                          refi_cap_rate: float) -> float:
+    """
+    Compute appraised value at refinance as:
+      NOI in refi year / refi appraisal cap rate
+
+    The refi happens AT THE END of the refi year.
+    Use the NOI for that same year (index refi_year - 1).
+
+    Returns 0.0 if refi_year is out of range or
+    cap rate is zero/negative.
+    """
+    if refi_year < 1 or refi_year > len(pro_forma_years):
+        logger.warning(
+            "REFI APPRAISED VALUE: refi_year %s out of "
+            "range (pro_forma has %s years) — returning 0",
+            refi_year, len(pro_forma_years))
+        return 0.0
+    if refi_cap_rate <= 0:
+        logger.warning(
+            "REFI APPRAISED VALUE: cap rate %.4f invalid "
+            "— returning 0", refi_cap_rate)
+        return 0.0
+    noi = pro_forma_years[refi_year - 1].get('noi', 0.0)
+    value = noi / refi_cap_rate
+    return value
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3C LEASE EVENT ENGINE
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _compute_lease_events(deal) -> dict:
+    """
+    For each hold year 1–N, compute total below-the-line lease costs from
+    commission, TI, and downtime across all tenants.
+
+    Returns {year_int: {commission, ti, downtime_loss, total_lease_cost, detail}}.
+    """
+    a = deal.assumptions
+    hold = a.hold_period
+    gba = a.gba_sf or 0
+    ext = deal.extracted_docs
+    units = (ext.unit_mix or []) if ext else []
+
+    # GPR/SF for fallback market rent
+    gpr_yr1 = _gpr_yr1(deal)
+    rent_psf_fallback = (gpr_yr1 / gba) if gba > 0 else 0.0
+
+    year_costs: dict = {}
+    tenant_count = 0
+    total_commission_all = 0.0
+    total_ti_all = 0.0
+    total_downtime_all = 0.0
+
+    for u in units:
+        sf = float(u.get("sf") or 0)
+        if sf <= 0:
+            continue
+        tenant_count += 1
+
+        is_vacant = u.get("is_vacant", False) or u.get("status", "") == "Vacant"
+        lease_term = float(u.get("lease_term_years") or 5)
+        expiry_yr = int(u.get("lease_expiry_year") or 0)
+        renewal_prob = float(u.get("renewal_probability") or 0.70)
+        downtime_mo = int(u.get("downtime_months") or 3)
+        market_rent = float(u.get("market_rent_sf") or 0)
+        current_rent_sf = float(u.get("current_rent_sf") or 0)
+        unit_id = u.get("unit_id") or "?"
+
+        # A. Vacant at acquisition — new lease in Year 1
+        if is_vacant:
+            yr = 1
+            mkt = market_rent if market_rent > 0 else rent_psf_fallback
+            if mkt <= 0:
+                logger.warning(
+                    "LEASE EVENT: vacant unit %s — no market rent "
+                    "and no GPR fallback available. Commission "
+                    "cannot be calculated. Set market rent on the "
+                    "rent roll or enter GPR assumptions.",
+                    unit_id)
+                continue
+            glv = mkt * sf * lease_term
+            comm = glv * a.commission_new_pct
+            ti = a.ti_new_psf * sf
+            detail = f"VACANT {unit_id}: new lease Yr1 GLV=${glv:,.0f} comm=${comm:,.0f} TI=${ti:,.0f}"
+
+            if yr not in year_costs:
+                year_costs[yr] = {"commission": 0, "ti": 0, "downtime_loss": 0,
+                                  "total_lease_cost": 0, "detail": []}
+            year_costs[yr]["commission"] += comm
+            year_costs[yr]["ti"] += ti
+            year_costs[yr]["total_lease_cost"] += comm + ti
+            year_costs[yr]["detail"].append(detail)
+            total_commission_all += comm
+            total_ti_all += ti
+            continue
+
+        # B. Occupied tenant with known expiry
+        if expiry_yr < 1 or expiry_yr > hold:
+            if expiry_yr == 0:
+                logger.warning("LEASE EVENT: tenant %s has no expiry year — skipping", unit_id)
+            continue
+
+        yr = expiry_yr
+
+        # Renewal scenario (weighted by renewal_prob)
+        renewal_rent = (market_rent if market_rent > 0
+                        else current_rent_sf * (1 + a.annual_rent_growth) ** expiry_yr)
+        renewal_glv = renewal_rent * sf * lease_term
+        renewal_comm = renewal_glv * a.commission_renewal_pct * renewal_prob
+        renewal_ti = a.ti_renewal_psf * sf * renewal_prob
+
+        # Non-renewal scenario (weighted by 1 - renewal_prob)
+        non_renew_prob = 1.0 - renewal_prob
+        new_rent = (market_rent if market_rent > 0
+                    else current_rent_sf * (1 + a.annual_rent_growth) ** expiry_yr)
+        new_glv = new_rent * sf * lease_term
+        new_comm = new_glv * a.commission_new_pct * non_renew_prob
+        new_ti = a.ti_new_psf * sf * non_renew_prob
+
+        # Downtime loss (non-renewal path only)
+        monthly_rent_loss = new_rent * sf / 12.0
+        downtime_loss = monthly_rent_loss * downtime_mo * non_renew_prob
+
+        total_comm = renewal_comm + new_comm
+        total_ti = renewal_ti + new_ti
+
+        detail = (f"{unit_id}: Yr{yr} comm=${total_comm:,.0f} TI=${total_ti:,.0f} "
+                  f"downtime=${downtime_loss:,.0f} (renew={renewal_prob:.0%})")
+
+        if yr not in year_costs:
+            year_costs[yr] = {"commission": 0, "ti": 0, "downtime_loss": 0,
+                              "total_lease_cost": 0, "detail": []}
+        year_costs[yr]["commission"] += total_comm
+        year_costs[yr]["ti"] += total_ti
+        year_costs[yr]["downtime_loss"] += downtime_loss
+        year_costs[yr]["total_lease_cost"] += total_comm + total_ti + downtime_loss
+        year_costs[yr]["detail"].append(detail)
+        total_commission_all += total_comm
+        total_ti_all += total_ti
+        total_downtime_all += downtime_loss
+
+    # Vacant asset / no executed leases: commissions & TI are pre-stabilization
+    # costs already captured in S&U, NOT recurring Pro Forma items.
+    # Leave year_costs empty so Pro Forma writes $0 for commissions/TI until
+    # an actual lease event occurs.
+    if tenant_count == 0 and gpr_yr1 > 0:
+        logger.info("LEASE EVENTS: vacant asset — commissions=$0, TI=$0 in Pro Forma "
+                    "(pre-stabilization costs already captured in S&U)")
+
+    event_years = len([y for y in year_costs if year_costs[y]["total_lease_cost"] > 0])
+    logger.info(
+        "LEASE EVENTS: %d tenants processed | total commissions=$%.0f | "
+        "total TI=$%.0f | total downtime=$%.0f across %d event years",
+        tenant_count, total_commission_all, total_ti_all,
+        total_downtime_all, event_years)
+    for yr in sorted(year_costs):
+        for d in year_costs[yr]["detail"]:
+            logger.info("  %s", d)
+
+    return year_costs
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # §4  PRO FORMA BUILDER  (hold strategies)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -205,9 +461,21 @@ def _build_proforma(deal: DealData, insurance: float,
         [r for r in a.refi_events if r.active],
         key=lambda r: r.year,
     )
+    refi_balances: List[Optional[float]] = [None, None, None]  # up to 3 refis
+    refi_executed: List[bool] = [False, False, False]  # track which refis actually funded
 
     total_equity = sources_uses["total_equity_required"]
     proforma: List[dict] = []
+
+    # Log debt service parameters
+    annual_io = loan_principal * loan_rate
+    annual_pi = _monthly_payment(loan_principal, loan_rate, loan_amort) * 12
+    io_period_years = loan_io_total / 12.0
+    logger.info("DEBT SERVICE: IO_annual=%.2f, PI_annual=%.2f, IO_period=%.1f yrs",
+                annual_io, annual_pi, io_period_years)
+
+    # Compute lease events (commissions, TI, downtime) for each year
+    lease_events = _compute_lease_events(deal)
 
     for yr in range(1, hold + 1):
         gpr, egi, opex, noi = _year_noi(gpr1, yr, a, insurance)
@@ -221,13 +489,55 @@ def _build_proforma(deal: DealData, insurance: float,
         refi_proceeds = 0.0
         for refi in active_refis:
             if refi.year == yr:
-                amort_elapsed = max(0, loan_months - loan_io_total)
+                # Use the scheduled amortization balance at this month,
+                # NOT the IO-adjusted elapsed count.  The amortization
+                # schedule runs from month 1 regardless of IO structure,
+                # so the outstanding balance at refi is the amort-table
+                # balance at month (refi_year × 12).
+                refi_month = loan_months          # = yr × 12
                 old_balance = _loan_balance(loan_principal, loan_rate,
-                                            loan_amort, amort_elapsed)
-                new_loan = refi.new_loan_amount
+                                            loan_amort, refi_month)
+
+                # Store amortized balance for Excel Refi Analysis tab
+                refi_idx = a.refi_events.index(refi)
+                if refi_idx < 3:
+                    refi_balances[refi_idx] = round(old_balance, 2)
+
+                # Compute appraised value dynamically: NOI / cap_rate
+                if refi.cap_rate > 0:
+                    computed_appraised = noi / refi.cap_rate
+                else:
+                    computed_appraised = 0.0
+                computed_appraised = max(0.0, computed_appraised)  # floor at 0
+                refi.appraised_value = computed_appraised
+
+                new_loan = refi.appraised_value * refi.ltv
+                new_loan = max(0.0, new_loan)  # floor at 0
+
+                # Guard: if loan is 0, refi does not fund
+                if new_loan <= 0:
+                    logger.warning(
+                        "REFI [Year %d]: noi=%.2f, appraised=%.2f, "
+                        "new_loan=0.00 (floored, refi skipped)",
+                        yr, noi, refi.appraised_value)
+                    refi_proceeds = 0.0
+                    # Mark refi as not executed — original loan continues
+                    refi.active = False
+                    break
+
                 prepay = old_balance * refi.prepay_pct
-                costs = refi.closing_costs + new_loan * refi.orig_fee_pct
+                # Closing costs: 1% origination + $3,500 flat, rounded to nearest $100
+                costs = round((new_loan * 0.01) + 3500, -2)
+                # Net proceeds can be negative (cash-in refi) — do NOT floor
                 refi_proceeds = new_loan - old_balance - prepay - costs
+                logger.info(
+                    "REFI [Year %d]: noi=%.2f, appraised=%.2f, "
+                    "new_loan=%.2f, prior_balance=%.2f, net_proceeds=%.2f",
+                    yr, noi, refi.appraised_value, new_loan,
+                    old_balance, refi_proceeds)
+
+                # Capture pre-switch state for the DS SWITCH log
+                old_rate = loan_rate
 
                 # Reset loan state
                 loan_principal = new_loan
@@ -235,6 +545,13 @@ def _build_proforma(deal: DealData, insurance: float,
                 loan_amort = refi.amort_years
                 loan_io_total = 0
                 loan_months = 0
+                if refi_idx < 3:
+                    refi_executed[refi_idx] = True
+
+                logger.info(
+                    "DS SWITCH yr%d: switched from loan=%s@%s%% to refi=%s@%s%%",
+                    yr, f"{old_balance:,.0f}", f"{old_rate * 100:.2f}",
+                    f"{new_loan:,.0f}", f"{refi.rate * 100:.2f}")
                 break
 
         # Below the line
@@ -242,6 +559,28 @@ def _build_proforma(deal: DealData, insurance: float,
         below = capex
         if yr == 1:
             below += a.commissions_yr1 + a.renovations_yr1
+
+        # Lease event costs (commissions, TI, downtime) — only populated for
+        # real lease events; $0 for vacant asset / no executed leases
+        yr_lease = lease_events.get(yr, {})
+        lc_commission = yr_lease.get("commission", 0.0)
+        lc_ti = yr_lease.get("ti", 0.0)
+        lc_downtime = yr_lease.get("downtime_loss", 0.0)
+        below += lc_commission + lc_ti + lc_downtime
+        # unit_mix lives on deal.extracted_docs (ExtractedDocumentData), as
+        # List[Dict[str, Any]]. There is no "lease_start" field in the model;
+        # a unit represents an executed lease iff it's not vacant — matching
+        # the logic in _compute_lease_events (financials.py:333).
+        unit_data = (deal.extracted_docs.unit_mix
+                     if deal.extracted_docs and deal.extracted_docs.unit_mix
+                     else [])
+        has_leases = any(
+            isinstance(u, dict)
+            and not (u.get("is_vacant", False) or u.get("status", "") == "Vacant")
+            for u in unit_data
+        )
+        logger.info("LEASE COSTS yr%d: commissions=%s TI=%s (has_leases=%s)",
+                    yr, f"{lc_commission:,.0f}", f"{lc_ti:,.0f}", has_leases)
 
         fcf = noi - ds - below + refi_proceeds
         coc = fcf / total_equity if total_equity > 0 else 0.0
@@ -254,19 +593,52 @@ def _build_proforma(deal: DealData, insurance: float,
             "noi": round(noi, 2),
             "debt_service": round(ds, 2),
             "capex_reserve": round(capex, 2),
+            "leasing_commission": round(lc_commission, 2),
+            "tenant_improvements": round(lc_ti, 2),
+            "downtime_loss": round(lc_downtime, 2),
             "refi_proceeds": round(refi_proceeds, 2),
             "fcf": round(fcf, 2),
             "cash_on_cash": round(coc, 4),
         })
 
+    # ── Log debt service by year (active loan check for refi-active deals) ──
+    ds_by_year = {f"Y{yr['year']}": f"{yr.get('debt_service', 0):,.0f}"
+                  for yr in proforma}
+    logger.info("DS BY YEAR (active loan check): %s", ds_by_year)
+
+    # ── Log refi appraised values ──────────────────────────────────
+    refis = a.refi_events[:3]
+    def _refi_noi(r, idx):
+        if r.active and 1 <= r.year <= len(proforma):
+            return proforma[r.year - 1].get('noi', 0)
+        return 0
+    logger.info(
+        "REFI APPRAISED VALUE: "
+        "Refi1 active=%s yr=%s NOI=%.0f cap=%.4f → $%.0f | "
+        "Refi2 active=%s yr=%s NOI=%.0f cap=%.4f → $%.0f | "
+        "Refi3 active=%s yr=%s NOI=%.0f cap=%.4f → $%.0f",
+        refis[0].active, refis[0].year,
+        _refi_noi(refis[0], 0), refis[0].cap_rate, refis[0].appraised_value,
+        refis[1].active, refis[1].year,
+        _refi_noi(refis[1], 1), refis[1].cap_rate, refis[1].appraised_value,
+        refis[2].active, refis[2].year,
+        _refi_noi(refis[2], 2), refis[2].cap_rate, refis[2].appraised_value,
+    )
+
     # ── Exit ──────────────────────────────────────────────────────
     forward_noi = _year_noi(gpr1, hold + 1, a, insurance)[3]
-    gross_sale = forward_noi / a.exit_cap_rate if a.exit_cap_rate > 0 else 0.0
+    if forward_noi is not None and forward_noi <= 0:
+        gross_sale = 0.0
+        logger.warning(
+            "Exit NOI is negative (%.0f) -- exit value set to $0. "
+            "Cap rate exit is not viable on this deal.", forward_noi
+        )
+    else:
+        gross_sale = forward_noi / a.exit_cap_rate if a.exit_cap_rate > 0 else 0.0
     disposition = gross_sale * a.disposition_costs_pct
     net_sale = gross_sale - disposition
 
-    amort_elapsed = max(0, loan_months - loan_io_total)
-    exit_balance = _loan_balance(loan_principal, loan_rate, loan_amort, amort_elapsed)
+    exit_balance = _loan_balance(loan_principal, loan_rate, loan_amort, loan_months)
     net_equity_at_exit = net_sale - exit_balance
 
     exit_info = {
@@ -274,6 +646,7 @@ def _build_proforma(deal: DealData, insurance: float,
         "net_sale_proceeds": round(net_sale, 2),
         "exit_loan_balance": round(exit_balance, 2),
         "net_equity_at_exit": round(net_equity_at_exit, 2),
+        "refi_balances": refi_balances,
     }
     return proforma, exit_info
 
@@ -344,9 +717,16 @@ def _safe_irr(cashflows) -> Optional[float]:
     try:
         val = npf.irr(cashflows)
         if val is None or (isinstance(val, float) and (math.isnan(val) or math.isinf(val))):
+            all_neg = all(cf <= 0 for cf in cashflows)
+            logger.warning(
+                "IRR solver did not converge — %s (cf[0]=%.0f, sum=%.0f)",
+                "all cash flows negative" if all_neg else "no real solution",
+                cashflows[0], sum(cashflows))
             return None
         return float(val)
-    except Exception:
+    except Exception as exc:
+        logger.warning("IRR solver exception: %s (cf[0]=%.0f, sum=%.0f)",
+                       exc, cashflows[0], sum(cashflows))
         return None
 
 
@@ -369,9 +749,16 @@ def _compute_waterfall(project_cfs: List[float],
     Returns dict with lp_irr, gp_irr, lp_em, gp_em, lp_cfs, gp_cfs.
     """
     a = deal.assumptions
-    total_equity = abs(project_cfs[0])
-    lp_equity = total_equity * a.lp_equity_pct
-    gp_equity = total_equity * a.gp_equity_pct
+    fo = deal.financial_outputs
+    # Equity gap = Total Uses − Senior Debt (not total_equity_required which
+    # also subtracts mezz / tax-credit / grants).
+    total_uses  = fo.total_uses or abs(project_cfs[0])
+    senior_debt = fo.initial_loan_amount or 0.0
+    equity_gap  = total_uses - senior_debt
+    logger.info("Waterfall equity gap: %.2f  (total_uses=%.2f - senior_debt=%.2f)",
+                equity_gap, total_uses, senior_debt)
+    lp_equity = equity_gap * a.lp_equity_pct
+    gp_equity = equity_gap * a.gp_equity_pct
     n = len(project_cfs) - 1  # number of periods
 
     pos_cfs = np.array([max(0.0, cf) for cf in project_cfs[1:]], dtype=np.float64)
@@ -384,73 +771,50 @@ def _compute_waterfall(project_cfs: List[float],
         return _waterfall_result(project_cfs, pos_cfs, total_dist,
                                  lp_equity, gp_equity, lp_total, gp_total)
 
-    # ── Full tiered waterfall ────────────────────────────────────
+    # ── Full tiered waterfall (year-by-year, matches Excel) ─────
     if total_dist <= 0:
         return _waterfall_result(project_cfs, pos_cfs, 0.0,
                                  lp_equity, gp_equity, 0.0, 0.0)
 
-    # Hurdle boundaries: [pref, tier1, tier2, tier3, tier4]
-    hurdle_rates = [a.pref_return]
-    lp_shares = [1.0]       # below pref → 100 % to LP
-    for t in a.waterfall_tiers:
-        hurdle_rates.append(t.hurdle_value)
-        lp_shares.append(t.lp_share)
+    lp_cfs, gp_cfs = _tiered_waterfall_yearly(
+        project_cfs, deal, lp_equity, gp_equity)
 
-    # For each hurdle rate, compute total LP dist needed for LP to hit that IRR
-    # assuming LP distributions are proportional to project positive CFs.
-    # k(r) = lp_equity / NPV(pos_cfs, r)   →   LP total = k(r) × total_dist
-    lp_at_hurdle: List[float] = []
-    for r in hurdle_rates:
-        if r <= 0:
-            lp_at_hurdle.append(lp_equity)
-            continue
-        npv = sum(float(pos_cfs[t]) / (1 + r) ** (t + 1) for t in range(n))
-        if npv <= 1e-10:
-            lp_at_hurdle.append(total_dist)  # hurdle unachievable
-        else:
-            lp_at_hurdle.append(min(lp_equity / npv * total_dist, total_dist))
+    lp_total = float(np.sum(lp_cfs[1:]))
+    gp_total = float(np.sum(gp_cfs[1:]))
 
-    # Walk through tiers, allocating marginal distributions
-    lp_total = 0.0
-    gp_total = 0.0
-    allocated = 0.0
-    prev_lp = 0.0
+    logger.info("LP IRR input CFs: %s", [round(float(x), 2) for x in lp_cfs])
+    lp_irr = _safe_irr(lp_cfs.tolist())
+    gp_irr = _safe_irr(gp_cfs.tolist())
+    logger.info("LP IRR result: %s", f"{lp_irr:.6f}" if lp_irr is not None else "N/A")
 
-    for i, lp_target in enumerate(lp_at_hurdle):
-        lp_marginal = max(0.0, lp_target - prev_lp)
-        lp_sh = lp_shares[i]
-        if lp_sh > 0:
-            tier_total = lp_marginal / lp_sh
-        else:
-            tier_total = 0.0
-        tier_total = min(tier_total, total_dist - allocated)
-        if tier_total <= 0:
-            break
-        lp_total += tier_total * lp_sh
-        gp_total += tier_total * (1 - lp_sh)
-        allocated += tier_total
-        prev_lp = lp_target
-
-    # Residual tier
-    remaining = total_dist - allocated
-    if remaining > 0:
-        lp_total += remaining * a.residual_tier.lp_share
-        gp_total += remaining * a.residual_tier.gp_share
-
-    return _waterfall_result(project_cfs, pos_cfs, total_dist,
-                             lp_equity, gp_equity, lp_total, gp_total)
+    return {
+        "lp_irr": lp_irr,
+        "gp_irr": gp_irr,
+        "project_irr": _safe_irr(project_cfs),
+        "lp_em": _equity_multiple(lp_cfs.tolist()),
+        "gp_em": _equity_multiple(gp_cfs.tolist()),
+        "project_em": _equity_multiple(project_cfs),
+        "lp_total_dist": round(lp_total, 2),
+        "gp_total_dist": round(gp_total, 2),
+    }
 
 
 def _waterfall_result(project_cfs, pos_cfs, total_dist,
                       lp_equity, gp_equity,
                       lp_total, gp_total) -> dict:
-    """Build LP/GP cash-flow streams and compute IRR/EM."""
+    """Build LP/GP cash-flow streams and compute IRR/EM.
+
+    Uses year-by-year tier waterfall matching the Excel Cash Waterfall
+    tab logic (pref return accrual, sequential tier allocation).
+    Falls back to proportional weighting for SIMPLE waterfall.
+    """
     n = len(pos_cfs)
     if total_dist > 0:
         weights = pos_cfs / total_dist
     else:
         weights = np.zeros(n)
 
+    # Default proportional streams (used for SIMPLE waterfall)
     lp_cfs = np.concatenate([[-lp_equity], weights * lp_total])
     gp_cfs = np.concatenate([[-gp_equity], weights * gp_total])
 
@@ -464,6 +828,110 @@ def _waterfall_result(project_cfs, pos_cfs, total_dist,
         "lp_total_dist": round(lp_total, 2),
         "gp_total_dist": round(gp_total, 2),
     }
+
+
+def _tiered_waterfall_yearly(project_cfs: List[float],
+                             deal: DealData,
+                             lp_equity: float,
+                             gp_equity: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Year-by-year tiered waterfall matching Excel Cash Waterfall tab.
+
+    Excel layout:
+        Col F  = Year 0: equity contributions only, distributions = 0
+        Col G+ = Year 1..N: distributable CF from Pro Forma, tier logic
+
+    Returns (lp_cfs, gp_cfs) arrays of length len(project_cfs).
+    lp_cfs[0] = -lp_equity, lp_cfs[1..] = LP distributions per year.
+    """
+    a = deal.assumptions
+    n = len(project_cfs) - 1  # operating years (1..N)
+
+    distributable = np.array([max(0.0, cf) for cf in project_cfs[1:]])
+    lp_pct = a.lp_equity_pct
+    gp_pct = a.gp_equity_pct
+    pref_rate = a.pref_return
+
+    # ── Tier 1: Pref return + return of capital ──────────────────
+    # Excel: Year 0 ending balance = equity (contribution, no dist)
+    # Year 1+: accrue pref on beginning balance, distribute up to
+    #          min(beg_bal + accrual, available_cash * equity_pct)
+    lp_bal = lp_equity    # Year 0 ending balance
+    gp_bal = gp_equity
+    lp_dist_t1 = np.zeros(n)
+    gp_dist_t1 = np.zeros(n)
+
+    for yr in range(n):
+        lp_accrual = lp_bal * pref_rate
+        gp_accrual = gp_bal * pref_rate
+        lp_avail = distributable[yr] * lp_pct
+        gp_avail = distributable[yr] * gp_pct
+        lp_d = min(lp_bal + lp_accrual, lp_avail)
+        gp_d = min(gp_bal + gp_accrual, gp_avail)
+        lp_dist_t1[yr] = lp_d
+        gp_dist_t1[yr] = gp_d
+        lp_bal = lp_bal + lp_accrual - lp_d
+        gp_bal = gp_bal + gp_accrual - gp_d
+
+    # Cash remaining after Tier 1 (total distributions, not per-party)
+    total_t1 = lp_dist_t1 + gp_dist_t1
+    remaining = distributable - total_t1
+    remaining = np.maximum(remaining, 0.0)
+
+    # ── Tiers 2..N: promote tiers ───────────────────────────────
+    # Excel logic per tier:
+    #   LP Beginning Balance starts at LP_equity (Year 0 = $D$8)
+    #   Req'd Return = beg_bal × hurdle_rate
+    #   Prior LP Distributions = sum of LP dists from earlier tiers
+    #   LP Dist = max(min(beg + reqd - prior_lp, remaining * lp_share), 0)
+    #   GP Dist = LP_Dist / lp_share * gp_share
+    #   LP Ending Balance = beg + reqd - prior_lp - lp_dist
+    all_lp_dists = [lp_dist_t1]
+    all_gp_dists = [gp_dist_t1]
+
+    for tier in a.waterfall_tiers:
+        hurdle = tier.hurdle_value
+        lp_sh = tier.lp_share
+        gp_sh = 1.0 - lp_sh
+
+        lp_dist_tier = np.zeros(n)
+        gp_dist_tier = np.zeros(n)
+        # Excel: F86 (Year 0 beginning) = $D$8 = lp_equity
+        lp_bal_t = lp_equity
+
+        for yr in range(n):
+            reqd = lp_bal_t * hurdle
+            prior_lp = sum(d[yr] for d in all_lp_dists)
+            lp_d = max(min(lp_bal_t + reqd - prior_lp,
+                           remaining[yr] * lp_sh), 0.0)
+            gp_d = (lp_d / lp_sh * gp_sh) if lp_sh > 0 else 0.0
+            # Don't exceed remaining cash
+            total_tier = lp_d + gp_d
+            if total_tier > remaining[yr] + 1e-6:
+                scale = remaining[yr] / total_tier if total_tier > 0 else 0.0
+                lp_d *= scale
+                gp_d *= scale
+            lp_dist_tier[yr] = lp_d
+            gp_dist_tier[yr] = gp_d
+            lp_bal_t = lp_bal_t + reqd - prior_lp - lp_d
+
+        all_lp_dists.append(lp_dist_tier)
+        all_gp_dists.append(gp_dist_tier)
+        tier_total = lp_dist_tier + gp_dist_tier
+        remaining = np.maximum(remaining - tier_total, 0.0)
+
+    # ── Residual tier: split remaining cash ──────────────────────
+    lp_residual = remaining * a.residual_tier.lp_share
+    gp_residual = remaining * a.residual_tier.gp_share
+    all_lp_dists.append(lp_residual)
+    all_gp_dists.append(gp_residual)
+
+    total_lp_per_yr = sum(d for d in all_lp_dists)
+    total_gp_per_yr = sum(d for d in all_gp_dists)
+
+    lp_cfs = np.concatenate([[-lp_equity], total_lp_per_yr])
+    gp_cfs = np.concatenate([[-gp_equity], total_gp_per_yr])
+
+    return lp_cfs, gp_cfs
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -505,12 +973,14 @@ def _quick_project_irr(
 
     # Exit
     forward_noi = last_noi * (1 + rent_growth)
-    gross_sale = forward_noi / exit_cap if exit_cap > 0 else 0.0
+    if forward_noi <= 0:
+        gross_sale = 0.0
+    else:
+        gross_sale = forward_noi / exit_cap if exit_cap > 0 else 0.0
     net_sale = gross_sale * (1 - disp_pct)
 
     # Loan balance at exit (approximate — no refi)
-    amort_elapsed = max(0, hold * 12 - io_months)
-    bal = _loan_balance(initial_loan, interest_rate, amort_years, amort_elapsed)
+    bal = _loan_balance(initial_loan, interest_rate, amort_years, hold * 12)
     cfs[-1] += net_sale - bal
 
     return _safe_irr(cfs), _equity_multiple(cfs)
@@ -556,10 +1026,15 @@ def _quick_params(deal: DealData, insurance: float,
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _build_sensitivity(deal: DealData, insurance: float,
-                       sources_uses: dict) -> Tuple[List[List[float]],
-                                                     List[float],
-                                                     List[float]]:
-    """5×7 (rent_growth × exit_cap) sensitivity matrix of project IRR."""
+                       sources_uses: dict) -> dict:
+    """Build all four sensitivity grids.
+
+    Returns dict with keys:
+        irr_matrix, em_matrix  — rent_growth × exit_cap
+        noi_matrix             — expense_growth × vacancy → Year-1 NOI
+        coc_matrix             — ltv × purchase_price → Year-1 CoC
+        rent_axis, cap_axis    — axis labels for IRR/EM grids
+    """
     a = deal.assumptions
     rent_axis = _inclusive_range(a.sens_rent_growth_low,
                                 a.sens_rent_growth_high,
@@ -567,19 +1042,72 @@ def _build_sensitivity(deal: DealData, insurance: float,
     cap_axis = _inclusive_range(a.sens_exit_cap_low,
                                a.sens_exit_cap_high,
                                a.sens_exit_cap_step)
+    # Sort descending: higher cap rate (worse outcome) first
+    cap_axis = sorted(cap_axis, reverse=True)
 
     base = _quick_params(deal, insurance, sources_uses)
-    matrix: List[List[float]] = []
+    irr_matrix: List[List] = []
+    em_matrix: List[List[float]] = []
 
     for rg in rent_axis:
-        row: List[float] = []
+        irr_row: List = []
+        em_row: List[float] = []
         for ec in cap_axis:
             params = {**base, "rent_growth": rg, "exit_cap": ec}
-            irr, _ = _quick_project_irr(**params)
-            row.append(round(irr, 4) if irr is not None else 0.0)
-        matrix.append(row)
+            irr, em = _quick_project_irr(**params)
+            # Debug: verify lower cap → higher exit_value → higher IRR
+            if rg == rent_axis[len(rent_axis) // 2] and ec in (0.055, 0.07, 0.085):
+                ev = base["gpr_yr1"] * (1 + rg) ** base["hold"] * (1 + rg) / ec
+                logger.info("SENS DEBUG  exit_cap=%.3f  exit_value=%.0f  irr=%s  em=%.2f",
+                            ec, ev, f"{irr:.4f}" if irr is not None else "N/A", em)
+            irr_row.append(round(irr, 4) if irr is not None else "N/A")
+            em_row.append(round(em, 2))
+        irr_matrix.append(irr_row)
+        em_matrix.append(em_row)
 
-    return matrix, [round(r, 4) for r in rent_axis], [round(c, 4) for c in cap_axis]
+    # ── Year-1 NOI grid: expense_growth (rows) × vacancy (cols) ──
+    vac_axis = [0.05, 0.075, 0.10, 0.125, 0.15, 0.20]
+    exp_axis = [0.01, 0.02, 0.03, 0.04, 0.05]
+    gpr1 = base["gpr_yr1"]
+    noi_matrix: List[List[float]] = []
+    for eg in exp_axis:
+        noi_row: List[float] = []
+        for vac in vac_axis:
+            egi = gpr1 * (1 - vac - base["loss_to_lease"]) + base["cam"] + base["fee_income"]
+            opex = ((base["fixed_base"] + insurance) * (1 + eg) ** 0 +
+                    egi * base["mgmt_pct"] +
+                    base["var_base"] * (1 + eg) ** 0)
+            noi_row.append(round(egi - opex, 2))
+        noi_matrix.append(noi_row)
+
+    # ── Year-1 CoC grid: LTV (rows) × purchase_price (cols) ─────
+    price = a.purchase_price or 0
+    ltv_axis = [0.60, 0.65, 0.70, 0.75, 0.80]
+    price_mult = [1 - 0.15, 1 - 0.10, 1 - 0.05, 1.0, 1 + 0.05, 1 + 0.10]
+    price_axis = [round(price * m, 2) for m in price_mult]
+    coc_matrix: List[List[float]] = []
+    for ltv in ltv_axis:
+        coc_row: List[float] = []
+        for px in price_axis:
+            loan = px * ltv
+            equity = px - loan + (sources_uses["total_uses"] - (a.purchase_price or 0))
+            ds = _year_debt_service(loan, a.interest_rate, a.amort_years, a.io_period_months)
+            # Yr1 NOI from base scenario
+            yr1_noi = base["gpr_yr1"] * (1 - a.vacancy_rate - base["loss_to_lease"]) + base["cam"] + base["fee_income"]
+            yr1_opex = ((base["fixed_base"] + insurance) + yr1_noi * base["mgmt_pct"] + base["var_base"])
+            yr1_noi_net = yr1_noi - yr1_opex
+            fcf = yr1_noi_net - ds - base["capex_annual"]
+            coc_row.append(round(fcf / equity, 4) if equity > 0 else 0.0)
+        coc_matrix.append(coc_row)
+
+    return {
+        "irr_matrix": irr_matrix,
+        "em_matrix": em_matrix,
+        "noi_matrix": noi_matrix,
+        "coc_matrix": coc_matrix,
+        "rent_axis": [round(r, 4) for r in rent_axis],
+        "cap_axis": [round(c, 4) for c in cap_axis],
+    }
 
 
 def _inclusive_range(low: float, high: float, step: float) -> List[float]:
@@ -608,7 +1136,7 @@ def _run_monte_carlo(deal: DealData, insurance: float,
     total_equity = bp["total_equity"]
 
     if total_equity <= 0 or bp["gpr_yr1"] <= 0:
-        logger.warning("Monte Carlo skipped — no equity or no rent data")
+        logger.warning("Monte Carlo skipped -- no equity or no rent data")
         return _empty_mc()
 
     # ── Sample random inputs ──────────────────────────────────────
@@ -644,7 +1172,10 @@ def _run_monte_carlo(deal: DealData, insurance: float,
 
     # Exit at final year
     forward_noi = noi[:, -1] * (1 + rent_samples)
-    gross_sale = np.where(cap_samples > 0, forward_noi / cap_samples, 0.0)
+    gross_sale = np.where(
+        (cap_samples > 0) & (forward_noi > 0),
+        forward_noi / cap_samples, 0.0
+    )
     net_sale = gross_sale * (1 - bp["disp_pct"])
     amort_elapsed = max(0, hold * 12 - bp["io_months"])
     bal = _loan_balance(bp["initial_loan"], bp["interest_rate"],
@@ -823,6 +1354,135 @@ def _call_5a(deal: DealData, mc_results: dict) -> Optional[str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# §10B  ASSET-TYPE EXPENSE DEFAULTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Per-SF/yr rates for non-residential asset types
+_OFFICE_SALARY_PSF     = 0.50   # $/SF/yr — minimal mgmt for small office
+_OFFICE_INSURANCE_PSF  = 1.75   # $/SF/yr — typical small urban office
+_INDUSTRIAL_SALARY_PSF = 0.25
+_INDUSTRIAL_INS_PSF    = 1.25
+
+# Office-specific per-SF rates (calibrated for commercial, not multifamily)
+_OFFICE_REPAIRS_PSF      = 1.00   # $/SF/yr — light maintenance, no unit turns
+_OFFICE_CLEANING_PSF     = 1.00   # $/SF/yr — janitorial/cleaning
+_OFFICE_LANDSCAPE_PSF    = 0.50   # $/SF/yr — surface lot, minimal landscaping
+
+
+def _scale_expenses_for_asset_type(deal: DealData) -> None:
+    """Adjust expense defaults when the user hasn't overridden them and the
+    asset type is non-residential.  Modifies ``deal.assumptions`` in place.
+
+    Scaling rules (Industrial / Retail):
+        salaries  → per-SF rate × GBA
+        insurance → per-SF rate × GBA
+        re_taxes  → OPA assessed value × local mill rate, if parcel data exists
+
+    Scaling rules (Office):
+        salaries, exterminator, turnover, advertising → $0  (multifamily-only)
+        repairs/maintenance → $1.00/SF/yr
+        janitorial/cleaning → $1.00/SF/yr
+        landscape/snow      → $0.50/SF/yr
+        insurance, re_taxes → same as Industrial/Retail (per-SF or OPA)
+
+    Multifamily / Mixed-Use / Single-Family keep the original defaults because
+    those were calibrated for residential.
+    """
+    a = deal.assumptions
+    asset = deal.asset_type
+    gba = a.gba_sf or (deal.parcel_data.building_sf if deal.parcel_data else None)
+
+    if asset not in (AssetType.OFFICE, AssetType.INDUSTRIAL, AssetType.RETAIL):
+        logger.info("Expense defaults: asset_type=%s -- using residential defaults "
+                     "(salaries=$%s, insurance=$%s, re_taxes=$%s)",
+                     asset.value, f"{a.salaries:,.0f}", f"{a.insurance:,.0f}", f"{a.re_taxes:,.0f}")
+        return
+
+    # ── Salaries ──────────────────────────────────────────────────
+    # Office salaries are zeroed out in the Office-specific block below.
+    # Only adjust for Industrial / Retail here.
+    if asset != AssetType.OFFICE:
+        if a.salaries == 24_000.0 and gba and gba > 0:
+            rate = _INDUSTRIAL_SALARY_PSF if asset == AssetType.INDUSTRIAL else _OFFICE_SALARY_PSF
+            old = a.salaries
+            a.salaries = round(rate * gba, 2)
+            logger.info("Expense scaling [%s]: salaries $%s -> $%s "
+                         "(%.2f $/SF × %s SF)",
+                         asset.value, f"{old:,.0f}", f"{a.salaries:,.0f}", rate, f"{gba:,.0f}")
+        else:
+            src = "user-set" if a.salaries != 24_000.0 else "default (no GBA)"
+            logger.info("Expense scaling [%s]: salaries=$%s -- %s",
+                         asset.value, f"{a.salaries:,.0f}", src)
+
+    # ── Insurance ─────────────────────────────────────────────────
+    # Only adjust if still at the multifamily default of $18,000
+    if a.insurance == 18_000.0 and gba and gba > 0:
+        rate = _OFFICE_INSURANCE_PSF if asset in (AssetType.OFFICE, AssetType.RETAIL) else _INDUSTRIAL_INS_PSF
+        old = a.insurance
+        a.insurance = round(rate * gba, 2)
+        logger.info("Expense scaling [%s]: insurance $%s -> $%s "
+                     "(%.2f $/SF × %s SF)",
+                     asset.value, f"{old:,.0f}", f"{a.insurance:,.0f}", rate, f"{gba:,.0f}")
+    else:
+        src = "user-set" if a.insurance != 18_000.0 else "default (no GBA)"
+        logger.info("Expense scaling [%s]: insurance=$%s -- %s",
+                     asset.value, f"{a.insurance:,.0f}", src)
+
+    # ── Real Estate Taxes ─────────────────────────────────────────
+    # If OPA parcel data has an assessed value, derive taxes from that
+    parcel = deal.parcel_data
+    if a.re_taxes == 45_000.0 and parcel and parcel.assessed_value and parcel.assessed_value > 0:
+        # Philadelphia mill rate ≈ 1.3998% (combined city + school)
+        mill_rate = 0.013998
+        old = a.re_taxes
+        a.re_taxes = round(parcel.assessed_value * mill_rate, 2)
+        logger.info("Expense scaling [%s]: re_taxes $%s -> $%s "
+                     "(OPA assessed $%s × %.4f mill rate)",
+                     asset.value, f"{old:,.0f}", f"{a.re_taxes:,.0f}", f"{parcel.assessed_value:,.0f}", mill_rate)
+    else:
+        if a.re_taxes != 45_000.0:
+            src = "user-set"
+        elif parcel and parcel.assessed_value and parcel.assessed_value > 0:
+            src = "user-set (not default)"
+        else:
+            src = "default (no OPA data)"
+        logger.info("Expense scaling [%s]: re_taxes=$%s -- %s",
+                     asset.value, f"{a.re_taxes:,.0f}", src)
+
+    # ── Office-specific: zero out multifamily lines & recalibrate ─────
+    if asset == AssetType.OFFICE:
+        # Zero out lines that don't apply to commercial office
+        for field, label in [
+            ("salaries",    "salaries (no on-site staff)"),
+            ("exterminator", "exterminator (N/A office)"),
+            ("turnover",    "turnover (multifamily metric)"),
+            ("advertising", "advertising (N/A stabilized office)"),
+        ]:
+            old = getattr(a, field)
+            if old != 0.0:
+                setattr(a, field, 0.0)
+                logger.info("Expense scaling [%s]: %s $%s -> $0 -- zeroed out",
+                             asset.value, label, f"{old:,.0f}")
+            else:
+                logger.info("Expense scaling [%s]: %s already $0 -- no change",
+                             asset.value, label)
+
+        # Recalibrate per-SF lines (only if GBA available)
+        if gba and gba > 0:
+            for field, rate, label in [
+                ("repairs",        _OFFICE_REPAIRS_PSF,   "repairs/maintenance"),
+                ("cleaning",       _OFFICE_CLEANING_PSF,  "janitorial/cleaning"),
+                ("landscape_snow", _OFFICE_LANDSCAPE_PSF, "landscape/snow"),
+            ]:
+                old = getattr(a, field)
+                new_val = round(rate * gba, 2)
+                setattr(a, field, new_val)
+                logger.info("Expense scaling [%s]: %s $%s -> $%s "
+                             "(%.2f $/SF × %s SF)",
+                             asset.value, label, f"{old:,.0f}", f"{new_val:,.0f}", rate, f"{gba:,.0f}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # §11  PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -837,106 +1497,193 @@ def run_financials(deal: DealData) -> DealData:
     Returns:
         The same DealData object with financial_outputs fully populated.
     """
-    logger.info("Running financials module...")
-    a = deal.assumptions
-    fo = deal.financial_outputs
-    is_sale = deal.investment_strategy == InvestmentStrategy.FOR_SALE
-    insurance = _get_insurance_expense(deal)
+    logger.info("run_financials: starting -- strategy=%s, purchase_price=%s, num_units=%s",
+                deal.investment_strategy, deal.assumptions.purchase_price, deal.assumptions.num_units)
+    try:
+        a = deal.assumptions
+        fo = deal.financial_outputs
+        is_sale = deal.investment_strategy == InvestmentStrategy.OPPORTUNISTIC
+        insurance = _get_insurance_expense(deal)
 
-    # ── Sources & Uses ────────────────────────────────────────────
-    su = _compute_sources_uses(deal)
-    fo.total_uses = su["total_uses"]
-    fo.total_sources = su["total_sources"]
-    fo.total_equity_required = su["total_equity_required"]
-    fo.initial_loan_amount = su["initial_loan"]
+        # ── Asset-type expense scaling (before proforma) ──────────────
+        _scale_expenses_for_asset_type(deal)
+        # Re-read insurance after scaling may have changed a.insurance
+        insurance = _get_insurance_expense(deal)
 
-    # ── Pro Forma ─────────────────────────────────────────────────
-    if is_sale:
-        proforma, exit_info = _build_proforma_for_sale(deal, su)
-    else:
-        proforma, exit_info = _build_proforma(deal, insurance, su)
-
-    fo.pro_forma_years = proforma
-
-    # ── Year-1 metrics ────────────────────────────────────────────
-    if not is_sale and proforma:
-        yr1 = proforma[0]
-        gpr1 = _gpr_yr1(deal)
-        _, egi1 = _year_income(gpr1, 1, a)
-
-        fo.gross_potential_rent = yr1["gpr"]
-        fo.effective_gross_income = yr1["egi"]
-        fo.total_operating_expenses = yr1["opex"]
-        fo.noi_yr1 = yr1["noi"]
-        fo.debt_service_annual = yr1["debt_service"]
-        fo.free_cash_flow_yr1 = yr1["fcf"]
-        fo.dscr_yr1 = (yr1["noi"] / yr1["debt_service"]
-                       if yr1["debt_service"] > 0 else None)
-        fo.going_in_cap_rate = (yr1["noi"] / a.purchase_price
-                                if a.purchase_price > 0 else None)
-        fo.cash_on_cash_yr1 = yr1["cash_on_cash"]
-
-    # ── Exit ──────────────────────────────────────────────────────
-    fo.gross_sale_price = exit_info["gross_sale_price"]
-    fo.net_sale_proceeds = exit_info["net_sale_proceeds"]
-    fo.net_equity_at_exit = exit_info["net_equity_at_exit"]
-
-    # ── Project cash flows & IRR / EM ─────────────────────────────
-    total_equity = su["total_equity_required"]
-    project_cfs = _project_cashflows(proforma, exit_info, total_equity)
-    fo.project_irr = _safe_irr(project_cfs)
-    fo.project_equity_multiple = round(_equity_multiple(project_cfs), 2)
-
-    # ── Waterfall (LP / GP) ───────────────────────────────────────
-    wf = _compute_waterfall(project_cfs, deal)
-    fo.lp_irr = wf["lp_irr"]
-    fo.gp_irr = wf["gp_irr"]
-    fo.lp_equity_multiple = round(wf["lp_em"], 2)
-    fo.gp_equity_multiple = round(wf["gp_em"], 2)
-
-    # ── Sensitivity Matrix ────────────────────────────────────────
-    # Guard: skip if no rent income or no equity — matrix would be all zeros
-    # which the narrative module would report as a false finding.
-    _has_income = _gpr_yr1(deal) > 0
-    _has_equity = su["total_equity_required"] > 0
-
-    if not is_sale and _has_income and _has_equity:
-        matrix, rent_axis, cap_axis = _build_sensitivity(deal, insurance, su)
-        fo.sensitivity_matrix = matrix
-        fo.sensitivity_axis_rent_growth = rent_axis
-        fo.sensitivity_axis_exit_cap = cap_axis
-        logger.info("Sensitivity matrix built: %dx%d",
-                    len(matrix), len(matrix[0]) if matrix else 0)
-    elif not is_sale:
-        logger.warning(
-            "Sensitivity matrix skipped — gpr_yr1=%.0f, equity=%.0f. "
-            "Matrix will be empty; report will suppress Section 12.5.",
-            _gpr_yr1(deal), su["total_equity_required"]
-        )
-
-    # ── Monte Carlo ───────────────────────────────────────────────
-    if not is_sale and _has_income and _has_equity:
-        mc = _run_monte_carlo(deal, insurance, su)
-        fo.monte_carlo_results = mc
-
-        # Prompt 5A — narrative
-        if mc.get("median_irr") is not None:
-            logger.info("Running Prompt 5A — Monte Carlo Narrative...")
-            narrative = _call_5a(deal, mc)
-            fo.monte_carlo_narrative = narrative
-            deal.narratives.monte_carlo_narrative = narrative
-            if narrative:
-                logger.info("Prompt 5A complete — narrative generated")
-            else:
-                logger.warning("Prompt 5A failed — narrative remains None")
+        # Auto-calculate title insurance if user has not provided a value
+        # PA commercial rate: ~$6 per $1,000 of purchase price (blended owner + lender)
+        if not a.title_insurance or a.title_insurance == 0:
+            a.title_insurance = max(round(a.purchase_price * 0.006, -2), 3000)
+            logger.info("TITLE INS: auto-calculated=%.2f (purchase_price=%.2f × 0.6%%)",
+                        a.title_insurance, a.purchase_price)
         else:
-            logger.warning("Monte Carlo produced no valid results — skipping Prompt 5A")
-    elif not is_sale:
-        logger.warning(
-            "Monte Carlo skipped — gpr_yr1=%.0f, equity=%.0f. "
-            "Simulation requires positive income and equity.",
-            _gpr_yr1(deal), su["total_equity_required"]
-        )
+            logger.info("TITLE INS: user-provided=%.2f", a.title_insurance)
 
-    logger.info("Financials module complete")
+        # Zero fee income if it is still at the system default of $6,000
+        # — this value is not meaningful for any asset type unless the
+        # user explicitly sets it to a non-default amount.
+        FEE_INCOME_DEFAULT = 6000.0
+        if a.fee_income == FEE_INCOME_DEFAULT:
+            a.fee_income = 0.0
+            logger.info(
+                "FEE INCOME zeroed: value is system default "
+                "$6,000 — not a user-set input. Set to $0."
+            )
+
+        # ── Sources & Uses ────────────────────────────────────────────
+        su = _compute_sources_uses(deal)
+        fo.total_uses = su["total_uses"]
+        fo.total_sources = su["total_sources"]
+        fo.total_equity_required = su["total_equity_required"]
+        fo.initial_loan_amount = su["initial_loan"]
+        fo.gp_equity = su["gp_equity"]
+        fo.lp_equity = su["lp_equity"]
+
+        # ── Pro Forma ─────────────────────────────────────────────────
+        if is_sale:
+            proforma, exit_info = _build_proforma_for_sale(deal, su)
+        else:
+            proforma, exit_info = _build_proforma(deal, insurance, su)
+
+        fo.pro_forma_years = proforma
+        fo.lease_events = _compute_lease_events(deal)
+
+        if not is_sale and len(proforma) >= 8:
+            logger.info(
+                "DS TIMING CHECK yr1=%s yr2=%s yr3=%s yr7=%s yr8=%s",
+                proforma[0]['debt_service'],
+                proforma[1]['debt_service'],
+                proforma[2]['debt_service'],
+                proforma[6]['debt_service'],
+                proforma[7]['debt_service'],
+            )
+
+        # ── GPR — always store regardless of strategy ─────────────────
+        fo.gross_potential_rent = _gpr_yr1(deal)
+        logger.info(f"FINANCIALS GPR computed: ${fo.gross_potential_rent:,.0f}")
+
+        # ── Year-1 metrics ────────────────────────────────────────────
+        if not is_sale and proforma:
+            yr1 = proforma[0]
+            gpr1 = _gpr_yr1(deal)
+            _, egi1 = _year_income(gpr1, 1, a)
+
+            fo.effective_gross_income = yr1["egi"]
+            fo.total_operating_expenses = yr1["opex"]
+            fo.noi_yr1 = yr1["noi"]
+            fo.debt_service_annual = yr1["debt_service"]
+            fo.free_cash_flow_yr1 = yr1["fcf"]
+            fo.dscr_yr1 = (yr1["noi"] / yr1["debt_service"]
+                           if yr1["debt_service"] > 0 else None)
+            fo.going_in_cap_rate = (yr1["noi"] / a.purchase_price
+                                    if a.purchase_price > 0 else None)
+            fo.cash_on_cash_yr1 = yr1["cash_on_cash"]
+
+        # ── Exit ──────────────────────────────────────────────────────
+        fo.gross_sale_price = exit_info["gross_sale_price"]
+        fo.net_sale_proceeds = exit_info["net_sale_proceeds"]
+        fo.net_equity_at_exit = exit_info["net_equity_at_exit"]
+        fo.loan_balance_at_refi = exit_info.get("refi_balances")
+
+        # ── Project cash flows & IRR / EM ─────────────────────────────
+        total_equity = su["total_equity_required"]
+        project_cfs = _project_cashflows(proforma, exit_info, total_equity)
+        fo.project_irr = _safe_irr(project_cfs)
+        fo.project_equity_multiple = round(_equity_multiple(project_cfs), 2)
+
+        # ── Waterfall (LP / GP) ───────────────────────────────────────
+        wf = _compute_waterfall(project_cfs, deal)
+        fo.lp_irr = wf["lp_irr"]
+        fo.gp_irr = wf["gp_irr"]
+        fo.lp_equity_multiple = round(wf["lp_em"], 2)
+        fo.gp_equity_multiple = round(wf["gp_em"], 2)
+
+        # ── Sensitivity Matrix ────────────────────────────────────────
+        # Find first stabilized year (NOI > 0) for value-add deals
+        _has_equity = su["total_equity_required"] > 0
+        stabilized_year = None
+        stabilized_noi = 0.0
+        pf_nois = [yr.get("noi", 0) for yr in proforma]
+        for _i, _noi in enumerate(pf_nois):
+            if _noi > 0:
+                stabilized_year = _i + 1
+                stabilized_noi = _noi
+                break
+        if stabilized_year is None and pf_nois:
+            stabilized_year = pf_nois.index(max(pf_nois)) + 1
+            stabilized_noi = max(pf_nois)
+
+        _has_income = _gpr_yr1(deal) > 0 or stabilized_noi > 0
+
+        # Store stabilization metadata
+        fo.sensitivity_stabilized_year = stabilized_year
+        fo.sensitivity_stabilized_noi = stabilized_noi
+        if stabilized_year and stabilized_noi > 0:
+            fo.sensitivity_note = (
+                f"Based on Year {stabilized_year} stabilized NOI of "
+                f"${stabilized_noi:,.0f}. Assumes stabilization is "
+                f"achieved as underwritten.")
+        else:
+            fo.sensitivity_note = (
+                f"Property does not achieve positive NOI under current "
+                f"assumptions. Matrix reflects returns based on Year "
+                f"{stabilized_year or 1} NOI of ${stabilized_noi:,.0f}. "
+                f"Sensitivity will improve materially upon lease execution.")
+
+        logger.info("SENSITIVITY: stabilized_year=%s, stabilized_noi=$%.2f",
+                    stabilized_year, stabilized_noi)
+        logger.info("SENSITIVITY: note='%s'", fo.sensitivity_note)
+
+        if not is_sale and _has_income and _has_equity:
+            sens = _build_sensitivity(deal, insurance, su)
+            fo.sensitivity_matrix = sens["irr_matrix"]
+            fo.sensitivity_em_matrix = sens["em_matrix"]
+            fo.sensitivity_noi_matrix = sens["noi_matrix"]
+            fo.sensitivity_coc_matrix = sens["coc_matrix"]
+            fo.sensitivity_axis_rent_growth = sens["rent_axis"]
+            fo.sensitivity_axis_exit_cap = sens["cap_axis"]
+            logger.info("Sensitivity matrices built: IRR %dx%d, NOI %dx%d",
+                        len(sens["irr_matrix"]),
+                        len(sens["irr_matrix"][0]) if sens["irr_matrix"] else 0,
+                        len(sens["noi_matrix"]),
+                        len(sens["noi_matrix"][0]) if sens["noi_matrix"] else 0)
+        elif not is_sale:
+            logger.warning(
+                "Sensitivity matrix skipped — gpr_yr1=%.0f, equity=%.0f, stabilized_noi=%.0f. "
+                "Matrix will be empty; report will suppress Section 12.5.",
+                _gpr_yr1(deal), su["total_equity_required"], stabilized_noi
+            )
+
+        # ── Monte Carlo ───────────────────────────────────────────────
+        if not is_sale and _has_income and _has_equity:
+            mc = _run_monte_carlo(deal, insurance, su)
+            fo.monte_carlo_results = mc
+
+            # Prompt 5A — narrative
+            if mc.get("median_irr") is not None:
+                logger.info("Running Prompt 5A -- Monte Carlo Narrative...")
+                narrative = _call_5a(deal, mc)
+                fo.monte_carlo_narrative = narrative
+                deal.narratives.monte_carlo_narrative = narrative
+                if narrative:
+                    logger.info("Prompt 5A complete -- narrative generated")
+                else:
+                    logger.warning("Prompt 5A failed -- narrative remains None")
+            else:
+                logger.warning("Monte Carlo produced no valid results -- skipping Prompt 5A")
+        elif not is_sale:
+            logger.warning(
+                "Monte Carlo skipped — gpr_yr1=%.0f, equity=%.0f. "
+                "Simulation requires positive income and equity.",
+                _gpr_yr1(deal), su["total_equity_required"]
+            )
+
+    except Exception:
+        logger.error("run_financials FAILED:\n%s", traceback.format_exc())
+        raise
+
+    logger.info("run_financials: complete -- fo_is_none=%s, noi_yr1=%s, pro_forma_years_len=%s",
+                deal.financial_outputs is None,
+                getattr(deal.financial_outputs, 'noi_yr1', None),
+                len(deal.financial_outputs.pro_forma_years) if deal.financial_outputs and deal.financial_outputs.pro_forma_years else 0)
     return deal

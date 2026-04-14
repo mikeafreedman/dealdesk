@@ -3,10 +3,20 @@ DealDesk CRE Underwriting — Global Configuration
 Pure constants: API refs, model strings, paths, template routing.
 """
 
+import logging
 import os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 from pathlib import Path
+
+# ── Anthropic key validation (fail-fast at startup) ─────────
+_key = os.getenv("ANTHROPIC_API_KEY", "NOT_FOUND")
+print(f"DEBUG ANTHROPIC KEY AT INIT: starts={_key[:12] if len(_key) > 12 else _key}, len={len(_key)}")
+if not _key or not _key.startswith("sk-ant-"):
+    raise RuntimeError(
+        "ANTHROPIC_API_KEY is missing or malformed. "
+        "Set it in .env before starting the server."
+    )
 
 # ── Root paths ────────────────────────────────────────────────
 PROJECT_ROOT       = Path(__file__).resolve().parent
@@ -17,71 +27,40 @@ OUTPUTS_DIR        = PROJECT_ROOT / "outputs"
 WORD_TEMPLATES_DIR = PROJECT_ROOT / "templates"
 
 # ── Excel template routing ────────────────────────────────────
-# Structure: EXCEL_TEMPLATE_MAP[strategy][asset_type] → Path
-# Strategies:  stabilized | value_add | for_sale
-# Asset types: multifamily | mixed_use | retail | office | industrial | single_family
-#
-# Asset-type-specific templates that have not been built yet fall back to the
-# closest available template. Each fallback is marked TODO so it is easy to
-# find and replace when the dedicated template is ready.
+# Driven entirely by InvestmentStrategy — asset_type plays no role.
+from models.models import InvestmentStrategy
 
-EXCEL_TEMPLATE_MAP = {
-    "stabilized": {
-        "multifamily":   TEMPLATES_DIR / "hold_template.xlsx",
-        "mixed_use":     TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build mixed_use_hold_template.xlsx
-        "retail":        TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build retail_hold_template.xlsx
-        "office":        TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build office_hold_template.xlsx
-        "industrial":    TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build industrial_hold_template.xlsx
-        "single_family": TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build sf_hold_template.xlsx
-    },
-    "value_add": {
-        "multifamily":   TEMPLATES_DIR / "hold_template.xlsx",
-        "mixed_use":     TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build mixed_use_hold_template.xlsx
-        "retail":        TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build retail_hold_template.xlsx
-        "office":        TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build office_hold_template.xlsx
-        "industrial":    TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build industrial_hold_template.xlsx
-        "single_family": TEMPLATES_DIR / "hold_template.xlsx",   # TODO: build sf_hold_template.xlsx
-    },
-    "for_sale": {
-        "multifamily":   TEMPLATES_DIR / "Sale_Template_v3.xlsx",
-        "mixed_use":     TEMPLATES_DIR / "Sale_Template_v3.xlsx",  # TODO: build mixed_use_sale_template.xlsx
-        "retail":        TEMPLATES_DIR / "Sale_Template_v3.xlsx",  # TODO: build retail_sale_template.xlsx
-        "office":        TEMPLATES_DIR / "Sale_Template_v3.xlsx",  # TODO: build office_sale_template.xlsx
-        "industrial":    TEMPLATES_DIR / "Sale_Template_v3.xlsx",  # TODO: build industrial_sale_template.xlsx
-        "single_family": TEMPLATES_DIR / "Sale_Template_v3.xlsx",  # TODO: build sf_sale_template.xlsx
-    },
+logger = logging.getLogger(__name__)
+
+_STRATEGY_TEMPLATE_MAP: dict[InvestmentStrategy, Path] = {
+    InvestmentStrategy.STABILIZED_HOLD: TEMPLATES_DIR / "hold_template_v3.xlsx",
+    InvestmentStrategy.VALUE_ADD:       TEMPLATES_DIR / "hold_template_v3.xlsx",
+    InvestmentStrategy.OPPORTUNISTIC:   TEMPLATES_DIR / "sale_template_v3.xlsx",
 }
 
+_DEFAULT_TEMPLATE = TEMPLATES_DIR / "hold_template_v3.xlsx"
 
-def get_excel_template(strategy_key: str, asset_type_key: str) -> Path:
+
+def get_excel_template(strategy: InvestmentStrategy | None) -> Path:
     """
-    Return the correct Excel template Path for a given strategy + asset type.
+    Return the correct Excel template Path for a given investment strategy.
 
-    Normalises both keys (lowercase, spaces → underscores) before lookup so
-    minor formatting differences in callers never cause a silent wrong-template
-    selection or a hard crash.
+    Falls back to Hold_Template_v3.xlsx with a warning if strategy is None
+    or not recognised.
 
     Raises
     ------
-    KeyError        Unknown strategy_key or asset_type_key.
     FileNotFoundError  Template file does not exist on disk.
     """
-    strategy_key   = strategy_key.lower().strip()
-    asset_type_key = asset_type_key.lower().strip().replace("-", "_").replace(" ", "_")
-
-    if strategy_key not in EXCEL_TEMPLATE_MAP:
-        raise KeyError(
-            f"Unknown strategy_key {strategy_key!r}. "
-            f"Valid options: {list(EXCEL_TEMPLATE_MAP.keys())}"
+    if strategy is None or strategy not in _STRATEGY_TEMPLATE_MAP:
+        logger.warning(
+            "Unrecognised or missing investment_strategy %r — "
+            "defaulting to Hold_Template_v3.xlsx",
+            strategy,
         )
-    strategy_map = EXCEL_TEMPLATE_MAP[strategy_key]
-
-    if asset_type_key not in strategy_map:
-        raise KeyError(
-            f"Unknown asset_type_key {asset_type_key!r} for strategy {strategy_key!r}. "
-            f"Valid options: {list(strategy_map.keys())}"
-        )
-    path = strategy_map[asset_type_key]
+        path = _DEFAULT_TEMPLATE
+    else:
+        path = _STRATEGY_TEMPLATE_MAP[strategy]
 
     if not path.exists():
         raise FileNotFoundError(

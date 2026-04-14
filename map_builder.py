@@ -57,7 +57,10 @@ def _fetch_url(url, headers=None):
     try:
         req = urllib.request.Request(url, headers=headers or {})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.read()
+            status = resp.status
+            data = resp.read()
+            logger.debug("HTTP %d — %d bytes from %s", status, len(data), url[:80])
+            return data
     except Exception as exc:
         logger.warning("HTTP fetch failed for %s: %s", url[:80], exc)
         return None
@@ -151,12 +154,16 @@ def build_neighborhood_map(deal):
     ]
     url = base + "&".join(parts)
 
-    logger.info("Building neighborhood map via Google Maps Static API")
+    logger.info("Google Maps Static API URL: %s",
+                url.replace(GOOGLE_MAPS_API_KEY, "KEY_REDACTED"))
     data = _fetch_url(url)
+    logger.info("Google Maps Static API response: %d bytes, non-empty=%s",
+                len(data) if data else 0, bool(data and len(data) > 1000))
     if data and len(data) > 1000:
         logger.info("Neighborhood map built — %d bytes", len(data))
         return data
-    logger.warning("Google Maps Static API failed — falling back to OSM")
+    logger.warning("Google Maps Static API failed (got %d bytes) — falling back to OSM",
+                   len(data) if data else 0)
     return _stitch_tiles(lat, lon, zoom=14, tiles_wide=3, tiles_tall=3)
 
 
@@ -267,6 +274,14 @@ def build_all_maps(deal):
     Returns MapImages container with PNG bytes or None for each map.
     """
     logger.info("map_builder: starting for %s", deal.address.full_address)
+    logger.info("Maps API key present: %s", bool(GOOGLE_MAPS_API_KEY))
+    logger.info("map_builder: coordinates lat=%s lon=%s",
+                deal.address.latitude, deal.address.longitude)
+
+    if not GOOGLE_MAPS_API_KEY:
+        logger.warning("GOOGLE_MAPS_API_KEY not set — Google map images "
+                        "will fall back to OSM")
+
     aerial = neighborhood = fema = None
 
     try:

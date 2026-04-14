@@ -562,6 +562,10 @@ regulatory_approvals_narrative (50–70 words): Required approvals, variances, s
 due_diligence_overview (60–80 words): DD flag methodology and flag distribution summary.
 dd_checklist_intro (40–60 words): DD checklist scope framing.
 timeline_narrative (60–80 words): Phases from acquisition through stabilization.
+recommendation (REQUIRED, verdict enum): Exactly one of 'GO', 'CONDITIONAL GO', or 'NO-GO'.
+  Base this on deal economics, market conditions, risk profile, and DD flags.
+recommendation_one_line (REQUIRED, 15–30 words): Single-sentence summary of the verdict
+  with the one most important supporting rationale. Direct, declarative, no hedging.
 recommendation_narrative_p1 (100–130 words): Recommendation, primary rationale, key metrics.
 recommendation_narrative_p2 (80–110 words): Top risks and why manageable; next action.
 recommendation_pullquote (15–25 words): Recommendation pull-quote. Direct and declarative.
@@ -814,6 +818,8 @@ EXCEL_TEMPLATE_MAP = {
 | dd_checklist_intro | narratives | 4-MASTER |
 | timeline_narrative, timeline_gantt | narratives / main.py | 4-MASTER + generated |
 | recommendation_narrative_p1/p2, recommendation_pullquote | narratives | 4-MASTER |
+| **recommendation** (GO / CONDITIONAL GO / NO-GO verdict) | DealData.recommendation | 4-MASTER |
+| **recommendation_one_line** (15-30 word verdict summary) | DealData.recommendation_one_line | 4-MASTER |
 | risk_1/2/3 | narratives | 4-MASTER |
 | conclusion_1–5, bottom_line | narratives | 4-MASTER |
 | next_step_1–6 | narratives | 4-MASTER |
