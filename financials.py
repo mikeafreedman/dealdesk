@@ -467,6 +467,58 @@ def _compute_lease_events(deal) -> dict:
 # §4  PRO FORMA BUILDER  (hold strategies)
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _get_stabilization_factors(deal_data: DealData) -> list[float]:
+    """
+    Returns a 10-element list of stabilization factors (Year 1 through Year 10).
+
+    For STABILIZED_HOLD or VALUE_ADD deals with existing occupancy >= 90%:
+        All years = 1.0 (property is already generating income)
+
+    For VALUE_ADD or OPPORTUNISTIC deals with low/zero occupancy:
+        Year 1 = 0.0 (construction/lease-up)
+        Year 2 = 0.5 (partial stabilization)
+        Year 3+ = 1.0 (fully stabilized)
+
+    For OPPORTUNISTIC/ground-up deals:
+        Year 1 = 0.0, Year 2 = 0.0, Year 3 = 0.5, Year 4+ = 1.0
+    """
+    # Prefer extracted rent roll occupancy; fall back to a deal-level field
+    # (if one is later added); final fallback to 1.0 (fully occupied).
+    ext = getattr(deal_data, 'extracted_docs', None)
+    occupancy = (
+        (getattr(ext, 'occupancy_rate', None) if ext else None)
+        or getattr(deal_data, 'current_occupancy_rate', None)
+        or 1.0
+    )
+    strategy = deal_data.investment_strategy
+
+    if occupancy >= 0.85:
+        return [1.0] * 10
+
+    if strategy in (InvestmentStrategy.VALUE_ADD, InvestmentStrategy.STABILIZED_HOLD):
+        return [0.0, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+    return [0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+
+def _stabilized_noi_for_appraisal(noi_by_year, stab_factors, refi_year_idx, label="REFI"):
+    """Return the NOI to use for a refi appraisal, using the first fully-stabilized
+    year (stab_factor >= 1.0) at or after refi_year_idx (0-based)."""
+    n = min(len(noi_by_year), len(stab_factors))
+    for yr in range(refi_year_idx, n):
+        if stab_factors[yr] >= 1.0:
+            logger.info("%s APPRAISAL: stab NOI = %.2f from Year %d "
+                        "(stab_factor=%.2f, refi timing = Year %d)",
+                        label, noi_by_year[yr], yr + 1,
+                        stab_factors[yr], refi_year_idx + 1)
+            return noi_by_year[yr]
+    fallback = noi_by_year[-1] if noi_by_year else 0.0
+    logger.warning("%s APPRAISAL: no stabilized year found from Year %d onward — "
+                   "using Year %d NOI = %.2f fallback",
+                   label, refi_year_idx + 1, len(noi_by_year), fallback)
+    return fallback
+
+
 def _build_proforma(deal: DealData, insurance: float,
                     sources_uses: dict) -> Tuple[List[dict], dict]:
     """Build year-by-year pro forma for stabilized / value_add strategies.
@@ -507,8 +559,38 @@ def _build_proforma(deal: DealData, insurance: float,
     # Compute lease events (commissions, TI, downtime) for each year
     lease_events = _compute_lease_events(deal)
 
+    # Stabilization ramp: scale revenue during construction / lease-up years
+    stab_factors = _get_stabilization_factors(deal)
+    _ext = getattr(deal, 'extracted_docs', None)
+    _occ_log = (
+        (getattr(_ext, 'occupancy_rate', None) if _ext else None)
+        or getattr(deal, 'current_occupancy_rate', None)
+        or 1.0
+    )
+    logger.info("STAB FACTORS: occupancy=%.2f, factors=%s", _occ_log, stab_factors)
+
+    # Pre-compute projected NOI timeline (pure function of year) so refi
+    # appraisals can look forward to the first stabilized year rather than
+    # using the current-year NOI (which may be negative during ramp).
+    projected_noi_by_year: List[float] = []
+    for _yr in range(1, max(hold, 10) + 1):
+        _gpr, _egi, _opex, _noi = _year_noi(gpr1, _yr, a, insurance)
+        _stab = stab_factors[min(_yr - 1, len(stab_factors) - 1)]
+        if _stab != 1.0:
+            _egi = _egi * _stab
+            _noi = _egi - _opex
+        projected_noi_by_year.append(_noi)
+    logger.info("PROJECTED NOI: %s",
+                [f"Y{i+1}:{n:,.0f}" for i, n in enumerate(projected_noi_by_year)])
+
     for yr in range(1, hold + 1):
         gpr, egi, opex, noi = _year_noi(gpr1, yr, a, insurance)
+        # Apply stabilization ramp to revenue (opex unchanged — conservative)
+        stab = stab_factors[min(yr - 1, len(stab_factors) - 1)]
+        if stab != 1.0:
+            gpr = gpr * stab
+            egi = egi * stab
+            noi = egi - opex
 
         # Debt service
         io_remaining = max(0, loan_io_total - loan_months)
@@ -533,16 +615,36 @@ def _build_proforma(deal: DealData, insurance: float,
                 if refi_idx < 3:
                     refi_balances[refi_idx] = round(old_balance, 2)
 
-                # Compute appraised value dynamically: NOI / cap_rate
+                # Compute appraised value dynamically, using the NOI from
+                # the first STABILIZED year at or after refi timing.
                 if refi.cap_rate > 0:
-                    computed_appraised = noi / refi.cap_rate
+                    refi_num = refi_idx + 1
+                    stab_noi_for_refi = _stabilized_noi_for_appraisal(
+                        projected_noi_by_year, stab_factors, yr - 1,
+                        label=f"REFI {refi_num}"
+                    )
+                    computed_appraised = stab_noi_for_refi / refi.cap_rate
                 else:
                     computed_appraised = 0.0
                 computed_appraised = max(0.0, computed_appraised)  # floor at 0
                 refi.appraised_value = computed_appraised
 
+                if refi.appraised_value <= 0:
+                    logger.warning(
+                        "REFI GUARD: Refi %d appraised value = %.0f — "
+                        "suppressing refi event, setting proceeds to 0",
+                        refi_idx + 1, refi.appraised_value)
+                    refi_proceeds = 0.0
+                    refi.active = False
+                    break
+
                 new_loan = refi.appraised_value * refi.ltv
                 new_loan = max(0.0, new_loan)  # floor at 0
+
+                logger.info("REFI %d GUARD: appraised=%.2f, ltv=%.2f, "
+                            "new_loan=%.2f, prior_balance=%.2f",
+                            refi_idx + 1, refi.appraised_value, refi.ltv,
+                            new_loan, old_balance)
 
                 # Guard: if loan is 0, refi does not fund
                 if new_loan <= 0:

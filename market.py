@@ -283,6 +283,23 @@ _HUD_OZ_URL = (
 )
 
 
+def _normalize_address_for_geocoding(raw_address: str) -> str:
+    """Normalize range addresses and non-standard formats for geocoding.
+
+    '2-8 s. 46th street, 19139' → '2 S 46th Street, Philadelphia, PA 19139'
+    """
+    addr = re.sub(r'^(\d+)-\d+\s', r'\1 ', raw_address.strip())
+    addr = re.sub(r'\bs\.\s', 'S ', addr, flags=re.IGNORECASE)
+    addr = re.sub(r'\bn\.\s', 'N ', addr, flags=re.IGNORECASE)
+    addr = re.sub(r'\be\.\s', 'E ', addr, flags=re.IGNORECASE)
+    addr = re.sub(r'\bw\.\s', 'W ', addr, flags=re.IGNORECASE)
+    if re.search(r'\b\d{5}\b', addr) and 'Philadelphia' not in addr:
+        addr = re.sub(r'(\d{5})$', r'Philadelphia, PA \1', addr.strip(', '))
+    if addr != raw_address:
+        logger.info("GEOCODE: normalized '%s' → '%s'", raw_address, addr)
+    return addr
+
+
 def _geocode_fallback(addr, full_address: str) -> None:
     """Try Google Maps geocoding; if unavailable use Philadelphia centroid."""
     import os
@@ -329,6 +346,7 @@ def _census_geocode(deal: DealData) -> None:
         logger.warning("Census Geocoder: no address — skipping")
         return
 
+    full = _normalize_address_for_geocoding(full)
     logger.info("Census Geocoder: geocoding address '%s'", full)
 
     # Parse address components for the geocoder

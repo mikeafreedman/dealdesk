@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import platform
+from collections import defaultdict
 import subprocess
 import time
 from pathlib import Path
@@ -1018,6 +1019,63 @@ def _build_context(deal: DealData) -> dict:
     for k, v in narr_ctx.items():
         if k not in ctx or ctx[k] is None:
             ctx[k] = v
+
+    # Overwrite narrative context with live pro forma values (single source of truth)
+    try:
+        fo = deal.financial_outputs
+        pf = fo.pro_forma_years or []
+        pf_noi  = [y.get("noi", 0) for y in pf]
+        pf_egi  = [y.get("egi", 0) for y in pf]
+        pf_opex = [y.get("opex", 0) for y in pf]
+        pf_ds   = [y.get("debt_service", 0) for y in pf]
+        pf_fcf  = [y.get("fcf", 0) for y in pf]
+
+        # DSCR and stab factors are not stored in proforma dict — compute on the fly
+        pf_dscr = [(n / d) if d else 0 for n, d in zip(pf_noi, pf_ds)]
+        # stabilization factors (import from financials)
+        try:
+            from financials import _get_stabilization_factors
+            pf_sf = _get_stabilization_factors(deal)
+        except Exception:
+            pf_sf = [1.0] * len(pf)
+
+        first_stab_yr = next((i for i, sf in enumerate(pf_sf) if sf >= 1.0), 0)
+
+        # Refi net proceeds come from the proforma year dict
+        refi_proceeds_by_year = [y.get("refi_proceeds", 0) for y in pf]
+        refi1_proceeds = next((p for p in refi_proceeds_by_year if p), 0)
+        refi2_proceeds = 0
+        _found_first = False
+        for p in refi_proceeds_by_year:
+            if p:
+                if _found_first:
+                    refi2_proceeds = p
+                    break
+                _found_first = True
+
+        ctx.update({
+            "year1_noi":          pf_noi[0]  if pf_noi  else "N/A",
+            "year1_egi":          pf_egi[0]  if pf_egi  else "N/A",
+            "year1_opex":         pf_opex[0] if pf_opex else "N/A",
+            "year1_debt_svc":     pf_ds[0]   if pf_ds   else "N/A",
+            "year1_fcf":          pf_fcf[0]  if pf_fcf  else "N/A",
+            "year1_dscr":         pf_dscr[0] if pf_dscr else "N/A",
+            "year10_noi":         pf_noi[9]  if len(pf_noi) > 9 else "N/A",
+            "first_stabilized_year": first_stab_yr + 1,
+            "first_stab_noi":     pf_noi[first_stab_yr] if pf_noi else "N/A",
+            "refi1_net_proceeds": refi1_proceeds,
+            "refi2_net_proceeds": refi2_proceeds,
+        })
+        logger.info("NARRATIVE CTX: year1_noi=%.2f, year1_dscr=%.2f, "
+                    "first_stab_yr=%d, first_stab_noi=%.2f, refi1_proceeds=%.2f",
+                    pf_noi[0] if pf_noi else 0,
+                    pf_dscr[0] if pf_dscr else 0,
+                    first_stab_yr + 1,
+                    pf_noi[first_stab_yr] if pf_noi else 0,
+                    refi1_proceeds)
+    except Exception as e:
+        logger.warning("NARRATIVE CTX: failed to refresh context — %s", e)
+
     return ctx
 
 
@@ -1135,6 +1193,97 @@ def _remove_image_placeholder_boxes(doc) -> None:
     logger.info("PLACEHOLDER: removed %d image placeholder boxes", len(tables_to_remove))
 
 
+def _remove_parameter_placeholder_boxes(doc, labels: list) -> int:
+    """Remove single-cell placeholder boxes whose cell text EQUALS one of the
+    provided labels (case-insensitive, whitespace-stripped).
+
+    Safer than remove_placeholder_box for parameter labels that also appear as
+    data values inside populated multi-row tables — the equality check + the
+    single-cell filter prevents accidentally removing real data tables or
+    narrative paragraph blocks.
+    """
+    label_set = {s.strip().lower() for s in labels}
+    to_remove = []
+    for table in doc.tables:
+        if len(table.rows) != 1 or len(table.rows[0].cells) != 1:
+            continue
+        cell_text = table.rows[0].cells[0].text.strip().lower()
+        if cell_text in label_set:
+            to_remove.append(table)
+    for table in to_remove:
+        tbl = table._tbl
+        tbl.getparent().remove(tbl)
+    if to_remove:
+        logger.info("PLACEHOLDER: removed %d parameter-label boxes", len(to_remove))
+    return len(to_remove)
+
+
+def log_all_table_indexes(doc) -> None:
+    """Print the first cell of each table to verify index mappings.
+
+    Run once after template render to confirm table order matches the indices
+    used by _safe_pop() in _populate_data_tables().
+    """
+    for i, table in enumerate(doc.tables):
+        if table.rows and table.rows[0].cells:
+            first_cell = table.rows[0].cells[0].text[:80].replace("\n", " ")
+        else:
+            first_cell = "(empty)"
+        logger.info("TABLE[%d]: '%s'", i, first_cell)
+
+
+def _populate_exec_summary_kpi(doc, deal: DealData) -> None:
+    """Populate the Section 01 Executive Summary KPI table.
+
+    Locates the table by keyword search (first table whose text contains both
+    'Purchase Price' and 'LP IRR' — distinguishes it from the S&U and
+    assumptions tables which also mention Purchase Price).
+    """
+    a = deal.assumptions
+    fo = deal.financial_outputs
+
+    def _pct(v):
+        return f"{v * 100:.2f}%" if isinstance(v, (int, float)) and v else "N/A"
+
+    def _pct1(v):
+        return f"{v * 100:.1f}%" if isinstance(v, (int, float)) and v else "N/A"
+
+    kpi_rows = [
+        ["Purchase Price",       f"${(a.purchase_price or 0):,.0f}"],
+        ["Total Project Cost",   f"${(fo.total_uses or 0):,.0f}"],
+        ["Total Equity Required",f"${(fo.total_equity_required or 0):,.0f}"],
+        ["GP Equity",            f"${(fo.gp_equity or 0):,.0f}"],
+        ["LP Equity",            f"${(fo.lp_equity or 0):,.0f}"],
+        ["Year 1 NOI",           f"${(fo.noi_yr1 or 0):,.0f}"],
+        ["Going-In Cap Rate",    _pct(fo.going_in_cap_rate)],
+        ["Year 1 DSCR",          f"{fo.dscr_yr1:.2f}x" if fo.dscr_yr1 else "N/A"],
+        ["Year 1 Cash-on-Cash",  _pct(fo.cash_on_cash_yr1)],
+        ["LP IRR",               _pct1(fo.lp_irr)],
+        ["LP Equity Multiple",   f"{fo.lp_equity_multiple:.2f}x" if fo.lp_equity_multiple else "N/A"],
+        ["Project IRR",          _pct1(fo.project_irr)],
+        ["Hold Period",          f"{a.hold_period} Years"],
+        ["Exit Cap Rate",        _pct(a.exit_cap_rate)],
+    ]
+
+    # Locate by header-row text: the KPI table's first row contains one of
+    # ('Metric', 'Value', 'KPI') as a column label, not the data values.
+    target = None
+    for table in doc.tables:
+        if not table.rows:
+            continue
+        header_txt = ' '.join(c.text for c in table.rows[0].cells).lower()
+        if 'metric' in header_txt or 'kpi' in header_txt or (
+                'value' in header_txt and len(table.rows[0].cells) <= 3):
+            target = table
+            break
+    if target is None:
+        logger.info("EXEC KPI: could not find exec summary KPI table — skipping")
+        return
+
+    logger.info("EXEC KPI: found KPI table, populating %d rows", len(kpi_rows))
+    populate_table(target, kpi_rows)
+
+
 def _fix_dark_data_rows(doc) -> int:
     """Fix data rows that inherited the header's dark background after render."""
     count = 0
@@ -1169,6 +1318,26 @@ def remove_placeholder_box(doc, placeholder_text_contains):
             tbl.getparent().remove(tbl)
             logger.info("PLACEHOLDER REMOVED: table containing '%s'", placeholder_text_contains)
             return True
+    return False
+
+
+def _pop_by_header(doc, header_keyword: str, rows: list, label: str) -> bool:
+    """Find a table whose first-cell text contains header_keyword and populate it."""
+    for i, t in enumerate(doc.tables):
+        try:
+            first = t.cell(0, 0).text.strip()
+        except Exception:
+            continue
+        if header_keyword.lower() in first.lower():
+            try:
+                populate_table(t, rows)
+                logger.info("%s: populated %d rows into table[%d] (header='%s')",
+                            label, len(rows), i, first[:40])
+                return True
+            except Exception as e:
+                logger.error("%s: populate failed on table[%d] — %s", label, i, e)
+                return False
+    logger.warning("%s: could not find table with header '%s'", label, header_keyword)
     return False
 
 
@@ -1452,6 +1621,12 @@ def _build_image_context(deal: DealData, tpl: DocxTemplate) -> dict:
 
 def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
     """Populate all data tables in the rendered document using populate_table()."""
+    # Diagnostic: dump table indexes + first-cell text for verification
+    log_all_table_indexes(doc)
+
+    # Executive summary KPI table (located via keyword search, not index)
+    _populate_exec_summary_kpi(doc, deal)
+
     a = deal.assumptions
     fo = deal.financial_outputs
     ext = deal.extracted_docs
@@ -1470,10 +1645,13 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
                            idx, len(doc.tables))
             return None
 
+    _populate_counter = [0]  # list for closure-mutable counter
+
     def _safe_pop(idx, rows):
         t = _tbl(idx)
         if t is not None:
             populate_table(t, rows)
+            _populate_counter[0] += 1
 
     # ── Table 10 (idx=9): Parcel & Improvement Data ──────────────
     parcel_rows = []
@@ -1557,97 +1735,98 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
 
     # ── Table 22 (idx=21): Unit Mix Summary ───────────────────────
     units = ext.unit_mix or [] if ext else []
+    unit_buckets = defaultdict(lambda: {"count": 0, "rents": []})
+    units_src = (deal.extracted_docs.unit_mix or []) if deal.extracted_docs else []
+    for u in units_src:
+        utype = (u.get("unit_type") or u.get("type") or "N/A").strip()
+        cnt = int(float(u.get("count") or 1))
+        unit_buckets[utype]["count"] += cnt
+        rent = u.get("monthly_rent") or 0
+        if rent and rent > 0:
+            # append the unit-level rent, weighted by count via repetition
+            for _ in range(cnt):
+                unit_buckets[utype]["rents"].append(rent)
+
+    total_annual_gpr = sum(
+        (u.get("monthly_rent") or 0) * int(float(u.get("count") or 1)) * 12
+        for u in units_src
+    )
+
     unit_mix_rows = []
-    if units:
-        type_groups = {}
-        for u in units:
-            ut = u.get("unit_type") or u.get("type") or "Unit"
-            if ut not in type_groups:
-                type_groups[ut] = {"count": 0, "sf_total": 0, "rent_total": 0, "market_total": 0}
-            cnt = float(u.get("count") or 1)
-            type_groups[ut]["count"] += cnt
-            sf = float(u.get("sf") or 0)
-            type_groups[ut]["sf_total"] += sf * cnt
-            rent = float(u.get("monthly_rent") or 0)
-            type_groups[ut]["rent_total"] += rent * cnt
-            mkt = float(u.get("market_rent") or u.get("monthly_rent") or 0)
-            type_groups[ut]["market_total"] += mkt * cnt
-        total_gpr = fo.gross_potential_rent or 0
-        for ut, d in type_groups.items():
-            cnt = d["count"]
-            avg_sf = f"{d['sf_total'] / cnt:,.0f} SF" if d["sf_total"] > 0 and cnt > 0 else "—"
-            curr = f"${d['rent_total'] / cnt:,.0f}/mo" if d["rent_total"] > 0 and cnt > 0 else "Vacant"
-            mkt_r = f"${d['market_total'] / cnt:,.0f}/mo" if d["market_total"] > 0 and cnt > 0 else "—"
-            pct = f"{d['rent_total'] * 12 / total_gpr * 100:.1f}%" if total_gpr > 0 else "—"
-            unit_mix_rows.append([ut, str(int(cnt)), avg_sf, curr, mkt_r, pct])
-    else:
-        gpr_yr1 = fo.gross_potential_rent or 0
+    for utype, d in unit_buckets.items():
+        avg_rent = (sum(d["rents"]) / len(d["rents"])) if d["rents"] else 0
+        type_annual = avg_rent * d["count"] * 12
+        pct_gpr = (f"{type_annual / total_annual_gpr * 100:.1f}%"
+                   if total_annual_gpr else "N/A")
+        unit_mix_rows.append([
+            utype, str(d["count"]), "N/A",
+            f"${avg_rent:,.0f}/mo" if avg_rent else "Vacant",
+            "N/A", pct_gpr,
+        ])
+    if not unit_mix_rows:
+        # fallback
+        gpr_yr1 = (deal.financial_outputs.gross_potential_rent or 0)
         n = deal.assumptions.num_units or 1
         avg_mo = gpr_yr1 / 12 / n if n > 0 and gpr_yr1 > 0 else 0
-        gba_v = deal.assumptions.gba_sf or 0
-        avg_sf = f"{gba_v / n:,.0f} SF" if gba_v > 0 and n > 0 else "—"
-        at = deal.asset_type.value.lower()
-        label = ("2 Bed" if "multifamily" in at
-                 else "Commercial" if ("office" in at or "retail" in at or "industrial" in at)
-                 else "Unit")
-        unit_mix_rows = [[label, str(n), avg_sf,
-                          f"${avg_mo:,.0f}/mo" if avg_mo > 0 else "Vacant", "—", "100%"]]
-    _safe_pop(21, unit_mix_rows)
+        unit_mix_rows = [["Unit", str(n), "N/A",
+                          f"${avg_mo:,.0f}/mo" if avg_mo else "Vacant", "N/A", "100%"]]
+    logger.info("UNIT MIX: built %d rows from extracted_docs.unit_mix", len(unit_mix_rows))
+    _pop_by_header(doc, "Unit Type", unit_mix_rows, "UNIT MIX")
 
     # ── Table 23 (idx=22): Full Rent Roll ─────────────────────────
     rr_rows = []
-    if units:
-        row_num = 1
-        for u in units:
-            ut = u.get("unit_type") or u.get("type") or "Unit"
-            sf = u.get("sf") or "—"
-            tenant = u.get("tenant_name") or u.get("tenant") or "Occupied"
-            curr = u.get("monthly_rent")
-            mkt = u.get("market_rent") or curr
-            ls = u.get("lease_start") or "—"
-            le = u.get("lease_end") or "—"
-            status = u.get("status") or "Occupied"
-            cnt = int(float(u.get("count") or 1))
-            for _ in range(cnt):
-                rr_rows.append([
-                    str(row_num), ut, str(sf), tenant,
-                    f"${float(curr):,.0f}" if curr else "Vacant",
-                    f"${float(mkt):,.0f}" if mkt else "—",
-                    ls, le, status
-                ])
-                row_num += 1
-    else:
-        gpr_yr1 = fo.gross_potential_rent or 0
-        n = deal.assumptions.num_units or 1
-        avg_mo = gpr_yr1 / 12 / n if n > 0 and gpr_yr1 > 0 else 0
-        gba_v = deal.assumptions.gba_sf or 0
-        at = deal.asset_type.value.lower()
-        label = ("2 Bed" if "multifamily" in at
-                 else "Commercial" if ("office" in at or "retail" in at or "industrial" in at)
-                 else "Unit")
-        for j in range(n):
+    units_src = (deal.extracted_docs.unit_mix or []) if deal.extracted_docs else []
+    for u in units_src:
+        cnt = int(float(u.get("count") or 1))
+        for _ in range(cnt):
             rr_rows.append([
-                str(j + 1), label,
-                f"{gba_v / n:,.0f}" if gba_v > 0 else "—",
-                "Occupied",
-                f"${avg_mo:,.0f}" if avg_mo > 0 else "$0",
-                "—", "—", "—", "Occupied"
+                u.get("unit_id") or u.get("unit_number") or "—",
+                u.get("unit_type") or u.get("type") or "—",
+                f"{u.get('sf'):,.0f}" if u.get("sf") else "N/A",
+                u.get("tenant_name") or u.get("tenant") or "—",
+                f"${u.get('monthly_rent'):,.0f}" if u.get("monthly_rent") else "—",
+                f"${u.get('market_rent'):,.0f}" if u.get("market_rent") else "N/A",
+                str(u.get("lease_start"))[:10] if u.get("lease_start") else "—",
+                str(u.get("lease_end"))[:10] if u.get("lease_end") else "—",
+                u.get("status") or "Occupied",
             ])
-    _safe_pop(22, rr_rows)
+    if not rr_rows:
+        rr_rows = [["1", "Unit", "—", "—", "$0", "—", "—", "—", "Vacant"]]
+    logger.info("RENT ROLL: built %d rows", len(rr_rows))
+    logger.info("RENT ROLL TABLE: about to populate with %d rows (units src=%d)",
+                len(rr_rows), len(units))
+    _pop_by_header(doc, "Unit #", rr_rows, "RENT ROLL")
+    logger.info("RENT ROLL TABLE: populate call returned")
 
     # ── Table 24 (idx=23): Income Summary ─────────────────────────
-    gpr_yr1 = fo.gross_potential_rent or 0
-    egi_yr1 = fo.effective_gross_income or 0
-    vac_loss = gpr_yr1 * a.vacancy_rate
-    ltl_loss = gpr_yr1 * a.loss_to_lease
-    income_rows = [
-        ["Gross Potential Rent", f"${gpr_yr1:,.0f}", "100.0%", "Underwritten assumption"],
-        ["Less: Vacancy & Bad Debt", f"(${vac_loss:,.0f})", f"({a.vacancy_rate * 100:.1f}%)", "Vacancy allowance"],
-        ["Less: Loss to Lease", f"(${ltl_loss:,.0f})", f"({a.loss_to_lease * 100:.1f}%)", "Market adjustment"],
-        ["Effective Gross Income", f"${egi_yr1:,.0f}",
-         f"{egi_yr1 / gpr_yr1 * 100:.1f}%" if gpr_yr1 > 0 else "—", "After vacancy and concessions"],
+    gpr = fo.gross_potential_rent or 0
+    egi = fo.effective_gross_income or 0
+    vac_rate = a.vacancy_rate or 0.05
+    ltl_rate = a.loss_to_lease or 0.03
+    vacancy = gpr * vac_rate
+    ltl = gpr * ltl_rate
+    other_inc = (a.cam_reimbursements or 0) + (a.fee_income or 0)
+
+    income_summary_rows = [
+        ["Gross Potential Rent (GPR)",
+         f"${gpr:,.0f}" if gpr else "N/A", "100.0%",
+         "In-place rent × 12 months"],
+        ["Less: Vacancy & Bad Debt",
+         f"(${abs(vacancy):,.0f})" if vacancy else "N/A",
+         f"({vac_rate*100:.1f}%)", "Vacancy allowance"],
+        ["Less: Loss to Lease",
+         f"(${abs(ltl):,.0f})" if ltl else "N/A",
+         f"({ltl_rate*100:.1f}%)", "Market adjustment"],
+        ["Fee / Other Income",
+         f"${other_inc:,.0f}" if other_inc else "$0",
+         "", "CAM / fee income"],
+        ["Effective Gross Income (EGI)",
+         f"${egi:,.0f}" if egi else "N/A",
+         f"{egi/gpr*100:.1f}%" if gpr and egi else "N/A",
+         "After vacancy & concessions"],
     ]
-    _safe_pop(23, income_rows)
+    logger.info("INCOME SUMMARY: built %d rows", len(income_summary_rows))
+    _pop_by_header(doc, "Income Category", income_summary_rows, "INCOME SUMMARY")
 
     # ── Table 25 (idx=24): Residential Rent Comparables ───────────
     res_comp_rows = []
@@ -1809,7 +1988,7 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
                      f"{a.residual_tier.gp_share * 100:.0f}%",
                      f"{a.residual_tier.lp_share * 100:.0f}%",
                      f"{a.residual_tier.gp_share * 100:.0f}%"])
-    _safe_pop(38, wf_rows)
+    _pop_by_header(doc, "Tier", wf_rows, "WATERFALL")
 
     # ── Table 41 (idx=40): Environmental Screening ────────────────
     env_rows = [
@@ -1818,7 +1997,7 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
         ["Phase I ESA", "Not completed", "Due diligence gap", "Required pre-closing"],
         ["Phase II ESA", "Not applicable (Phase I pending)", "Contingent on Phase I", "TBD"],
     ]
-    _safe_pop(40, env_rows)
+    _pop_by_header(doc, "Risk Factor", env_rows, "ENV SCREENING")
 
     # ── Table 42 (idx=41): Climate Risk (First Street) ───────────
     climate_rows = [
@@ -1838,7 +2017,9 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
     _safe_pop(42, title_rows)
 
     # ── Table 44 (idx=43): Outstanding Violations & Permits ──────
-    _safe_pop(43, [["L&I Search", "Not completed", "Open violations unknown", "Pending", "Municipal lien search required"]])
+    _pop_by_header(doc, "Type",
+        [["L&I Search", "Not completed", "Open violations unknown", "Pending", "Municipal lien search required"]],
+        "VIOLATIONS")
 
     # ── Table 48 (idx=47): Insurance Coverage Rollup ─────────────
     ins_pf = deal.insurance.insurance_proforma_line_item or a.insurance
@@ -1859,33 +2040,70 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
         ["Operations", "Stabilized operations", "Year 1–2", "Ongoing", "Lease executed", "Property mgr"],
         ["Exit", "Disposition", f"Year {hold}", "6 months", "Market conditions", "Sponsor"],
     ]
-    _safe_pop(53, milestone_rows)
+    _pop_by_header(doc, "Phase", milestone_rows, "MILESTONE")
 
     # ── Table 57 (idx=56): Scenario Comparison ───────────────────
+    def _safe_pct(val, decimals=1):
+        if val is None: return "N/A"
+        try: return f"{float(val)*100:.{decimals}f}%"
+        except: return "N/A"
+    def _safe_dollar(val):
+        if val is None: return "N/A"
+        try: return f"${float(val):,.0f}"
+        except: return "N/A"
+    def _safe_x(val, decimals=2):
+        if val is None: return "N/A"
+        try: return f"{float(val):.{decimals}f}x"
+        except: return "N/A"
+
+    lp_irr   = fo.lp_irr
+    lp_em    = fo.lp_equity_multiple
     proj_irr = fo.project_irr
-    lp_irr_val = fo.lp_irr
+    dscr_y1  = fo.dscr_yr1
+    gi_cap   = fo.going_in_cap_rate
+    coc_y1   = fo.cash_on_cash_yr1
+    exit_px  = fo.gross_sale_price
+    net_exit = fo.net_equity_at_exit
+    eq_mult  = fo.project_equity_multiple
+    fcf_y1   = (fo.pro_forma_years[0].get("fcf") if fo.pro_forma_years else None)
+
     scenario_rows = [
-        ["Project IRR", f"{proj_irr * 100:.2f}%" if proj_irr else "N/A", "—", "≥ 12.0%"],
-        ["LP IRR", f"{lp_irr_val * 100:.2f}%" if lp_irr_val else "N/A", "—", "≥ 12.0%"],
-        ["LP Equity Multiple", f"{fo.lp_equity_multiple:.2f}x" if fo.lp_equity_multiple else "—", "—", "≥ 1.5x"],
-        ["Year-1 NOI", f"${fo.noi_yr1:,.0f}" if fo.noi_yr1 else "—", "—", "> $0"],
-        ["Going-In Cap Rate", f"{fo.going_in_cap_rate * 100:.2f}%" if fo.going_in_cap_rate else "N/A", "—", "≥ 5.0%"],
-        ["Exit Cap Rate", f"{a.exit_cap_rate * 100:.2f}%", "—", "≤ 8.5%"],
-        ["Total Project Cost", f"${total_project_cost:,.0f}", "—", "—"],
-        ["Equity Required", f"${total_equity:,.0f}", "—", "—"],
-        ["Hold Period", f"{hold} years", f"{hold} years", "10 years"],
+        ["LP IRR",              _safe_pct(lp_irr),   "N/A",  "12.0%"],
+        ["LP Equity Multiple",  _safe_x(lp_em),      "N/A",  "1.8x"],
+        ["Project IRR",         _safe_pct(proj_irr), "N/A",  "—"],
+        ["Year 1 DSCR",         _safe_x(dscr_y1),    "N/A",  "1.20x"],
+        ["Going-In Cap Rate",   _safe_pct(gi_cap, 2),"N/A",  "≥5.5%"],
+        ["Year 1 Cash-on-Cash", _safe_pct(coc_y1),   "N/A",  "≥6.0%"],
+        ["Gross Exit Price",    _safe_dollar(exit_px),"N/A",  "—"],
+        ["Net Equity at Exit",  _safe_dollar(net_exit),"N/A", "—"],
+        ["Equity Multiple",     _safe_x(eq_mult),    "N/A",  "—"],
     ]
-    _safe_pop(56, scenario_rows)
+    logger.info("SCENARIO: built %d rows", len(scenario_rows))
+    _pop_by_header(doc, "Metric", scenario_rows, "SCENARIO")
 
     # ── Table 58 (idx=57): Go/No-Go Assessment ───────────────────
+    def _verdict(condition):
+        return "PASS" if condition else "FAIL"
+
     gono_rows = [
-        ["Revenue assumption validated", "No executed lease" if not unit_mix else "Rent roll provided", "⚠️ WATCH" if not unit_mix else "✅ PASS"],
-        ["Zoning confirmed", z.zoning_code or "Unconfirmed", "✅ PASS" if z.source_verified else "❌ FAIL"],
-        ["Phase I ESA completed", "No Phase I on file", "❌ FAIL"],
-        ["FEMA flood zone determined", md.fema_flood_zone or "Not Determined", "✅ PASS" if md.fema_flood_zone else "⚠️ WATCH"],
-        ["Acquisition basis acceptable", f"${a.purchase_price / gba:.2f}/SF" if gba > 0 else "—", "✅ PASS"],
+        ["Going-In Cap Rate ≥ 5.5%",
+         f"Actual: {_safe_pct(gi_cap, 2)}",
+         _verdict(gi_cap is not None and gi_cap >= 0.055)],
+        ["LP IRR ≥ 12.0%",
+         f"Actual: {_safe_pct(lp_irr)}",
+         _verdict(lp_irr is not None and lp_irr >= 0.12)],
+        ["LP Equity Multiple ≥ 1.8x",
+         f"Actual: {_safe_x(lp_em)}",
+         _verdict(lp_em is not None and lp_em >= 1.8)],
+        ["Year 1 DSCR ≥ 1.20x",
+         f"Actual: {_safe_x(dscr_y1)}",
+         _verdict(dscr_y1 is not None and dscr_y1 >= 1.2)],
+        ["Positive Free Cash Flow Yr 1",
+         f"Actual: {_safe_dollar(fcf_y1)}",
+         _verdict(fcf_y1 is not None and fcf_y1 > 0)],
     ]
-    _safe_pop(57, gono_rows)
+    logger.info("GO_NOGO: built %d rows", len(gono_rows))
+    _pop_by_header(doc, "Criterion", gono_rows, "GO_NOGO")
 
     # ── Table 46 (idx=45): DD Flag Summary ──────────────────────
     dd_flag_rows = []
@@ -1926,15 +2144,55 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
     ]
     _safe_pop(60, provenance_rows)
 
-    # Sensitivity table
-    populate_sensitivity_table(doc, deal)
+    # Sensitivity table — disabled: keyword-match was injecting the matrix
+    # into the Executive Summary table (matched on 'irr'). Section 12.5
+    # renders the matrix via the docxtpl context keys (sensitivity_rows,
+    # sensitivity_cap_axis). Re-enable only with a tighter table selector.
+    # populate_sensitivity_table(doc, deal)
 
     # Fix 9: data row colors — parchment background for dark-inherited rows
     color_count = _fix_dark_data_rows(doc)
     if color_count > 0:
         logger.info("TABLE COLORS: fixed %d data cells from dark to parchment", color_count)
 
+    # Remove placeholder boxes that have no data source yet
+    PLACEHOLDER_BOXES_TO_REMOVE = [
+        "Floor Plans",
+        "Aerial Location Map",
+        "Neighborhood Map",
+        "FEMA Flood Map",
+        "KPI Dashboard",
+        "Supply Pipeline",
+        "Demographic Chart",
+        "Zoning Code",
+    ]
+    for box_label in PLACEHOLDER_BOXES_TO_REMOVE:
+        if remove_placeholder_box(doc, box_label):
+            logger.info("PLACEHOLDER: removed '%s' box", box_label)
+
+    # Remove single-cell parameter-label placeholder boxes (sensitivity
+    # page KPI boxes — one label per box across report pages 22-35).
+    _remove_parameter_placeholder_boxes(doc, [
+        "Purchase Price", "Total Project Cost", "Loan Amount (LTV)",
+        "Interest Rate", "Loan Term", "IO Period", "Amortization",
+        "Hold Period", "Exit Cap Rate", "Vacancy Rate",
+        "Revenue Growth", "Expense Growth", "GP/LP Split",
+        "Target LP IRR", "Min LP IRR", "Transfer Tax",
+        "Professional & DD", "Construction Hard Costs", "Origination Fee",
+        "Senior Debt", "Total Equity Required", "GP Equity", "LP Equity",
+    ])
+
+    # Remove per-year placeholder boxes ("Year 1" … "Year 13")
+    # — the 10-year summary table at idx=32 holds the consolidated pro forma.
+    _yr_removed = 0
+    for year in range(1, 14):
+        if remove_placeholder_box(doc, f"Year {year}"):
+            _yr_removed += 1
+    if _yr_removed:
+        logger.info("PLACEHOLDER: removed %d 'Year N' per-year placeholder boxes", _yr_removed)
+
     logger.info("TABLE POPULATE: completed all data tables")
+    return _populate_counter[0]
 
 
 def _populate_docx(deal: DealData) -> Path:
@@ -1980,11 +2238,19 @@ def _populate_docx(deal: DealData) -> Path:
                 pass
     _strip_highlight(tpl.docx)
 
-    # Remove sage-green image placeholder boxes that have no image
+    # ── Populate data tables FIRST against original-template indices ──
+    n_tables_before = len(tpl.docx.tables)
+    tables_populated_count = _populate_data_tables(tpl.docx, deal, ctx)
+
+    # Remove sage-green image placeholder boxes AFTER population — otherwise
+    # the removal shifts doc.tables[] indices and the hardcoded _safe_pop(N,)
+    # positions in _populate_data_tables write into the wrong tables.
     _remove_image_placeholder_boxes(tpl.docx)
 
-    # ── Populate data tables after render ─────────────────────────
-    _populate_data_tables(tpl.docx, deal, ctx)
+    n_tables_after = len(tpl.docx.tables)
+    placeholders_removed_count = n_tables_before - n_tables_after
+    logger.info("DOCX COMPLETE: tables_populated=%d, placeholders_removed=%d",
+                tables_populated_count, placeholders_removed_count)
 
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     docx_path = OUTPUTS_DIR / f"{deal.deal_id}_report.docx"
