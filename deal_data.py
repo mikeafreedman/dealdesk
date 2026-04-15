@@ -372,6 +372,167 @@ def _backfill_expenses(assumptions: FinancialAssumptions, extracted: ExtractedDo
             pass
 
 
+def _synthesize_rent_roll(deal: DealData) -> None:
+    """
+    If no rent roll was extracted from documents, synthesize one from:
+    1. Number of units (from form input or extraction)
+    2. Bedroom mix (from form input, or inferred from market comps)
+    3. Market rents (from extracted rent comps, then HUD FMR, then form input)
+
+    This prevents the pipeline from carrying over a prior deal's rent roll
+    or producing a pro forma with $0 GPR.
+
+    Sets: deal.extracted_docs.unit_mix, deal.extracted_docs.total_monthly_rent
+    Logs provenance as "synthesized" so it's visible in the report.
+    """
+    ext = deal.extracted_docs
+
+    # ── Gate: only run if no units were extracted ─────────────────────
+    if ext.unit_mix and len(ext.unit_mix) > 0:
+        logger.info("SYNTH RENT ROLL: unit_mix already populated (%d units) — skipping",
+                    len(ext.unit_mix))
+        return
+
+    num_units = deal.assumptions.num_units or 0
+    if num_units <= 0:
+        logger.warning("SYNTH RENT ROLL: num_units=%d — cannot synthesize", num_units)
+        return
+
+    logger.info("SYNTH RENT ROLL: no extracted rent roll — synthesizing for %d units",
+                num_units)
+
+    # ── Step 1: Determine market rents by bedroom type ────────────────
+    # Priority: extracted rent comps → HUD FMR → form monthly_rent → $1,200 fallback
+
+    md = deal.market_data
+
+    market_rents = {
+        "Studio": None,
+        "1BR": None,
+        "2BR": None,
+        "3BR": None,
+        "4BR+": None,
+    }
+
+    # From extracted rent comps (if any)
+    comps = deal.comps.rent_comps if deal.comps else []
+    for comp in comps:
+        br = (comp.unit_type or "").strip()
+        rent = comp.monthly_rent
+        if rent and br in market_rents and market_rents[br] is None:
+            market_rents[br] = float(rent)
+
+    # Fill missing tiers from HUD FMR data
+    if md.fmr_studio and market_rents["Studio"] is None:
+        market_rents["Studio"] = float(md.fmr_studio)
+    if md.fmr_1br and market_rents["1BR"] is None:
+        market_rents["1BR"] = float(md.fmr_1br)
+    if md.fmr_2br and market_rents["2BR"] is None:
+        market_rents["2BR"] = float(md.fmr_2br)
+    if md.fmr_3br and market_rents["3BR"] is None:
+        market_rents["3BR"] = float(md.fmr_3br)
+
+    # Fill any remaining None values by interpolation from what we have
+    filled = {k: v for k, v in market_rents.items() if v is not None}
+    if not filled:
+        # Last resort: use form-level monthly_rent or $1,200 default
+        base = float(deal.assumptions.monthly_rent or 1200)
+        market_rents = {
+            "Studio": round(base * 0.75),
+            "1BR":    round(base * 0.90),
+            "2BR":    round(base * 1.00),
+            "3BR":    round(base * 1.20),
+            "4BR+":   round(base * 1.40),
+        }
+    else:
+        # Interpolate missing tiers from the ones we have
+        ratios = {"Studio": 0.75, "1BR": 0.90, "2BR": 1.00, "3BR": 1.20, "4BR+": 1.40}
+        pivot_key = next(iter(filled))
+        pivot_val = filled[pivot_key]
+        implied_base = pivot_val / ratios[pivot_key]
+        for br, ratio in ratios.items():
+            if market_rents[br] is None:
+                market_rents[br] = round(implied_base * ratio)
+
+    logger.info("SYNTH RENT ROLL: market rents — %s", market_rents)
+
+    # ── Step 2: Determine unit type distribution ──────────────────────
+    # Use a typical distribution if no comps suggest otherwise.
+    # For multifamily value-add: 1BR dominant, then 2BR, then studio.
+
+    if num_units == 1:
+        distribution = {"2BR": 1.0}
+    elif num_units <= 4:
+        distribution = {"1BR": 0.50, "2BR": 0.50}
+    elif num_units <= 10:
+        distribution = {"Studio": 0.10, "1BR": 0.50, "2BR": 0.40}
+    elif num_units <= 24:
+        distribution = {"Studio": 0.15, "1BR": 0.45, "2BR": 0.35, "3BR": 0.05}
+    else:
+        distribution = {"Studio": 0.10, "1BR": 0.45, "2BR": 0.35, "3BR": 0.08, "4BR+": 0.02}
+
+    # ── Step 3: Build synthetic unit_mix ─────────────────────────────
+    unit_mix = []
+    unit_counts = {}
+    remaining = num_units
+
+    # Allocate units to bedroom types (ensure total = num_units exactly)
+    types = list(distribution.keys())
+    for i, br_type in enumerate(types):
+        if i == len(types) - 1:
+            count = remaining  # last type absorbs remainder
+        else:
+            count = round(num_units * distribution[br_type])
+            count = min(count, remaining)
+        unit_counts[br_type] = count
+        remaining -= count
+        if remaining < 0:
+            remaining = 0
+
+    # Build individual unit records
+    unit_num = 1
+    for br_type, count in unit_counts.items():
+        if count <= 0:
+            continue
+        rent = market_rents.get(br_type, 1200)
+        for _ in range(count):
+            unit_mix.append({
+                "unit_id": f"Unit {unit_num}",
+                "unit_type": br_type,
+                "sf": None,
+                "monthly_rent": rent,
+                "lease_status": "occupied",
+                "lease_start": None,
+                "lease_end": None,
+            })
+            unit_num += 1
+
+    total_monthly = sum(u["monthly_rent"] for u in unit_mix)
+
+    ext.unit_mix = unit_mix
+    ext.total_monthly_rent = total_monthly
+    ext.avg_rent_per_unit = round(total_monthly / num_units) if num_units > 0 else 0
+
+    deal.provenance.field_sources["rent_roll_source"] = (
+        f"synthesized_{num_units}units_from_"
+        + ("comps" if comps else "hud_fmr" if md.fmr_1br else "default")
+    )
+
+    logger.info(
+        "SYNTH RENT ROLL: built %d units, total_monthly=$%s, avg=$%s/unit. Source: %s",
+        len(unit_mix),
+        f"{total_monthly:,.0f}",
+        f"{ext.avg_rent_per_unit:,.0f}",
+        deal.provenance.field_sources["rent_roll_source"],
+    )
+
+    # Warn in the report context that this is synthetic
+    deal.provenance.field_sources["rent_roll_note"] = (
+        "SYNTHETIC: No rent roll provided. Unit mix and rents estimated from "
+        "market comparables and HUD Fair Market Rent data. Verify before closing."
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTIONS & NOTIFICATION CONFIG MERGE
 # ═══════════════════════════════════════════════════════════════════════════
@@ -493,6 +654,7 @@ def assemble_deal(deal: DealData, user_inputs: Dict[str, Any]) -> DealData:
     # ── 6. Financial assumptions ──────────────────────────────────
     _merge_assumptions(deal.assumptions, user_inputs, extracted, provenance)
     _backfill_expenses(deal.assumptions, extracted, provenance)
+    _synthesize_rent_roll(deal)
 
     # ── 7. Investor mode ──────────────────────────────────────────
     deal.investor_mode = bool(user_inputs.get("investor_mode", deal.investor_mode))

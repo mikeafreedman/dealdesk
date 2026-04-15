@@ -38,7 +38,7 @@ from config import (
     MODEL_SONNET,
     MUNICIPAL_REGISTRY_CSV,
 )
-from models.models import DealData, MarketData, ZoningData
+from models.models import DealData, MarketData, ParcelData, ZoningData
 
 logger = logging.getLogger(__name__)
 
@@ -194,19 +194,49 @@ def _lookup_municipal_registry(deal: DealData) -> Optional[pd.Series]:
             logger.info("Municipal registry: matched by fips_county=%s", fips_county)
             return fips_match.iloc[0]
 
-    # Fallback: municipality_name + state (case-insensitive)
+    # Fallback: municipality_name + state — try progressively looser matches
     if city and state:
         city_lower = city.strip().lower()
         state_upper = state.strip().upper()
-        mask = (
-            df["municipality_name"].str.strip().str.lower() == city_lower
-        ) & (
-            df["state"].str.strip().str.upper() == state_upper
-        )
-        name_match = df[mask]
-        if len(name_match) > 0:
-            logger.info("Municipal registry: matched by name=%s, state=%s", city, state)
-            return name_match.iloc[0]
+        state_mask = df["state"].str.strip().str.upper() == state_upper
+        state_df = df[state_mask]
+
+        if len(state_df) == 0:
+            logger.warning("Municipal registry: no entries for state=%s", state)
+        else:
+            names_lower = state_df["municipality_name"].str.strip().str.lower()
+
+            # Match 1: exact
+            m = state_df[names_lower == city_lower]
+            if len(m) == 0:
+                # Match 2: registry name contains city
+                m = state_df[names_lower.str.contains(city_lower, regex=False, na=False)]
+            if len(m) == 0:
+                # Match 3: city contains registry name (e.g. "washington" in "washington, d.c.")
+                m = state_df[names_lower.apply(
+                    lambda n: n.split(",")[0].strip() in city_lower
+                    or city_lower in n.split(",")[0].strip()
+                )]
+            if len(m) == 0:
+                # Match 4: normalize both sides
+                def _norm_city(n):
+                    for strip in ["city of ", "town of ", "village of ",
+                                  "township of ", "borough of "]:
+                        if n.startswith(strip):
+                            n = n[len(strip):]
+                    for strip in [" city", " town", " village", " township",
+                                  " borough", ", d.c.", ", dc"]:
+                        if n.endswith(strip):
+                            n = n[:-len(strip)]
+                    return n.strip()
+                city_norm = _norm_city(city_lower)
+                m = state_df[names_lower.apply(lambda n: _norm_city(n) == city_norm)]
+
+            if len(m) > 0:
+                logger.info(
+                    "Municipal registry: matched '%s' → '%s', %s",
+                    city, m.iloc[0]["municipality_name"], state)
+                return m.iloc[0]
 
     logger.warning("Municipal registry: no match for fips=%s, city=%s, state=%s",
                     fips_county, city, state)
@@ -286,13 +316,13 @@ def _normalize_address_for_geocoding(raw_address: str) -> str:
     '2-8 s. 46th street, 19139' → '2 S 46th Street, Philadelphia, PA 19139'
     """
     addr = raw_address.strip()
-    # Remove range portion: "2-8 S 46th" → "2 S 46th"
+    # Strip hyphenated range portion: "2-8 S 46th" → "2 S 46th" (Census accepts only single street number)
     addr = re.sub(r'^(\d+)\s*[-–]\s*\d+\s+', r'\1 ', addr)
-    # Expand abbreviations: S→South, N→North, E→East, W→West
-    addr = re.sub(r'\bS\.?\s+', 'South ', addr)
-    addr = re.sub(r'\bN\.?\s+', 'North ', addr)
-    addr = re.sub(r'\bE\.?\s+', 'East ', addr)
-    addr = re.sub(r'\bW\.?\s+', 'West ', addr)
+    # Drop the trailing period on directional abbreviations. Census accepts the
+    # abbreviated form ("S", "NE") but rejects the periods ("s.", "ne.").
+    # Two-letter compounds first so "ne." isn't partially replaced.
+    addr = re.sub(r'(?i)\b(ne|nw|se|sw)\.\b', r'\1', addr)
+    addr = re.sub(r'(?i)\b([nsew])\.\b', r'\1', addr)
     # Expand "St" at end → "Street" (but not "St" in a name like "St. Louis")
     addr = re.sub(r'\b[Ss]t\.?$', 'Street', addr)
     addr = re.sub(r'\b[Ss]treet,', 'Street,', addr)
@@ -308,12 +338,19 @@ def _normalize_address_for_geocoding(raw_address: str) -> str:
 
 
 def _geocode_fallback(addr, full_address: str) -> None:
-    """Try Google Maps geocoding; if unavailable use Philadelphia centroid."""
-    import os
+    """
+    Three-tier dynamic geocoding fallback:
+    Tier 1: Google Maps Geocoding API (if key configured)
+    Tier 2: Nominatim / OpenStreetMap (no key required)
+    Tier 3: Census Bureau place centroid lookup via /geocoder/locations/address
+             at the city level (drops street number, just city + state)
+    """
+    import os, urllib.parse
+
+    # ── Tier 1: Google Maps Geocoding API ────────────────────────────
     api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
     if api_key:
         try:
-            import urllib.parse
             encoded = urllib.parse.quote(full_address)
             geo_url = (
                 "https://maps.googleapis.com/maps/api/geocode/json"
@@ -325,20 +362,107 @@ def _geocode_fallback(addr, full_address: str) -> None:
                 loc = results[0]["geometry"]["location"]
                 addr.latitude = loc["lat"]
                 addr.longitude = loc["lng"]
+                # Extract FIPS from Google result if available
+                for comp in results[0].get("address_components", []):
+                    if "administrative_area_level_2" in comp.get("types", []):
+                        pass  # county name only, not FIPS
                 logger.info(
-                    "GEOCODE fallback (Google Maps): lat=%.6f, lon=%.6f for '%s'",
-                    addr.latitude, addr.longitude, full_address)
+                    "GEOCODE T1 (Google): lat=%.6f, lon=%.6f",
+                    addr.latitude, addr.longitude)
                 return
-            else:
-                logger.warning("GEOCODE fallback (Google Maps): no results for '%s'", full_address)
-        except Exception as e:
-            logger.warning("GEOCODE fallback (Google Maps) failed: %s", e)
+            logger.warning("GEOCODE T1 (Google): no results for '%s'", full_address)
+        except Exception as exc:
+            logger.warning("GEOCODE T1 (Google) failed: %s", exc)
+
+    # ── Tier 2: Nominatim / OpenStreetMap (no API key) ───────────────
+    try:
+        nom_url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": full_address,
+            "format": "json",
+            "limit": 1,
+            "countrycodes": "us",
+        }
+        headers = {"User-Agent": "DealDesk-CRE-Underwriting/1.0"}
+        resp = requests.get(nom_url, params=params, headers=headers, timeout=15)
+        results = resp.json()
+        if results:
+            addr.latitude = float(results[0]["lat"])
+            addr.longitude = float(results[0]["lon"])
+            logger.info(
+                "GEOCODE T2 (Nominatim): lat=%.6f, lon=%.6f for '%s'",
+                addr.latitude, addr.longitude, full_address)
+            return
+        logger.warning("GEOCODE T2 (Nominatim): no results for '%s'", full_address)
+    except Exception as exc:
+        logger.warning("GEOCODE T2 (Nominatim) failed: %s", exc)
+
+    # ── Tier 3: Census city-level centroid (drop street, keep city+state) ──
+    city = (addr.city or "").strip()
+    state = (addr.state or "").strip()
+    if city and state:
+        try:
+            city_addr = f"{city}, {state}"
+            resp = requests.get(
+                "https://geocoding.geo.census.gov/geocoder/locations/address",
+                params={
+                    "address": city_addr,
+                    "benchmark": "Public_AR_Current",
+                    "format": "json",
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            matches = resp.json().get("result", {}).get("addressMatches", [])
+            if matches:
+                coords = matches[0].get("coordinates", {})
+                lat = _safe_float(coords.get("y"))
+                lon = _safe_float(coords.get("x"))
+                if lat and lon:
+                    addr.latitude = lat
+                    addr.longitude = lon
+                    logger.info(
+                        "GEOCODE T3 (Census city): lat=%.6f, lon=%.6f for '%s'",
+                        lat, lon, city_addr)
+                    return
+        except Exception as exc:
+            logger.warning("GEOCODE T3 (Census city) failed: %s", exc)
+
+    # ── Absolute last resort — log clearly that coordinates are unknown ──
     if addr.latitude is None or addr.longitude is None:
-        addr.latitude = 39.9526
-        addr.longitude = -75.1652
-        logger.warning(
-            "GEOCODE fallback: Philadelphia centroid used for '%s' — maps will be inaccurate",
+        # Use 0,0 instead of a wrong city — this will cause FEMA/maps to
+        # fail gracefully rather than silently return wrong data
+        addr.latitude = 0.0
+        addr.longitude = 0.0
+        logger.error(
+            "GEOCODE: ALL fallbacks failed for '%s' — coordinates set to 0,0. "
+            "Maps, FEMA, and location analyses will be unavailable.",
             full_address)
+
+
+def _lookup_fips_from_latlon(addr) -> None:
+    """Use FCC Census Block API to get FIPS from lat/lon."""
+    lat = addr.latitude
+    lon = addr.longitude
+    if not lat or not lon or lat == 0.0:
+        return
+    try:
+        resp = requests.get(
+            "https://geo.fcc.gov/api/census/block/find",
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "format": "json",
+            },
+            timeout=10,
+        )
+        data = resp.json()
+        county_fips = data.get("County", {}).get("FIPS", "")
+        if county_fips and len(county_fips) >= 5:
+            addr.fips_code = county_fips[:5]
+            logger.info("FIPS (FCC API): county_fips=%s", addr.fips_code)
+    except Exception as exc:
+        logger.warning("FIPS lookup (FCC API) failed: %s", exc)
 
 
 def _census_geocode(deal: DealData) -> None:
@@ -427,6 +551,10 @@ def _census_geocode(deal: DealData) -> None:
     _check_opportunity_zone(deal)
 
     deal.provenance.field_sources["census_geocoder"] = "census_geocoder_current"
+
+    # Fallback FIPS lookup via FCC if Census didn't populate it
+    if not addr.fips_code and addr.latitude and addr.latitude != 0.0:
+        _lookup_fips_from_latlon(addr)
 
 
 def _load_oz_tracts() -> set:
@@ -774,7 +902,7 @@ def _generate_debt_market_narrative(deal: DealData, data_pull_date: str) -> None
         sofr_rate=_fmt_rate(md.sofr_rate),
         mortgage30_rate=_fmt_rate(md.mortgage30_rate),
         cpi_yoy=_fmt_rate(md.cpi_yoy),
-        loan_type=getattr(assumptions, "loan_type", None) or "Permanent",
+        loan_type=getattr(assumptions, "loan_type", None) or "Acquisition",
         loan_amount=f"{loan_amount:,.0f}",
         loan_rate=f"{assumptions.interest_rate * 100:.2f}",
         rate_type=getattr(assumptions, "rate_type", None) or "fixed",
@@ -797,8 +925,22 @@ def _generate_debt_market_narrative(deal: DealData, data_pull_date: str) -> None
 # STEP 6 — HUD FAIR MARKET RENTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-_HUD_FMR_LIST_COUNTIES = "https://www.huduser.gov/hudapi/public/fmr/listCounties"
 _HUD_FMR_DATA = "https://www.huduser.gov/hudapi/public/fmr/data"
+
+COUNTY_FIPS = {
+    ("Philadelphia", "PA"): "42101",
+    ("Washington",   "DC"): "11001",
+    ("Baltimore",    "MD"): "24510",
+    ("Montgomery",   "MD"): "24031",
+    ("Prince George's", "MD"): "24033",
+    ("New Castle",   "DE"): "10003",
+    ("Burlington",   "NJ"): "34005",
+    ("Camden",       "NJ"): "34007",
+    ("Bucks",        "PA"): "42017",
+    ("Delaware",     "PA"): "42045",
+    ("Montgomery",   "PA"): "42091",
+    ("Chester",      "PA"): "42029",
+}
 
 
 def _get_hud_api_key() -> Optional[str]:
@@ -822,43 +964,23 @@ def _fetch_hud_fmr(deal: DealData) -> None:
 
     fips_county = deal.address.fips_code
     state = deal.address.state
-    if not fips_county and not state:
-        logger.warning("HUD FMR: no FIPS county or state — skipping")
-        return
-
     headers = {"Authorization": f"Bearer {hud_key}"}
 
-    # If we have a FIPS county code, try direct lookup
     entity_id = None
     if fips_county and len(fips_county) >= 5:
-        entity_id = fips_county
+        entity_id = fips_county[:5]
 
-    # If no FIPS county, try listCounties to find it
-    if not entity_id and state:
-        state_fips = STATE_FIPS.get(state.strip().upper())
-        if state_fips:
-            try:
-                resp = requests.get(
-                    f"{_HUD_FMR_LIST_COUNTIES}/{state_fips}",
-                    headers=headers,
-                    timeout=_REQUEST_TIMEOUT,
-                )
-                resp.raise_for_status()
-                counties = resp.json()
-                # Try to match by county name from registry
-                county_name = deal.provenance.field_sources.get("county")
-                if county_name and isinstance(counties, list):
-                    cn_lower = county_name.lower()
-                    for c in counties:
-                        if cn_lower in str(c.get("county_name", "")).lower():
-                            entity_id = c.get("fips_code") or c.get("county_code")
-                            break
-            except Exception as exc:
-                logger.warning("HUD FMR listCounties failed: %s", exc)
+    if not entity_id:
+        county_name = deal.provenance.field_sources.get("county") or deal.address.city
+        if county_name and state:
+            county_key = county_name.strip().replace(" County", "")
+            entity_id = COUNTY_FIPS.get((county_key, state.strip().upper()))
 
     if not entity_id:
         logger.warning("HUD FMR: could not determine county entity — skipping")
         return
+
+    logger.info("HUD FMR: querying entity_id=%s", entity_id)
 
     # Fetch FMR data
     try:
@@ -929,6 +1051,303 @@ def _fetch_fema_flood(deal: DealData) -> None:
         logger.info("FEMA: zone=%s, panel=%s", md.fema_flood_zone, md.fema_panel_number)
     except Exception as exc:
         logger.warning("FEMA NFHL fetch failed (%.4f, %.4f): %s", lat, lon, exc)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 7B — PROPERTY RECORDS (Philadelphia OPA / DC DCGIS)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_PHL_CARTO_SQL = "https://phl.carto.com/api/v2/sql"
+_DC_PROPERTY_URL = (
+    "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/"
+    "Property_and_Land_WebMercator/MapServer/56/query"
+)
+
+
+def _split_street(street: str) -> tuple:
+    """Split '2-8 S 46th Street' → ('2', 'S 46th Street'). First token is number."""
+    s = (street or "").strip()
+    if not s:
+        return ("", "")
+    parts = s.split(None, 1)
+    if len(parts) < 2:
+        return (parts[0], "")
+    number = re.match(r'^(\d+)', parts[0])
+    return (number.group(1) if number else parts[0], parts[1])
+
+
+def _fetch_property_records(deal: DealData) -> None:
+    """Step 7B: Fetch parcel/owner/zoning from city/county property records.
+
+    Source cascade:
+    1. Philadelphia OPA API (Philly only)
+    2. DC DCGIS REST API (DC only)
+    3. County/municipal GIS ArcGIS REST endpoint (from registry gis_parcel_url)
+    4. Census TIGER parcel lookup (last resort — address only, no ownership)
+    """
+    addr = deal.address
+    state = (addr.state or "").strip().upper()
+    city = (addr.city or "").strip()
+
+    if deal.parcel_data is None:
+        deal.parcel_data = ParcelData()
+    pd_obj = deal.parcel_data  # avoid shadowing builtin 'pd'
+
+    # ── SOURCE 1: Philadelphia OPA ────────────────────────────────────
+    if state == "PA" and city.lower() == "philadelphia":
+        _fetch_phl_opa(deal, pd_obj, addr)
+        return
+
+    # ── SOURCE 2: DC DCGIS ───────────────────────────────────────────
+    if state == "DC":
+        _fetch_dc_dcgis(deal, pd_obj, addr)
+        return
+
+    # ── SOURCE 3: County GIS ArcGIS REST endpoint ─────────────────────
+    # Many counties expose their parcel layer at a standard ArcGIS REST URL.
+    # We first check deal.provenance for a gis_parcel_url from the registry.
+    # Format: {base_url}/query?where=ADDR LIKE '%{number}%{street}%'&outFields=*&f=json
+    gis_url = deal.provenance.field_sources.get("gis_parcel_url")
+    if gis_url:
+        _fetch_arcgis_parcel(deal, pd_obj, addr, gis_url)
+        if pd_obj.parcel_id:  # success — stop here
+            return
+
+    # ── SOURCE 4: Nominatim / OSM building footprint lookup ──────────
+    # Last resort: get at minimum the address confirmation from OSM
+    _fetch_osm_parcel(deal, pd_obj, addr)
+
+
+def _fetch_phl_opa(deal: DealData, pd_obj: ParcelData, addr) -> None:
+    """Philadelphia Office of Property Assessment via Carto SQL API."""
+    street_number, street_name = _split_street(addr.street)
+    if not street_number or not street_name:
+        logger.warning("PROPERTY RECORDS (PHL): no street number/name — skipping")
+        return
+    name_token = street_name.split()[0] if street_name else ""
+    like_pattern = f"{street_number}%{name_token}%"
+    query = (
+        "SELECT parcel_number, owner_1, owner_2, building_description, "
+        "category_code_description, total_area, total_livable_area, "
+        "number_of_rooms, number_stories, year_built, market_value, "
+        "sale_date, sale_price, zoning "
+        "FROM opa_properties_public "
+        f"WHERE address LIKE '{like_pattern}' LIMIT 5"
+    )
+    try:
+        resp = requests.get(
+            "https://phl.carto.com/api/v2/sql",
+            params={"q": query}, timeout=_REQUEST_TIMEOUT
+        )
+        resp.raise_for_status()
+        rows = resp.json().get("rows", [])
+    except Exception as exc:
+        logger.warning("PROPERTY RECORDS (PHL) failed: %s", exc)
+        return
+    if not rows:
+        logger.info("PROPERTY RECORDS (PHL): no match for '%s'", like_pattern)
+        return
+    row = rows[0]
+    parcel_number = row.get("parcel_number") or ""
+    owner = " ".join(filter(None, [row.get("owner_1"), row.get("owner_2")])).strip()
+    zoning = row.get("zoning") or ""
+    market_value = _safe_float(row.get("market_value"))
+    pd_obj.parcel_id = parcel_number or pd_obj.parcel_id
+    pd_obj.owner_name = owner or pd_obj.owner_name
+    pd_obj.zoning_code = zoning or pd_obj.zoning_code
+    pd_obj.assessed_value = market_value if market_value is not None else pd_obj.assessed_value
+    pd_obj.last_sale_date = row.get("sale_date") or pd_obj.last_sale_date
+    pd_obj.last_sale_price = _safe_float(row.get("sale_price")) or pd_obj.last_sale_price
+    pd_obj.lot_area_sf = _safe_float(row.get("total_area")) or pd_obj.lot_area_sf
+    pd_obj.building_sf = _safe_float(row.get("total_livable_area")) or pd_obj.building_sf
+    year_built = row.get("year_built")
+    if year_built:
+        try:
+            pd_obj.year_built = int(year_built)
+        except (TypeError, ValueError):
+            pass
+    if zoning and not deal.zoning.zoning_code:
+        deal.zoning.zoning_code = zoning
+    deal.provenance.field_sources["property_records"] = "phl_opa"
+    logger.info(
+        "PROPERTY RECORDS: found parcel %s, owner=%s, zoning=%s, assessed=$%s",
+        parcel_number, owner, zoning,
+        f"{market_value:,.0f}" if market_value is not None else "n/a",
+    )
+
+
+def _fetch_dc_dcgis(deal: DealData, pd_obj: ParcelData, addr) -> None:
+    """DC Office of Tax & Revenue via DCGIS REST API."""
+    street_number, street_name = _split_street(addr.street)
+    parcel_search = f"{street_number}%" if street_number else "%"
+    params = {
+        "where": f"SSL LIKE '{parcel_search}'",
+        "outFields": "*",
+        "f": "json",
+    }
+    dc_url = (
+        "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/"
+        "Property_and_Land_WebMercator/MapServer/56/query"
+    )
+    try:
+        resp = requests.get(dc_url, params=params, timeout=_REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+    except Exception as exc:
+        logger.warning("PROPERTY RECORDS (DC) failed: %s", exc)
+        return
+    if not features:
+        logger.info("PROPERTY RECORDS (DC): no match for '%s'", parcel_search)
+        return
+    attrs = features[0].get("attributes", {}) or {}
+    parcel_number = attrs.get("SSL") or ""
+    owner = attrs.get("OWNERNAME") or ""
+    zoning = attrs.get("ZONING") or ""
+    market_value = _safe_float(attrs.get("ASSESSMENT") or attrs.get("TOTVAL"))
+    pd_obj.parcel_id = parcel_number or pd_obj.parcel_id
+    pd_obj.owner_name = owner or pd_obj.owner_name
+    pd_obj.zoning_code = zoning or pd_obj.zoning_code
+    pd_obj.assessed_value = market_value if market_value is not None else pd_obj.assessed_value
+    if zoning and not deal.zoning.zoning_code:
+        deal.zoning.zoning_code = zoning
+    deal.provenance.field_sources["property_records"] = "dc_dcgis"
+    logger.info(
+        "PROPERTY RECORDS: found parcel %s, owner=%s, zoning=%s, assessed=$%s",
+        parcel_number, owner, zoning,
+        f"{market_value:,.0f}" if market_value is not None else "n/a",
+    )
+
+
+def _fetch_arcgis_parcel(deal: DealData, pd_obj: ParcelData, addr, gis_url: str) -> None:
+    """Generic ArcGIS REST parcel query for any county that has a GIS parcel URL
+    in the municipal registry. Covers hundreds of counties nationwide.
+
+    Most county GIS parcel layers expose fields like:
+    OWNER, ADDRESS, PARCEL_ID, ZONING, ASSESSED_VALUE, SALE_DATE, SALE_PRICE
+    with slight naming variations. We try common field name variants.
+    """
+    street_number, street_name = _split_street(addr.street)
+    if not street_number:
+        logger.warning("PROPERTY RECORDS (ArcGIS): no street number — skipping")
+        return
+
+    # Normalize the GIS URL: strip trailing slashes, ensure /query suffix
+    base = gis_url.rstrip("/")
+    if not base.endswith("/query"):
+        base = base + "/query"
+
+    # Try multiple common address field names used by counties
+    address_fields = ["SITEADDRESS", "SITE_ADDRESS", "ADDRESS", "FULL_ADDRESS",
+                      "PROP_ADDRESS", "LOCATION", "ADDR", "SITUS_ADDRESS"]
+
+    # Build address search term (number + first token of street name)
+    name_token = street_name.split()[0] if street_name else ""
+    search_term = f"{street_number}%{name_token}%"
+
+    for field in address_fields:
+        try:
+            params = {
+                "where": f"UPPER({field}) LIKE UPPER('{search_term}')",
+                "outFields": "*",
+                "returnGeometry": "false",
+                "f": "json",
+            }
+            resp = requests.get(base, params=params, timeout=_REQUEST_TIMEOUT)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            if "error" in data:
+                continue
+            features = data.get("features", [])
+            if not features:
+                continue
+
+            attrs = features[0].get("attributes", {}) or {}
+
+            # Extract fields with fallbacks for common naming variants
+            def _get_field(*names):
+                for n in names:
+                    v = attrs.get(n) or attrs.get(n.upper()) or attrs.get(n.lower())
+                    if v and str(v).strip() not in ("", "None", "null", "0"):
+                        return str(v).strip()
+                return None
+
+            parcel_id = _get_field("PARCEL_ID", "PARCELID", "APN", "PIN",
+                                   "PARCEL_NUM", "OBJECTID")
+            owner = _get_field("OWNER", "OWNERNAME", "OWNER_NAME", "OWNER1",
+                               "TAXPAYER_NAME", "OWNER_FULL")
+            zoning = _get_field("ZONING", "ZONE_CODE", "ZONING_CODE",
+                                "CURRENT_ZONING", "ZONE")
+            assessed_raw = _get_field("ASSESSED_VALUE", "TOTAL_VALUE", "TOTVAL",
+                                      "MARKET_VALUE", "APPR_VALUE", "TOTAL_ASSESSED")
+            sale_date = _get_field("SALE_DATE", "LAST_SALE_DATE", "DEED_DATE",
+                                   "TRANSFER_DATE")
+            sale_price_raw = _get_field("SALE_PRICE", "LAST_SALE_PRICE",
+                                        "TRANSFER_VALUE", "DEED_PRICE")
+            year_built_raw = _get_field("YEAR_BUILT", "YR_BUILT", "BUILT_YEAR",
+                                        "CONSTRUCTION_YEAR")
+
+            assessed = _safe_float(assessed_raw)
+            sale_price = _safe_float(sale_price_raw)
+
+            if parcel_id:
+                pd_obj.parcel_id = parcel_id
+            if owner:
+                pd_obj.owner_name = owner
+            if zoning:
+                pd_obj.zoning_code = zoning
+                if not deal.zoning.zoning_code:
+                    deal.zoning.zoning_code = zoning
+            if assessed is not None:
+                pd_obj.assessed_value = assessed
+            if sale_date:
+                pd_obj.last_sale_date = sale_date
+            if sale_price is not None:
+                pd_obj.last_sale_price = sale_price
+            if year_built_raw:
+                try:
+                    pd_obj.year_built = int(year_built_raw)
+                except (TypeError, ValueError):
+                    pass
+
+            deal.provenance.field_sources["property_records"] = f"arcgis_gis:{gis_url[:60]}"
+            logger.info(
+                "PROPERTY RECORDS (ArcGIS): parcel=%s, owner=%s, zoning=%s, assessed=$%s",
+                parcel_id, owner, zoning,
+                f"{assessed:,.0f}" if assessed else "n/a",
+            )
+            return  # success — stop trying field names
+
+        except Exception as exc:
+            logger.warning("PROPERTY RECORDS (ArcGIS field=%s): %s", field, exc)
+            continue
+
+    logger.info("PROPERTY RECORDS (ArcGIS): no match at %s", gis_url[:80])
+
+
+def _fetch_osm_parcel(deal: DealData, pd_obj: ParcelData, addr) -> None:
+    """Last-resort: query Nominatim for address confirmation + basic info."""
+    lat = addr.latitude
+    lon = addr.longitude
+    if not lat or lat == 0.0:
+        return
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": lat, "lon": lon, "format": "json"},
+            headers={"User-Agent": "DealDesk-CRE/1.0"},
+            timeout=10,
+        )
+        data = resp.json()
+        address_data = data.get("address", {})
+        # OSM doesn't provide ownership/assessed value, but confirms
+        # the address and may give a postcode/suburb
+        suburb = address_data.get("suburb") or address_data.get("neighbourhood")
+        if suburb and not deal.provenance.field_sources.get("neighborhood"):
+            deal.provenance.field_sources["neighborhood"] = suburb
+            logger.info("OSM reverse geocode: neighborhood=%s", suburb)
+    except Exception as exc:
+        logger.warning("OSM reverse geocode failed: %s", exc)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1284,6 +1703,10 @@ def enrich_market_data(deal: DealData) -> DealData:
     # ── STEP 7: FEMA Flood Zone ───────────────────────────────────
     logger.info("Step 7: FEMA Flood Zone...")
     _fetch_fema_flood(deal)
+
+    # ── STEP 7B: Property records (parcel, owner, zoning) ─────────
+    logger.info("Step 7B: Property records...")
+    _fetch_property_records(deal)
 
     # ── STEP 8: EPA Environmental Flags ───────────────────────────
     logger.info("Step 8: EPA environmental flags...")

@@ -395,6 +395,54 @@ _USER_4MASTER = (
     "Generate all narrative sections now. Return ONLY the JSON object."
 )
 
+# Partition 4-MASTER keys into two batches to avoid response truncation.
+_4MASTER_KEYS_PART1 = [
+    "exec_overview_p1", "exec_overview_p2", "exec_overview_p3", "exec_pullquote",
+    "deal_thesis", "opportunity_1", "opportunity_2", "opportunity_3",
+    "prop_desc_p1", "prop_desc_p2", "prop_desc_p3", "prop_desc_p4",
+    "utilities_analysis", "ownership_narrative", "liens_narrative",
+    "location_pullquote", "location_overview_p1", "location_overview_p2",
+    "transportation_analysis", "neighborhood_trend_narrative",
+    "supply_pipeline_narrative", "rent_roll_intro", "rent_comp_narrative",
+    "commercial_comp_narrative", "sale_comp_narrative",
+    "photo_gallery_intro", "maps_intro",
+]
+_4MASTER_KEYS_PART2 = [
+    "financial_pullquote", "sources_uses_narrative", "proforma_narrative",
+    "proforma_pullquote", "sensitivity_narrative", "exit_narrative",
+    "capital_stack_narrative", "capital_structure_pullquote",
+    "debt_comparison_narrative", "waterfall_narrative",
+    "environmental_intro", "phase_esa_narrative", "climate_risk_narrative",
+    "legal_status_narrative", "violations_narrative",
+    "regulatory_approvals_narrative", "due_diligence_overview",
+    "dd_checklist_intro", "timeline_narrative",
+    "recommendation", "recommendation_one_line",
+    "recommendation_narrative_p1", "recommendation_narrative_p2",
+    "recommendation_pullquote",
+    "risk_1", "risk_2", "risk_3",
+    "conclusion_1", "conclusion_2", "conclusion_3", "conclusion_4", "conclusion_5",
+    "bottom_line",
+    "next_step_1", "next_step_2", "next_step_3",
+    "next_step_4", "next_step_5", "next_step_6",
+    "methodology_notes", "fema_flood_narrative", "construction_budget_narrative",
+]
+
+_USER_4MASTER_SUBSET = (
+    "Generate a subset of report narrative sections for the deal below.\n"
+    "Return ONLY a single JSON object containing EXACTLY these keys and no others:\n"
+    "{keys_list}\n\n"
+    "COMPLETE DEAL DATA:\n"
+    "{deal_data_json}\n\n"
+    "Return ONLY the JSON object."
+)
+
+FALLBACK_NARRATIVES = {
+    "executive_summary": "Executive summary pending final data review.",
+    "top_opportunities": "Opportunities analysis in progress.",
+    "key_risks": "Risk analysis in progress.",
+    "next_steps": "Recommended next steps to be finalized at closing.",
+}
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PROMPT 5D — INVESTOR-FACING NARRATIVE REWRITE (Sonnet)
@@ -485,19 +533,34 @@ def _generate_narratives(deal: DealData) -> None:
     validate_and_build_narrative_context(deal)
 
     deal_json = deal.model_dump_json(indent=2)
-    user_msg = _USER_4MASTER.format(deal_data_json=deal_json)
 
-    logger.info("NARRATIVE: calling Sonnet for executive_summary, deal_thesis, top_opportunities, key_risks, next_steps (batched Prompt 4-MASTER)...")
-    result = _call_sonnet(_SYSTEM_4MASTER, user_msg)
+    def _run_part(keys: list, label: str) -> dict:
+        user_msg = _USER_4MASTER_SUBSET.format(
+            keys_list=json.dumps(keys),
+            deal_data_json=deal_json,
+        )
+        logger.info("NARRATIVE: calling Sonnet for %s (%d keys)...", label, len(keys))
+        out = _call_sonnet(_SYSTEM_4MASTER, user_msg, max_tokens=8192)
+        if out is None:
+            logger.warning("Prompt 4-MASTER %s first attempt failed — retrying...", label)
+            out = _call_sonnet(_SYSTEM_4MASTER, user_msg, max_tokens=8192)
+        return out or {}
 
-    if result is None:
-        # Retry once per catalog spec
-        logger.warning("Prompt 4-MASTER first attempt failed — retrying...")
-        result = _call_sonnet(_SYSTEM_4MASTER, user_msg)
+    part1 = _run_part(_4MASTER_KEYS_PART1, "Part 1 (executive/property/location/market)")
+    part2 = _run_part(_4MASTER_KEYS_PART2, "Part 2 (financial/risk/recommendation)")
 
-    if result is None:
+    result: dict = {}
+    result.update(part1)
+    result.update(part2)
+
+    if not result:
         logger.error("Prompt 4-MASTER failed twice — narratives will be empty strings")
         return
+
+    for key, fallback in FALLBACK_NARRATIVES.items():
+        if not result.get(key):
+            result[key] = fallback
+            logger.warning("NARRATIVE FALLBACK: %s — using placeholder", key)
 
     for _k in ("executive_summary", "deal_thesis", "top_opportunities", "key_risks", "next_steps"):
         _v = result.get(_k, "")

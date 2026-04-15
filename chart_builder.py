@@ -398,7 +398,7 @@ def build_capital_stack_chart(deal) -> Optional[bytes]:
 def build_financing_options_chart(deal) -> Optional[bytes]:
     """
     Figure 13.2 — Horizontal bar comparison of financing options.
-    Shows active refi events and the base permanent loan.
+    Shows active refi events and the acquisition loan.
     """
     try:
         import matplotlib.pyplot as plt
@@ -413,7 +413,7 @@ def build_financing_options_chart(deal) -> Optional[bytes]:
         if a.purchase_price > 0:
             loan_amt = a.purchase_price * a.ltv_pct
             options.append({
-                "label": f"Permanent Loan\n{a.ltv_pct:.0%} LTV @ {a.interest_rate:.2%}",
+                "label": f"Acquisition Loan\n{a.ltv_pct:.0%} LTV @ {a.interest_rate:.2%}",
                 "amount": loan_amt,
                 "rate": a.interest_rate,
                 "recommended": not active_refis,

@@ -249,7 +249,8 @@ class UnderwriteRequest(BaseModel):
 
     # Partnership / Waterfall
     a_gp_equity_pct: float = 10.0
-    a_waterfall_type: int = 1
+    a_waterfall_type: int = 0
+    a_waterfall_hurdle_type: str = "irr"
     a_pref_return: float = 8.0
     a_simple_lp: float = 80.0
     a_t1_hurdle: float = 12.0
@@ -268,11 +269,11 @@ class UnderwriteRequest(BaseModel):
     a_em_t3: float = 3.0
 
     # Sensitivity
-    a_sens_rg_low: float = 0.0
-    a_sens_rg_high: float = 5.0
+    a_sens_rg_low: float = 1.0      # rent growth: -2% from base (base=3%, low=1%)
+    a_sens_rg_high: float = 5.0     # rent growth: +2% from base (base=3%, high=5%)
     a_sens_rg_step: float = 1.0
-    a_sens_cap_low: float = 5.5
-    a_sens_cap_high: float = 8.5
+    a_sens_cap_low: float = 5.0     # exit cap: -1% from base (base=6%, low=5%)
+    a_sens_cap_high: float = 7.0    # exit cap: +1% from base (base=6%, high=7%)
     a_sens_cap_step: float = 0.5
 
     # Return thresholds
@@ -290,6 +291,7 @@ class UnderwriteRequest(BaseModel):
     a_commission_renewal_pct:  Optional[float] = None
     a_lease_term_years:        Optional[float] = None
     a_construction_months:     Optional[float] = None
+    a_draw_start_lag:          Optional[float] = None
     a_leaseup_months:          Optional[float] = None
 
     # Rent roll (from frontend form)
@@ -409,7 +411,7 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         legal_zoning=req.a_legal_zoning,
         geotech=req.a_geotech,
         acq_fee_fixed=req.a_acq_fee_fixed,
-        mortgage_carry=req.a_mortgage_carry,
+        mortgage_carry=0.0,   # auto-computed by construction interest S-curve model
         mezz_interest=req.a_mezz_interest,
         working_capital=req.a_working_capital,
         marketing=req.a_marketing,
@@ -435,6 +437,7 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         refi_events=refi_events,
         # Development period — visible assumptions field overrides hidden dev-period card
         const_period_months=int(req.a_construction_months or 0) or req.f_const_period,
+        draw_start_lag=int(req.a_draw_start_lag or 1),
         const_loan_rate=req.f_const_loan_rate,
         leaseup_period_months=int(req.a_leaseup_months or 0) or req.f_leaseup_period,
         leaseup_vacancy_rate=req.f_leaseup_vacancy,

@@ -109,6 +109,10 @@ def populate_excel(deal: DealData) -> Path:
     if "Amort - Initial" in wb.sheetnames:
         _populate_amort_initial_io(wb["Amort - Initial"], deal)
 
+    # ── Constr Interest tab ──────────────────────────────────────
+    if "Constr Interest" in wb.sheetnames:
+        _populate_constr_interest_tab(wb["Constr Interest"], deal)
+
     # ── Exit tab — write exit year NOI and guard Gross Sale Price ──
     if "Exit" in wb.sheetnames:
         ws_exit = wb["Exit"]
@@ -470,7 +474,7 @@ def _build_cell_map(deal: DealData) -> CellMap:
     cells += _section_acquisition(a)
 
     # ── Section 3: Sources & Uses (rows 31–67 uses, 83–87 sources)
-    cells += _section_uses(a)
+    cells += _section_uses(a, fo)
     cells += _section_sources(a, fo)
 
     # ── Section 4: Initial Financing (rows 70–77) ────────────────
@@ -534,12 +538,12 @@ def _section_acquisition(a) -> CellMap:
     ]
 
 
-def _section_uses(a) -> CellMap:
+def _section_uses(a, fo=None) -> CellMap:
     # Log the sum of values Python writes, to compare with financials.py total_uses
     excel_total_uses = (
         a.purchase_price +                              # C17 (acq section)
         a.purchase_price * a.transfer_tax_rate +        # C18→C19 (transfer tax)
-        a.closing_costs_fixed +                         # C20 (permanent loan closing costs)
+        a.closing_costs_fixed +                         # C20 (acquisition loan closing costs)
         a.tenant_buyout +                               # C31
         # Professional
         a.legal_closing + a.title_insurance + a.legal_bank +
@@ -547,7 +551,7 @@ def _section_uses(a) -> CellMap:
         a.structural + a.geotech + a.surveyor + a.civil_eng +
         a.meps + a.legal_zoning +
         # Financing
-        a.acq_fee_fixed + a.mezz_interest +
+        a.acq_fee_fixed +
         # (origination fee is a formula in Excel: C50)
         # Soft
         a.working_capital + a.marketing + a.re_tax_carry +
@@ -575,9 +579,9 @@ def _section_uses(a) -> CellMap:
         ("C45", a.legal_zoning),
         # Financing Costs
         ("C48", a.acq_fee_fixed),
-        ("C49", 0.0),  # mortgage_carry removed
+        ("C49", getattr(fo, 'construction_interest_carry', 0.0) or 0.0),
         # C50 = Mortgage Fees / Origination (formula)
-        ("C51", a.mezz_interest),
+        ("C51", 0.0),  # mezzanine interest — removed from standard model
         # Soft Costs
         ("C54", a.working_capital),
         ("C55", a.marketing),
@@ -598,7 +602,7 @@ def _section_uses(a) -> CellMap:
 def _section_sources(a, fo) -> CellMap:
     cells: CellMap = [
         # C82 = Senior Debt (formula)
-        ("C83", a.mezz_debt),
+        ("C83", 0.0),  # mezzanine debt — removed from standard model
         ("C86", a.tax_credit_equity),
         ("C87", a.grants),
     ]
@@ -677,6 +681,78 @@ def _populate_refi_balances(ws, deal: DealData) -> None:
                         "(overriding original loan amount formula)", cell, f"{bal:,.0f}")
 
 
+def _populate_constr_interest_tab(ws, deal: DealData) -> None:
+    """
+    Populate the 'Constr Interest' sheet with the monthly S-curve draw
+    schedule and summary stats computed by financials.py.
+    """
+    fo = deal.financial_outputs
+    a  = deal.assumptions
+
+    schedule = getattr(fo, 'construction_interest_schedule', []) or []
+    carry    = getattr(fo, 'construction_interest_carry', 0.0) or 0.0
+
+    # ── Summary header block (rows 2–11) ────────────────────────────
+    ws["B2"] = "CONSTRUCTION LOAN INTEREST SCHEDULE"
+    ws["B3"] = "S-curve draw model — interest accrues on drawn balance only"
+
+    ws["B5"] = "Acquisition Loan Amount"
+    ws["C5"] = getattr(fo, 'initial_loan_amount', 0.0) or 0.0
+
+    ws["B6"] = "Construction Period (Months)"
+    ws["C6"] = getattr(a, 'const_period_months', 0) or 0
+
+    ws["B7"] = "Permit / Mobilization Lag (Months)"
+    ws["C7"] = getattr(a, 'draw_start_lag', 1)
+
+    ws["B8"] = "Annual Interest Rate"
+    ws["C8"] = getattr(a, 'interest_rate', 0.0) or 0.0
+
+    hard_total = (getattr(a, 'const_hard', 0.0) or 0.0) + \
+                 (getattr(a, 'const_reserve', 0.0) or 0.0)
+    tpc = getattr(fo, 'total_project_cost', 0.0) or 0.0
+    ws["B9"]  = "Hard Cost Share (% of Total Project Cost)"
+    ws["C9"]  = round(hard_total / tpc, 4) if tpc > 0 else 0.0
+
+    ws["B10"] = "Total Construction Interest Carry"
+    ws["C10"] = carry
+
+    # ── Column headers (row 13) ──────────────────────────────────────
+    HDR_ROW = 13
+    headers = [
+        "Month",
+        "Monthly Draw ($)",
+        "Cumulative Draw %",
+        "Outstanding Balance ($)",
+        "Monthly Interest ($)",
+    ]
+    for col_offset, h in enumerate(headers):
+        ws.cell(row=HDR_ROW, column=2 + col_offset, value=h)
+
+    # ── Data rows ────────────────────────────────────────────────────
+    if not schedule:
+        ws.cell(row=HDR_ROW + 1, column=2,
+                value="No construction period — interest carry = $0")
+    else:
+        for i, entry in enumerate(schedule):
+            r = HDR_ROW + 1 + i
+            ws.cell(row=r, column=2, value=entry.get("month"))
+            ws.cell(row=r, column=3, value=entry.get("monthly_draw"))
+            ws.cell(row=r, column=4, value=entry.get("cumulative_draw_pct"))
+            ws.cell(row=r, column=5, value=entry.get("outstanding_balance"))
+            ws.cell(row=r, column=6, value=entry.get("monthly_interest"))
+
+        # Totals row
+        total_row = HDR_ROW + 1 + len(schedule)
+        ws.cell(row=total_row, column=2, value="TOTAL")
+        ws.cell(row=total_row, column=6, value=carry)
+
+    logger.info(
+        "CONSTR INTEREST TAB: wrote %d schedule rows, total_carry=%s",
+        len(schedule), f"{carry:,.2f}"
+    )
+
+
 def _populate_amort_initial_io(ws, deal: DealData) -> None:
     """Override Amort - Initial tab for IO loans (amort_years == 0).
 
@@ -728,6 +804,18 @@ def _populate_pro_forma_gpr(ws, deal: DealData) -> None:
     cols = "BCDEFGHIJK"  # Year 1–10
     num_years = min(hold_period, 10)
 
+    # ── Stabilization Factor row 4 ──────────────────────────────
+    # Override the template's formula-driven stab factors with the
+    # Python-computed values so Excel matches the financial model exactly.
+    from financials import _get_stabilization_factors
+    stab_factors = _get_stabilization_factors(deal)
+    for n in range(num_years):
+        ws[f"{cols[n]}4"] = round(stab_factors[n], 4)
+    logger.info(
+        "EXCEL Pro Forma: wrote Stabilization Factor row 4 — %s",
+        [f"Y{i+1}={v:.2f}" for i, v in enumerate(stab_factors[:num_years])]
+    )
+
     # ── GPR row 6 ────────────────────────────────────────────────
     gpr_yr1 = fo.gross_potential_rent if fo else None
     if gpr_yr1 and gpr_yr1 > 0:
@@ -740,19 +828,70 @@ def _populate_pro_forma_gpr(ws, deal: DealData) -> None:
             gpr_yr1, rent_growth, num_years,
         )
 
-    # ── Debt Service row 60 ──────────────────────────────────────
     proforma = fo.pro_forma_years if fo else None
-    if proforma:
-        ds_list = []
-        for n in range(num_years):
-            if n < len(proforma):
-                ds = proforma[n].get("debt_service", 0.0)
-            else:
-                ds = 0.0
-            ws[f"{cols[n]}60"] = round(ds, 2)
-            ds_list.append(round(ds, 0))
-        logger.info("PRO FORMA DS: wrote year-specific debt service: %s",
-                    [f"Y{i+1}={v:,.0f}" for i, v in enumerate(ds_list)])
+
+    # ── Debt Service row 60 — formula-driven from Amort sheets ───
+    #
+    # Each Amort sheet has month rows starting at row 9 (Month 1).
+    # Annual DS for Year Y = SUM of column B, rows (Y-1)*12+9 to Y*12+8:
+    #   Year 1 → SUM(B9:B20)
+    #   Year 2 → SUM(B21:B32)
+    #   ...
+    #   Year Y → SUM(B{(Y-1)*12+9}:B{Y*12+8})
+    #
+    # Logic: use the most recently executed refi at or before year Y.
+    # Refi timing cells in Assumptions:
+    #   Refi 1: Active=C95, Timing=C96
+    #   Refi 2: Active=C108, Timing=C109
+    #   Refi 3: Active=C121, Timing=C122
+    #
+    # Formula structure (nested IF, outermost = highest refi):
+    #   =IF(AND(Assumptions!C121=1, Assumptions!C122<=Y),
+    #        SUM('Amort - Refi 3'!B{s}:B{e}),
+    #    IF(AND(Assumptions!C108=1, Assumptions!C109<=Y),
+    #        SUM('Amort - Refi 2'!B{s}:B{e}),
+    #    IF(AND(Assumptions!C95=1, Assumptions!C96<=Y),
+    #        SUM('Amort - Refi 1'!B{s}:B{e}),
+    #        SUM('Amort - Initial'!B{s}:B{e})
+    #    )))
+
+    ds_formulas = []
+    for n in range(num_years):
+        yr = n + 1
+        # Row range in amort sheets for this year
+        r_start = (yr - 1) * 12 + 9   # e.g. Year 1 → 9
+        r_end   = yr * 12 + 8          # e.g. Year 1 → 20
+
+        # Inner-most = Initial loan
+        initial_sum  = f"SUM('Amort - Initial'!B{r_start}:B{r_end})"
+        refi1_sum    = f"SUM('Amort - Refi 1'!B{r_start}:B{r_end})"
+        refi2_sum    = f"SUM('Amort - Refi 2'!B{r_start}:B{r_end})"
+        refi3_sum    = f"SUM('Amort - Refi 3'!B{r_start}:B{r_end})"
+
+        # Build the nested IF from innermost out
+        # Refi 1 check: active (C95=1) AND timing (C96) <= this year
+        f_r1 = (
+            f"IF(AND(Assumptions!$C$95=1,Assumptions!$C$96<={yr}),"
+            f"{refi1_sum},{initial_sum})"
+        )
+        # Refi 2 check: if refi2 active AND timing <= year, use refi2;
+        # otherwise fall through to refi1 check
+        f_r2 = (
+            f"IF(AND(Assumptions!$C$108=1,Assumptions!$C$109<={yr}),"
+            f"{refi2_sum},{f_r1})"
+        )
+        # Refi 3 check: outermost
+        formula = (
+            f"=IF(AND(Assumptions!$C$121=1,Assumptions!$C$122<={yr}),"
+            f"{refi3_sum},{f_r2})"
+        )
+
+        ws[f"{cols[n]}60"] = formula
+        ds_formulas.append(f"Y{yr}=formula")
+
+    logger.info("PRO FORMA DS: wrote formula-driven debt service row 60 "
+                "(IF cascade: Refi3→Refi2→Refi1→Initial, SUM of monthly "
+                "payment rows from each Amort sheet) for %d years", num_years)
 
     # ── Commissions row 53 — year-specific from lease events ──────
     lease_events = fo.lease_events or {}
@@ -933,6 +1072,7 @@ def _section_dev_period(a) -> CellMap:
         ("C172", a.const_period_months),
         ("C173", a.const_loan_rate),
         ("C174", a.const_hard),
+        # draw_start_lag exposed on the 'Constr Interest' tab (no row in template)
         # C175 = Construction Budget Soft Costs (no single model field)
         # C176 = Total Construction Budget (formula)
         # C177 = Monthly Draw Rate (no model field)

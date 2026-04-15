@@ -351,11 +351,11 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
     <div class="sb-item active" onclick="showScreen('new')">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>New Underwrite
     </div>
-    <div class="sb-item" onclick="showScreen('archive')">
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>Deal Archive
-    </div>
     <div class="sb-item" onclick="showScreen('assumptions')">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Assumptions
+    </div>
+    <div class="sb-item" onclick="showScreen('archive')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>Deal Archive
     </div>
   </nav>
   <div class="sb-footer">DealDesk v3.0 &nbsp;·&nbsp; <span>Claude Sonnet</span></div>
@@ -759,6 +759,10 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
             <div class="field"><label>Const. Period (Mo)</label><input class="fi" type="text" id="a_construction_months" value="0" oninput="markChanged()"><span class="field-note">0 = no construction period</span></div>
           </div>
           <div class="assum-row">
+            <div><div class="assum-row-label">Permit / Mobilization Lag (Months)</div><div class="assum-row-desc">Months after closing before the first construction draw is made. Accounts for permitting, GC mobilization, and lender draw setup. Default = 1.</div></div>
+            <div class="field"><label>Draw Lag (Mo)</label><input class="fi" type="text" id="a_draw_start_lag" value="1" oninput="markChanged()"><span class="field-note">Default = 1. Set to 0 for immediate draws.</span></div>
+          </div>
+          <div class="assum-row">
             <div><div class="assum-row-label">Lease-Up Period (Months)</div><div class="assum-row-desc">Months from CO/delivery to stabilized occupancy. Drives pre-stabilization vacancy.</div></div>
             <div class="field"><label>Lease-Up (Mo)</label><input class="fi" type="text" id="a_leaseup_months" value="0" oninput="markChanged()"><span class="field-note">Value-add: typically 6&ndash;18 mo</span></div>
           </div>
@@ -831,14 +835,14 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
            ═══════════════════════════════════════════════════════════ -->
       <div class="assum-section-label">7 &mdash; Initial Financing</div>
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Permanent Loan Parameters</div><div class="assum-card-sub">Loan sizing, terms, and origination fee for the initial permanent loan</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">Acquisition Loan Parameters</div><div class="assum-card-sub">Loan sizing, terms, and origination fee for the acquisition loan</div></div>
         <div class="assum-card-body">
           <div class="assum-row">
-            <div><div class="assum-row-label">Loan-to-Value (LTV)</div><div class="assum-row-desc">LTV ratio for the permanent loan. The model uses the lower of this LTV or the DSCR-constrained maximum.</div></div>
+            <div><div class="assum-row-label">Loan-to-Value (LTV)</div><div class="assum-row-desc">LTV ratio for the acquisition loan. The model uses the lower of this LTV or the DSCR-constrained maximum.</div></div>
             <div class="field"><label>LTV (%)</label><input class="fi" type="text" id="a_ltv_pct" value="70.00" oninput="markChanged()"><span class="field-note">Agency range: 65–75%</span></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Interest Rate</div><div class="assum-row-desc">Annual interest rate on the permanent loan. Used to calculate monthly debt service and DSCR.</div></div>
+            <div><div class="assum-row-label">Interest Rate</div><div class="assum-row-desc">Annual interest rate on the acquisition loan. Used to calculate monthly debt service and DSCR.</div></div>
             <div class="field"><label>Rate (%)</label><input class="fi" type="text" id="a_interest_rate" value="6.50" oninput="markChanged()"><span class="field-note">Adjust to current market conditions</span></div>
           </div>
           <div class="assum-row">
@@ -846,7 +850,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
             <div class="field"><label>Amort. (Years)</label><input class="fi" type="text" id="a_amort_years" value="30" oninput="markChanged()"><span class="field-note">Most commercial loans: 25–30 yrs</span></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Loan Term</div><div class="assum-row-desc">Balloon / maturity term of the permanent loan in years.</div></div>
+            <div><div class="assum-row-label">Loan Term</div><div class="assum-row-desc">Balloon / maturity term of the acquisition loan in years.</div></div>
             <div class="field"><label>Term (Years)</label><input class="fi" type="text" id="a_loan_term" value="10" oninput="markChanged()"><span class="field-note">Typical: 5, 7, or 10-year term</span></div>
           </div>
           <div class="assum-row">
@@ -859,7 +863,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
             <div class="field"><label>Origination Fee ($) <span style="font-size:11px;color:#7A9E7E;">(computed)</span></label><input class="fi" type="text" id="a_mortgage_fees_computed" readonly style="background:#f0ede8;color:#5C3D26;font-style:italic;" placeholder="Auto-calculated"><span class="field-note">Loan amount × origination fee %</span></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Closing Costs</div><div class="assum-row-desc">Lump-sum closing costs for the permanent loan (lender legal, title, recording, etc.). Applied as a financing cost in Sources &amp; Uses.</div></div>
+            <div><div class="assum-row-label">Closing Costs</div><div class="assum-row-desc">Lump-sum closing costs for the acquisition loan (lender legal, title, recording, etc.). Applied as a financing cost in Sources &amp; Uses.</div></div>
             <div class="field"><label>Closing Costs ($)</label><input class="fi" type="number" id="a_closing_costs_fixed" value="0" min="0" step="100" oninput="markChanged()"><span class="field-note">Enter dollar amount — added directly to Uses</span></div>
           </div>
         </div>
@@ -871,7 +875,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       <div class="assum-section-label">8 &mdash; Refinance Event 1</div>
       <div class="assum-card">
         <div class="assum-card-head" style="display:flex;align-items:center;justify-content:space-between">
-          <div><div class="assum-card-title">Refinance 1</div><div class="assum-card-sub">Cash-out refinance replacing the initial permanent loan</div></div>
+          <div><div class="assum-card-title">Refinance 1</div><div class="assum-card-sub">Cash-out refinance replacing the acquisition loan</div></div>
           <div style="display:flex;align-items:center;gap:8px">
             <label class="toggle"><input type="checkbox" id="a_refi1_on" checked onchange="toggleRefiEvent(1);markChanged()"><span class="toggle-slider"></span></label>
             <div class="refi-on-lbl" id="refi1_lbl" style="color:var(--green)">On</div>
@@ -1003,12 +1007,22 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       </div>
 
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">LP / GP Promote Tiers &mdash; Full Waterfall</div><div class="assum-card-sub">IRR or EM hurdle per tier and LP/GP distribution splits &mdash; up to 5 tiers above preferred return</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">LP / GP Promote Tiers &mdash; Full Waterfall</div><div class="assum-card-sub">Select hurdle type for the entire waterfall, then set LP/GP distribution splits for each tier</div></div>
         <div class="assum-card-body">
+          <div class="assum-row">
+            <div><div class="assum-row-label">Waterfall Hurdle Type</div><div class="assum-row-desc">Applies to all tiers. IRR-based uses annualized return hurdles; EM-based uses equity multiple hurdles.</div></div>
+            <div class="field">
+              <label>Hurdle Type</label>
+              <select class="fi" id="a_waterfall_hurdle_type" onchange="applyWaterfallHurdleType()" oninput="markChanged()">
+                <option value="irr" selected>IRR-Based (% return)</option>
+                <option value="em">EM-Based (equity multiple)</option>
+              </select>
+            </div>
+          </div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">Distributions cascade from Tier 1 (pref return) through Tier 5 (residual).</div>
           <!-- Hidden: waterfall type & simple split kept for payload -->
           <div style="display:none">
-            <select id="a_waterfall_type"><option value="1" selected>Full</option><option value="0">Simple</option></select>
+            <select id="a_waterfall_type"><option value="1">Full (Tiered)</option><option value="0" selected>Simple Split</option></select>
             <input type="text" id="a_simple_lp" value="80">
           </div>
           <div style="display:grid;grid-template-columns:60px 130px 1fr 1fr 1fr;gap:10px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--rule)">
@@ -1080,14 +1094,14 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         <div class="assum-card-body">
           <div class="assum-row-label" style="margin-bottom:10px;font-weight:600">Rent Growth (%)</div>
           <div class="fg3" style="margin-bottom:14px">
-            <div class="field"><label>Low (%)</label><input class="fi" type="text" id="a_sens_rg_low" value="0.00" oninput="markChanged()"></div>
+            <div class="field"><label>Low (%)</label><input class="fi" type="text" id="a_sens_rg_low" value="1.00" oninput="markChanged()"></div>
             <div class="field"><label>High (%)</label><input class="fi" type="text" id="a_sens_rg_high" value="5.00" oninput="markChanged()"></div>
             <div class="field"><label>Step (%)</label><input class="fi" type="text" id="a_sens_rg_step" value="1.00" oninput="markChanged()"></div>
           </div>
           <div class="assum-row-label" style="margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Exit Cap Rate (%)</div>
           <div class="fg3">
-            <div class="field"><label>Low (%)</label><input class="fi" type="text" id="a_sens_cap_low" value="5.50" oninput="markChanged()"></div>
-            <div class="field"><label>High (%)</label><input class="fi" type="text" id="a_sens_cap_high" value="8.50" oninput="markChanged()"></div>
+            <div class="field"><label>Low (%)</label><input class="fi" type="text" id="a_sens_cap_low" value="5.00" oninput="markChanged()"></div>
+            <div class="field"><label>High (%)</label><input class="fi" type="text" id="a_sens_cap_high" value="7.00" oninput="markChanged()"></div>
             <div class="field"><label>Step (%)</label><input class="fi" type="text" id="a_sens_cap_step" value="0.50" oninput="markChanged()"></div>
           </div>
         </div>
@@ -1120,7 +1134,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
           <div style="font-size:11.5px;color:var(--muted);margin-bottom:16px;line-height:1.5">
             Sections toggled <strong>on</strong> are included in every report by default. Sections toggled <strong>off</strong> are excluded unless re-enabled per deal.
           </div>
-          <div id="section-toggles"></div>
+          <!-- Section toggles removed — full report always generated -->
         </div>
       </div>
 
@@ -1128,7 +1142,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
       <div class="assum-section-label">Notifications</div>
 
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">Deal Completion Alerts</div><div class="assum-card-sub">Configure email and Slack notifications sent when each underwriting run completes</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">Deal Completion Alerts</div><div class="assum-card-sub">Configure email notifications sent when each underwriting run completes</div></div>
         <div class="assum-card-body">
           <div class="assum-row">
             <div><div class="assum-row-label">Email Notifications</div><div class="assum-row-desc">Send a summary email when a run completes. Configure SMTP in secrets.toml.</div></div>
@@ -1146,24 +1160,6 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
               <label>Recipients</label>
               <input class="fi" type="text" id="a_notify_email_recipients" placeholder="analyst@firm.com, partner@firm.com" oninput="markChanged()">
               <span class="field-note">Comma-separated. Leave blank to disable.</span>
-            </div>
-          </div>
-          <div class="assum-row" style="border-top:1px solid var(--rule);padding-top:14px;margin-top:4px">
-            <div><div class="assum-row-label">Slack Notifications</div><div class="assum-row-desc">Incoming Webhook alert to a Slack channel.</div></div>
-            <div class="field">
-              <label>Enable Slack Alerts</label>
-              <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
-                <label class="toggle"><input type="checkbox" id="a_notify_slack_enabled" oninput="markChanged()"><span class="toggle-slider"></span></label>
-                <span id="lbl_notify_slack" style="font-size:11px;color:var(--muted)">Off</span>
-              </div>
-            </div>
-          </div>
-          <div class="assum-row">
-            <div><div class="assum-row-label">Slack Webhook URL</div></div>
-            <div class="field">
-              <label>Webhook URL</label>
-              <input class="fi" type="text" id="a_notify_slack_webhook" placeholder="https://hooks.slack.com/services/..." oninput="markChanged()">
-              <span class="field-note">Configure in secrets.toml for security.</span>
             </div>
           </div>
         </div>
@@ -1210,31 +1206,8 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
 </div>
 
 <script>
-// REPORT SECTIONS CONFIG
-const REPORT_SECTIONS = [
-  {id:'s01',num:'01',label:'Executive Summary',                        desc:'High-level deal overview, KPI dashboard, deal thesis, and top opportunities.',                                on:true,  locked:false},
-  {id:'s02',num:'02',label:'Property Photo Gallery & Visual Documentation', desc:'Hero shot, property photo grid (exterior, interior, retail, aerial), and floor plans.',                 on:true,  locked:false},
-  {id:'s03',num:'03',label:'Maps & Geographic Context',                desc:'Aerial location map, neighborhood context map, and FEMA flood zone map.',                                   on:true,  locked:false},
-  {id:'s04',num:'04',label:'Property Description',                     desc:'Physical description, parcel & improvement data, census tract, utilities & infrastructure.',                on:true,  locked:false},
-  {id:'s05',num:'05',label:'Ownership & Title History',                desc:'Ownership chain, deed transfer history, and title flag summary.',                                           on:true,  locked:false},
-  {id:'s06',num:'06',label:'Zoning & Land Use Analysis',               desc:'Zoning classification, permitted uses, density standards, overlays, and variance analysis.',                on:true,  locked:false},
-  {id:'s07',num:'07',label:'Location & Market Overview',               desc:'Neighborhood overview, transportation & access, demographics, employment, and walkability.',                on:true,  locked:false},
-  {id:'s08',num:'08',label:'Neighborhood Trend Analysis',              desc:'Population, income, and employment trend charts; demographic shift analysis.',                              on:true,  locked:false},
-  {id:'s09',num:'09',label:'Market Supply & Pipeline Analysis',        desc:'Competing supply pipeline, submarket absorption trends, and vacancy forecast.',                             on:true,  locked:false},
-  {id:'s10',num:'10',label:'Unit Mix & Rent Roll Detail',              desc:'Unit mix summary, rent roll by unit, lease expiration schedule, and current occupancy.',                    on:true,  locked:false},
-  {id:'s11',num:'11',label:'Comparable Market Analysis',               desc:'Residential rent comps, sale comps, and submarket cap rate analysis with narrative.',                       on:true,  locked:false},
-  {id:'s12',num:'12',label:'Financial Analysis',                       desc:'Full pro forma, NOI build, cash flow waterfall, IRR/EM sensitivity, and sources & uses.',                   on:true,  locked:false},
-  {id:'s13',num:'13',label:'Debt & Capital Structure',                 desc:'Loan sizing, debt service schedule, DSCR analysis, and capital stack summary.',                            on:true,  locked:false},
-  {id:'s14',num:'14',label:'Environmental & Climate Risk Assessment',  desc:'Environmental screening, flood risk, First Street climate scores, and Phase I/II findings.',                on:true,  locked:false},
-  {id:'s15',num:'15',label:'Legal & Title Status',                     desc:'Title search summary, liens & encumbrances, easements, and pending litigation.',                            on:true,  locked:false},
-  {id:'s16',num:'16',label:'Due Diligence Flags & Risk Assessment',    desc:'Red/amber/green DD flag matrix, risk narrative, and remediation recommendations.',                          on:true,  locked:false},
-  {id:'s17',num:'17',label:'Due Diligence Checklist & Status Tracker', desc:'Physical, legal, financial, and environmental DD checklist with completion status tracker.',                 on:true,  locked:false},
-  {id:'s18',num:'18',label:'Project Timeline & Milestone Schedule',    desc:'Phase-by-phase milestone schedule from acquisition through stabilization and disposition.',                  on:true,  locked:false},
-  {id:'s19',num:'19',label:'Investment Recommendation',                desc:'Final AI-generated recommendation, offer guidance, scenario comparison, and decision rationale.',            on:true,  locked:false},
-  {id:'s20',num:'20',label:'Conclusions & Next Steps',                 desc:'Summary conclusions and prioritized next steps for proceeding.',                                             on:true,  locked:false},
-  {id:'s21',num:'21',label:'Disclaimer & Certification',               desc:'Legal disclaimer, confidentiality notice, and preparer certification. Always included.',                    on:true,  locked:true},
-  {id:'s22',num:'22',label:'Appendix A: Data Sources & Methodology',   desc:'Data source table, methodology notes, and provenance for all data elements. Always included.',             on:true,  locked:true},
-];
+// REPORT SECTIONS CONFIG — removed; full report always generated
+const REPORT_SECTIONS = [];
 
 const DEFAULTS = {
   // §1 Property Information
@@ -1278,11 +1251,11 @@ const DEFAULTS = {
   // §11B Leasing costs
   a_ti_new_psf:'0', a_ti_renewal_psf:'0', a_commission_new_pct:'5.0', a_commission_renewal_pct:'2.5',
   a_renewal_probability_default:'70', a_lease_term_years:'5',
-  a_construction_months:'0', a_leaseup_months:'0',
+  a_construction_months:'0', a_draw_start_lag:'1', a_leaseup_months:'0',
   // §12 Exit
   a_exit_cap_rate:'7.00', a_disp_fee:'2.00',
   // §13 Waterfall / Partnership
-  a_gp_equity_pct:'10', a_lp_equity_pct:'90', a_waterfall_type:'1',
+  a_gp_equity_pct:'10', a_lp_equity_pct:'90', a_waterfall_type:'0', a_waterfall_hurdle_type:'irr',
   a_pref_return:'8.00', a_simple_lp:'80',
   a_t1_hurdle:'12', a_t1_lp:'70', a_t1_gp:'30',
   a_t2_hurdle:'15', a_t2_lp:'60', a_t2_gp:'40',
@@ -1292,15 +1265,14 @@ const DEFAULTS = {
   // §14 EM hurdles
   a_em_t1:'2.0', a_em_t2:'2.5', a_em_t3:'3.0',
   // §15 Sensitivity
-  a_sens_rg_low:'0.00', a_sens_rg_high:'5.00', a_sens_rg_step:'1.00',
-  a_sens_cap_low:'5.50', a_sens_cap_high:'8.50', a_sens_cap_step:'0.50',
+  a_sens_rg_low:'1.0', a_sens_rg_high:'5.0', a_sens_rg_step:'1.0',
+  a_sens_cap_low:'5.0', a_sens_cap_high:'7.0', a_sens_cap_step:'0.5',
   // Return thresholds
   a_min_em:'1.80', a_min_irr:'12.00', a_min_coc:'7.00', a_min_dscr:'1.25', a_min_cap:'5.50',
   // Target IRR (used in modal)
   a_target_irr:'15.00',
   // §16 Notifications
   a_notify_email_enabled: false, a_notify_email_recipients:'',
-  a_notify_slack_enabled: false, a_notify_slack_webhook:'',
 };
 
 // ── DEAL-SPECIFIC FIELD DEFAULTS (New Underwrite screen — not persisted to Assumptions) ──
@@ -1451,6 +1423,24 @@ function resetAssumptions() {
 }
 
 // ── HURDLE TYPE TOGGLE ───────────────────────────────────────────────────
+
+function applyWaterfallHurdleType() {
+  const type = document.getElementById('a_waterfall_hurdle_type').value;
+  for (let n = 1; n <= 5; n++) {
+    const ht = document.getElementById('ht' + n);
+    if (!ht) continue;
+    const btns = ht.querySelectorAll('.ht-btn');
+    btns.forEach(btn => {
+      btn.classList.remove('active');
+      if ((type === 'irr' && btn.textContent.trim() === 'IRR %') ||
+          (type === 'em'  && btn.textContent.trim() === 'EM ×')) {
+        btn.classList.add('active');
+      }
+    });
+    const hu = document.getElementById('hu' + n);
+    if (hu) hu.textContent = type === 'irr' ? '% IRR' : '× EM';
+  }
+}
 
 function setHurdleType(tier, type, btn) {
   const btns = document.querySelectorAll('#ht'+tier+' .ht-btn');
@@ -1813,7 +1803,7 @@ async function submitRun() {
       a_legal_zoning:         _num('a_legal_zoning'),
       a_geotech:              _num('a_geotech'),
       a_acq_fee_fixed:        _num('a_acq_fee_fixed'),
-      a_mortgage_carry:       _num('a_mortgage_carry'),
+      a_mortgage_carry:       0,   // auto-computed by S-curve construction interest model
       a_mezz_interest:        _num('a_mezz_interest'),
       a_working_capital:      _num('a_working_capital'),
       a_marketing:            _num('a_marketing'),
@@ -1902,11 +1892,13 @@ async function submitRun() {
       a_commission_renewal_pct: _num('a_commission_renewal_pct') || null,
       a_lease_term_years:     _num('a_lease_term_years'),
       a_construction_months:  _num('a_construction_months'),
+      a_draw_start_lag:       _num('a_draw_start_lag'),
       a_leaseup_months:       _num('a_leaseup_months'),
       a_exit_cap_rate:        _num('a_exit_cap_rate'),
       a_disp_fee:             _num('a_disp_fee'),
       a_gp_equity_pct:        _num('a_gp_equity_pct'),
       a_waterfall_type:       _num('a_waterfall_type'),
+      a_waterfall_hurdle_type: document.getElementById('a_waterfall_hurdle_type')?.value || 'irr',
       a_pref_return:          _num('a_pref_return'),
       a_simple_lp:            _num('a_simple_lp'),
       a_t1_hurdle:            _num('a_t1_hurdle'),

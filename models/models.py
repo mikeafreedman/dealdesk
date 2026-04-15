@@ -265,6 +265,7 @@ class FinancialAssumptions(BaseModel):
 
     # §11A Development Period & Carry Costs (value_add strategy)
     const_period_months:     int   = 0
+    draw_start_lag: int = 1   # months after closing before first construction draw begins
     const_loan_rate:         float = 0.08
     leaseup_period_months:   int   = 0
     leaseup_vacancy_rate:    float = 0.25
@@ -401,6 +402,9 @@ class FinancialOutputs(BaseModel):
     initial_loan_amount:     Optional[float] = None
     gp_equity:               Optional[float] = None
     lp_equity:               Optional[float] = None
+    construction_interest_carry: float = 0.0
+    construction_interest_schedule: List[dict] = []
+    total_project_cost:      float = 0.0
     gross_potential_rent:    Optional[float] = None
     effective_gross_income:  Optional[float] = None
     total_operating_expenses: Optional[float]= None

@@ -103,6 +103,130 @@ def _year_debt_service(principal: float, annual_rate: float,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# §1b  CONSTRUCTION LOAN INTEREST (S-CURVE DRAW MODEL)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _compute_construction_interest(
+    initial_loan: float,
+    annual_rate: float,
+    construction_months: int,
+    draw_start_lag: int,
+    total_project_cost: float,
+    const_hard: float,
+    const_reserve: float,
+) -> Tuple[float, List[dict]]:
+    """
+    Compute total construction-period interest carry using an S-curve
+    (logistic) draw model.
+
+    The loan is split into two portions:
+      - Acquisition portion: drawn in full on Month 1 (day of closing).
+      - Construction holdback: drawn over construction_months via a
+        logistic S-curve, starting after draw_start_lag months.
+
+    The holdback share is driven by hard cost % of total project cost:
+      - Light reno (hard costs = 5% of TPC) → holdback ≈ 5% of loan
+        → nearly flat interest line from day 1.
+      - Heavy rehab (hard costs = 50% of TPC) → holdback ≈ 50% of loan
+        → true S-curve, interest builds gradually over construction.
+
+    Returns:
+        (total_interest_carry: float, monthly_schedule: List[dict])
+
+    monthly_schedule entries have keys:
+        month, monthly_draw, cumulative_draw_pct,
+        outstanding_balance, monthly_interest
+    """
+    if construction_months <= 0 or initial_loan <= 0:
+        logger.info("CONSTR INTEREST: skipped (construction_months=%d, loan=%s)",
+                    construction_months, f"{initial_loan:,.0f}")
+        return 0.0, []
+
+    # Hard cost share — fraction of loan held back as construction draws
+    hard_total = const_hard + const_reserve
+    if total_project_cost > 0:
+        hard_cost_share = min(0.85, max(0.0, hard_total / total_project_cost))
+    else:
+        hard_cost_share = 0.0
+
+    acq_portion    = initial_loan * (1.0 - hard_cost_share)   # drawn Month 1
+    constr_holdback = initial_loan * hard_cost_share            # drawn via S-curve
+
+    monthly_rate = annual_rate / 12.0
+    lag          = max(0, int(draw_start_lag))
+    N            = int(construction_months)
+
+    # Logistic (sigmoid) S-curve: f(t) = 1 / (1 + exp(-k*(t - mid)))
+    # k = 6/N gives ~5% drawn at t=0 and ~95% drawn at t=N (self-scaling).
+    k   = 6.0 / N if N > 0 else 6.0
+    mid = N / 2.0
+
+    def _logistic(t: float) -> float:
+        try:
+            return 1.0 / (1.0 + math.exp(-k * (t - mid)))
+        except OverflowError:
+            return 0.0 if t < mid else 1.0
+
+    # Build normalised incremental draw percentages for each construction month
+    span = _logistic(N) - _logistic(0)
+    if span <= 0:
+        span = 1.0
+    increments = [
+        (_logistic(i + 1) - _logistic(i)) / span
+        for i in range(N)
+    ]
+
+    # Build monthly schedule across (lag + N) total months
+    total_months       = lag + N
+    outstanding        = 0.0
+    constr_drawn       = 0.0
+    total_interest     = 0.0
+    constr_month_idx   = 0
+    schedule: List[dict] = []
+
+    for m in range(1, total_months + 1):
+        # Month 1: full acquisition portion drawn at closing
+        day1_draw = acq_portion if m == 1 else 0.0
+
+        # Construction draws begin after the lag period
+        if m > lag and constr_month_idx < N:
+            constr_draw = constr_holdback * increments[constr_month_idx]
+            constr_month_idx += 1
+        else:
+            constr_draw = 0.0
+
+        monthly_draw  = day1_draw + constr_draw
+        outstanding  += monthly_draw
+        constr_drawn += constr_draw
+
+        monthly_interest  = outstanding * monthly_rate
+        total_interest   += monthly_interest
+
+        cum_pct = ((acq_portion + constr_drawn) / initial_loan * 100.0
+                   if initial_loan > 0 else 0.0)
+
+        schedule.append({
+            "month":               m,
+            "monthly_draw":        round(monthly_draw, 2),
+            "cumulative_draw_pct": round(cum_pct, 2),
+            "outstanding_balance": round(outstanding, 2),
+            "monthly_interest":    round(monthly_interest, 2),
+        })
+
+    logger.info(
+        "CONSTR INTEREST: loan=%s, hard_cost_share=%.1f%%, "
+        "acq_portion=%s, holdback=%s, months=%d, lag=%d → total_carry=%s",
+        f"{initial_loan:,.0f}",
+        hard_cost_share * 100,
+        f"{acq_portion:,.0f}",
+        f"{constr_holdback:,.0f}",
+        N, lag,
+        f"{total_interest:,.2f}",
+    )
+    return round(total_interest, 2), schedule
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # §2  SOURCES & USES
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -133,7 +257,23 @@ def _compute_sources_uses(deal: DealData) -> dict:
         a.origination_fee_pct * 100, initial_loan, origination_fee
     )
 
-    total_uses = total_project_cost + origination_fee
+    # ── Construction loan interest carry (S-curve draw model) ──────
+    # Applies to stabilized and value_add only. For-sale uses its own
+    # flat monthly carry model and is left untouched.
+    if not is_sale:
+        constr_interest, _constr_schedule = _compute_construction_interest(
+            initial_loan=initial_loan,
+            annual_rate=a.interest_rate,
+            construction_months=getattr(a, 'const_period_months', 0) or 0,
+            draw_start_lag=getattr(a, 'draw_start_lag', 1),
+            total_project_cost=total_project_cost,
+            const_hard=getattr(a, 'const_hard', 0.0),
+            const_reserve=getattr(a, 'const_reserve', 0.0),
+        )
+    else:
+        constr_interest, _constr_schedule = 0.0, []
+
+    total_uses = total_project_cost + origination_fee + constr_interest
 
     logger.info("TPC: total_project_cost=%s (incl closing_costs_fixed=%s)",
                 f"{total_project_cost:,.2f}", f"{a.closing_costs_fixed:,.2f}")
@@ -172,12 +312,15 @@ def _compute_sources_uses(deal: DealData) -> dict:
                 f"{total_sources - total_uses:,.0f}")
 
     return {
-        "total_uses": total_uses,
-        "total_sources": total_sources,
-        "initial_loan": initial_loan,
-        "total_equity_required": total_equity,
-        "lp_equity": lp_equity,
-        "gp_equity": gp_equity,
+        "total_uses":                  total_uses,
+        "total_sources":               total_sources,
+        "initial_loan":                initial_loan,
+        "total_equity_required":        total_equity,
+        "lp_equity":                   lp_equity,
+        "gp_equity":                   gp_equity,
+        "construction_interest_carry": constr_interest,
+        "construction_interest_schedule": _constr_schedule,
+        "total_project_cost":          total_project_cost,
     }
 
 
@@ -478,49 +621,88 @@ def _compute_lease_events(deal) -> dict:
 
 def _get_stabilization_factors(deal_data: DealData) -> list[float]:
     """
-    Returns a 10-element list of stabilization factors (Year 1 through Year 10).
+    Returns a list of stabilization factors, one per hold year (up to 10).
 
-    For STABILIZED_HOLD or VALUE_ADD deals with existing occupancy >= 90%:
-        All years = 1.0 (property is already generating income)
+    Logic is driven entirely by user inputs — no hardcoded ramps:
 
-    For VALUE_ADD or OPPORTUNISTIC deals with low/zero occupancy:
-        Year 1 = 0.0 (construction/lease-up)
-        Year 2 = 0.5 (partial stabilization)
-        Year 3+ = 1.0 (fully stabilized)
+    STABILIZED ASSET (const_period_months=0, leaseup_period_months=0):
+        All years = 1.0
 
-    For OPPORTUNISTIC/ground-up deals:
-        Year 1 = 0.0, Year 2 = 0.0, Year 3 = 0.5, Year 4+ = 1.0
+    RENOVATION / CONSTRUCTION (const_period_months > 0):
+        Factor = 0.0 during the construction period.
+        Factor ramps up evenly during the lease-up period.
+        Factor = 1.0 once fully stabilized.
+
+    Ramp calculation (month-accurate):
+        For year Y (1-indexed), using end-of-year month boundary:
+            months_at_end_of_year = Y * 12
+            if months_at_end_of_year <= const_months:
+                factor = 0.0   (still in construction)
+            elif months_at_end_of_year <= const_months + leaseup_months:
+                fraction = (months_at_end_of_year - const_months) / leaseup_months
+                factor = round(min(fraction, 1.0), 4)
+            else:
+                factor = 1.0   (stabilized)
+
+    Examples:
+        const=0,  leaseup=0   → [1.0, 1.0, 1.0, ...]
+        const=12, leaseup=12  → [0.0, 1.0, 1.0, ...]   (fully leased up by end Y2)
+        const=12, leaseup=24  → [0.0, 0.5, 1.0, ...]   (ramp over 2 yrs)
+        const=18, leaseup=18  → [0.0, 0.17, 1.0, ...]
+            (Y1 end=12mo < 18 const → 0; Y2 end=24mo, 6mo into leaseup/18 = 0.33;
+             Y3 end=36mo, 18mo into leaseup/18 = 1.0)
+        const=24, leaseup=12  → [0.0, 0.0, 1.0, ...]
     """
-    # Prefer extracted rent roll occupancy; fall back to a deal-level field
-    # (if one is later added); final fallback to 1.0 (fully occupied).
-    ext = getattr(deal_data, 'extracted_docs', None)
-    raw_occ = (getattr(ext, 'occupancy_rate', None) if ext else None)
-    if raw_occ is not None:
-        try:
-            occupancy = float(raw_occ)
-        except (ValueError, TypeError):
-            occupancy = 1.0
-    else:
-        occupancy = getattr(deal_data, 'current_occupancy_rate', None) or 1.0
-        if isinstance(occupancy, str):
-            try:
-                occupancy = float(occupancy)
-            except (ValueError, TypeError):
-                occupancy = 1.0
-    logger.info("STAB DEBUG: ext=%s, ext.occupancy_rate=%s, deal.current_occupancy_rate=%s, final_occupancy=%.4f",
-                ext is not None,
-                getattr(ext, 'occupancy_rate', 'MISSING') if ext else 'NO_EXT',
-                getattr(deal_data, 'current_occupancy_rate', 'MISSING'),
-                occupancy)
-    strategy = deal_data.investment_strategy
+    a = deal_data.assumptions
+    hold = max(a.hold_period or 10, 10)
 
-    if occupancy >= 0.85:
-        return [1.0] * 10
+    const_months   = float(a.const_period_months   or 0)
+    leaseup_months = float(a.leaseup_period_months or 0)
 
-    if strategy in (InvestmentStrategy.VALUE_ADD, InvestmentStrategy.STABILIZED_HOLD):
-        return [0.0, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    logger.info(
+        "STAB INPUTS: strategy=%s, const_months=%.0f, leaseup_months=%.0f",
+        deal_data.investment_strategy,
+        const_months,
+        leaseup_months,
+    )
 
-    return [0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    factors = []
+    for yr in range(1, hold + 1):
+        end_month = yr * 12  # month count at END of this year
+
+        if const_months == 0 and leaseup_months == 0:
+            # Fully stabilized asset — always 100%
+            factor = 1.0
+        elif end_month <= const_months:
+            # Still in construction at end of this year
+            factor = 0.0
+        elif const_months > 0 and leaseup_months == 0:
+            # Construction with no modeled lease-up (immediate stabilization
+            # after construction). First year past const = 1.0
+            factor = 1.0
+        elif end_month <= const_months + leaseup_months:
+            # In lease-up: linearly ramp from 0 → 1 over leaseup_months
+            months_into_leaseup = end_month - const_months
+            factor = round(min(months_into_leaseup / leaseup_months, 1.0), 4)
+        else:
+            # Past the end of lease-up — fully stabilized
+            factor = 1.0
+
+        factors.append(factor)
+
+    # Log a compact summary for the server log
+    logger.info(
+        "STAB DEBUG: ext=%s, ext.occupancy_rate=%s, deal.current_occupancy_rate=%s, "
+        "const_months=%.0f, leaseup_months=%.0f",
+        getattr(deal_data, 'extracted_docs', None) is not None,
+        getattr(getattr(deal_data, 'extracted_docs', None), 'occupancy_rate', 'MISSING'),
+        getattr(deal_data, 'current_occupancy_rate', 'MISSING'),
+        const_months,
+        leaseup_months,
+    )
+    logger.info("STAB FACTORS: factors=%s", factors[:10])
+
+    return factors[:10]  # always return exactly 10 elements
 
 
 def _stabilized_noi_for_appraisal(noi_by_year, stab_factors, refi_year_idx, label="REFI"):
@@ -1688,6 +1870,9 @@ def run_financials(deal: DealData) -> DealData:
         fo.initial_loan_amount = su["initial_loan"]
         fo.gp_equity = su["gp_equity"]
         fo.lp_equity = su["lp_equity"]
+        fo.construction_interest_carry   = su["construction_interest_carry"]
+        fo.construction_interest_schedule = su["construction_interest_schedule"]
+        fo.total_project_cost            = su.get("total_project_cost", 0.0)
 
         # ── Pro Forma ─────────────────────────────────────────────────
         if is_sale:
