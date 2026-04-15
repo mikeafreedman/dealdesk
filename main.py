@@ -130,7 +130,7 @@ class UnderwriteRequest(BaseModel):
     a_lot_sf: Optional[float] = None
     a_year_built: Optional[int] = None
     a_transfer_tax: float = 2.139
-    a_closing_costs_fixed: float = 75000.0
+    a_closing_costs_fixed: float = 0.0
     a_tenant_buyout: float = 0.0
     a_legal_closing: float = 25000.0
     a_title_insurance: float = 8000.0
@@ -146,7 +146,6 @@ class UnderwriteRequest(BaseModel):
     a_geotech: float = 0.0
     a_acq_fee_fixed: float = 25000.0
     a_mortgage_carry: float = 0.0
-    a_mortgage_fees: float = 17500.0
     a_mezz_interest: float = 0.0
     a_working_capital: float = 15000.0
     a_marketing: float = 5000.0
@@ -167,7 +166,7 @@ class UnderwriteRequest(BaseModel):
     a_interest_rate: float = 6.5
     a_amort_years: int = 30
     a_loan_term: int = 10
-    a_origination_fee: float = 1.0
+    a_origination_fee_pct: float = 1.0
     a_io_period: int = 0
 
     # Refi 1
@@ -180,7 +179,7 @@ class UnderwriteRequest(BaseModel):
     a_refi1_term: int = 10
     a_refi1_orig_fee: float = 1.0
     a_refi1_prepay: float = 1.0
-    a_refi1_closing: float = 25000.0
+    a_refi1_closing: float = 0.0
     a_refi1_cap_rate: Optional[float] = None
 
     # Refi 2
@@ -193,7 +192,7 @@ class UnderwriteRequest(BaseModel):
     a_refi2_term: int = 10
     a_refi2_orig_fee: float = 1.0
     a_refi2_prepay: float = 1.0
-    a_refi2_closing: float = 25000.0
+    a_refi2_closing: float = 0.0
     a_refi2_cap_rate: Optional[float] = None
 
     # Refi 3
@@ -217,27 +216,27 @@ class UnderwriteRequest(BaseModel):
     a_cam_reimbursements: float = 0.0
     a_fee_income: float = 0.0
 
-    # Fixed expenses
-    a_re_taxes: float = 45000.0
-    a_insurance: float = 18000.0
-    a_gas: float = 12000.0
-    a_water_sewer: float = 14000.0
-    a_electric: float = 10000.0
-    a_license: float = 2500.0
-    a_trash: float = 8000.0
+    # Fixed expenses — ALL default to 0
+    a_re_taxes: float = 0.0
+    a_insurance: float = 0.0
+    a_gas: float = 0.0
+    a_water_sewer: float = 0.0
+    a_electric: float = 0.0
+    a_license: float = 0.0
+    a_trash: float = 0.0
 
-    # Variable expenses
-    a_mgmt_fee: float = 6.0
-    a_salaries: float = 24000.0
-    a_repairs: float = 8000.0
-    a_exterminator: float = 3600.0
-    a_cleaning: float = 6000.0
-    a_turnover: float = 5000.0
-    a_advertising: float = 4000.0
-    a_landscape: float = 6000.0
-    a_admin: float = 5000.0
-    a_office: float = 3000.0
-    a_misc_expense: float = 2000.0
+    # Variable expenses — ALL default to 0
+    a_mgmt_fee: float = 0.0
+    a_salaries: float = 0.0
+    a_repairs: float = 0.0
+    a_exterminator: float = 0.0
+    a_cleaning: float = 0.0
+    a_turnover: float = 0.0
+    a_advertising: float = 0.0
+    a_landscape: float = 0.0
+    a_admin: float = 0.0
+    a_office: float = 0.0
+    a_misc_expense: float = 0.0
 
     # Below-the-line
     a_cap_reserve: float = 400.0
@@ -411,7 +410,6 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         geotech=req.a_geotech,
         acq_fee_fixed=req.a_acq_fee_fixed,
         mortgage_carry=req.a_mortgage_carry,
-        mortgage_fees=req.a_mortgage_fees,
         mezz_interest=req.a_mezz_interest,
         working_capital=req.a_working_capital,
         marketing=req.a_marketing,
@@ -432,7 +430,7 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         interest_rate=req.a_interest_rate / 100.0,
         amort_years=req.a_amort_years,
         loan_term=req.a_loan_term,
-        origination_fee_pct=req.a_origination_fee / 100.0,
+        origination_fee_pct=req.a_origination_fee_pct / 100.0,
         io_period_months=req.a_io_period,
         refi_events=refi_events,
         # Development period — visible assumptions field overrides hidden dev-period card

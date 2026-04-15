@@ -22,9 +22,13 @@ import logging
 from typing import Optional
 
 import anthropic
-import streamlit as st
+import os
 
-from config import ANTHROPIC_SECRET_KEY, MODEL_SONNET
+from config import MODEL_SONNET
+
+
+def _get_anthropic_api_key():
+    return os.environ.get("ANTHROPIC_API_KEY", "") or None
 from models.models import DealData
 
 logger = logging.getLogger(__name__)
@@ -116,9 +120,7 @@ _USER_4B = (
 
 def _call_sonnet(system: str, user_msg: str) -> Optional[dict]:
     """Send a single Sonnet call and parse the JSON response. Returns None on failure."""
-    client = anthropic.Anthropic(
-        api_key=st.secrets[ANTHROPIC_SECRET_KEY]["api_key"],
-    )
+    client = anthropic.Anthropic(api_key=_get_anthropic_api_key())
     try:
         response = client.messages.create(
             model=MODEL_SONNET,

@@ -32,11 +32,8 @@ from typing import Any, Dict, List, Optional
 import anthropic
 import pandas as pd
 import requests
-import streamlit as st
 
 from config import (
-    ANTHROPIC_SECRET_KEY,
-    HUD_API_KEY,
     MODEL_HAIKU,
     MODEL_SONNET,
     MUNICIPAL_REGISTRY_CSV,
@@ -288,13 +285,23 @@ def _normalize_address_for_geocoding(raw_address: str) -> str:
 
     '2-8 s. 46th street, 19139' → '2 S 46th Street, Philadelphia, PA 19139'
     """
-    addr = re.sub(r'^(\d+)-\d+\s', r'\1 ', raw_address.strip())
-    addr = re.sub(r'\bs\.\s', 'S ', addr, flags=re.IGNORECASE)
-    addr = re.sub(r'\bn\.\s', 'N ', addr, flags=re.IGNORECASE)
-    addr = re.sub(r'\be\.\s', 'E ', addr, flags=re.IGNORECASE)
-    addr = re.sub(r'\bw\.\s', 'W ', addr, flags=re.IGNORECASE)
-    if re.search(r'\b\d{5}\b', addr) and 'Philadelphia' not in addr:
-        addr = re.sub(r'(\d{5})$', r'Philadelphia, PA \1', addr.strip(', '))
+    addr = raw_address.strip()
+    # Remove range portion: "2-8 S 46th" → "2 S 46th"
+    addr = re.sub(r'^(\d+)\s*[-–]\s*\d+\s+', r'\1 ', addr)
+    # Expand abbreviations: S→South, N→North, E→East, W→West
+    addr = re.sub(r'\bS\.?\s+', 'South ', addr)
+    addr = re.sub(r'\bN\.?\s+', 'North ', addr)
+    addr = re.sub(r'\bE\.?\s+', 'East ', addr)
+    addr = re.sub(r'\bW\.?\s+', 'West ', addr)
+    # Expand "St" at end → "Street" (but not "St" in a name like "St. Louis")
+    addr = re.sub(r'\b[Ss]t\.?$', 'Street', addr)
+    addr = re.sub(r'\b[Ss]treet,', 'Street,', addr)
+    # If no city/state, append Philadelphia PA
+    if ',' not in addr:
+        addr += ', Philadelphia, PA'
+    elif addr.count(',') == 1 and re.search(r'\d{5}', addr):
+        # Has zip but no city: "2 South 46th Street, 19139" → add Philadelphia PA
+        addr = re.sub(r',\s*(\d{5})', r', Philadelphia, PA \1', addr)
     if addr != raw_address:
         logger.info("GEOCODE: normalized '%s' → '%s'", raw_address, addr)
     return addr
@@ -651,11 +658,13 @@ _FRED_SERIES = {
 def _fetch_fred_series(series_id: str) -> Optional[float]:
     """Fetch the most recent observation for a FRED series (no API key required)."""
     is_cpi = series_id == "CPIAUCSL"
+    import os
     params = {
         "series_id": series_id,
         "file_type": "json",
         "sort_order": "desc",
         "limit": 13 if is_cpi else 1,
+        "api_key": os.environ.get("FRED_API_KEY", ""),
     }
     try:
         resp = requests.get(_FRED_BASE, params=params, timeout=_REQUEST_TIMEOUT)
@@ -793,12 +802,12 @@ _HUD_FMR_DATA = "https://www.huduser.gov/hudapi/public/fmr/data"
 
 
 def _get_hud_api_key() -> Optional[str]:
-    """Read HUD API key from st.secrets."""
-    try:
-        return st.secrets[HUD_API_KEY]["api_key"]
-    except (KeyError, FileNotFoundError):
-        logger.warning("HUD API key not configured in st.secrets['%s']", HUD_API_KEY)
+    """Read HUD API key from env var."""
+    key = os.environ.get("HUD_API_KEY", "")
+    if not key:
+        logger.warning("HUD API key not configured")
         return None
+    return key
 
 
 def _fetch_hud_fmr(deal: DealData) -> None:
@@ -984,11 +993,18 @@ def _scrape_zoning_code(url: str) -> Optional[str]:
 # LLM HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _get_anthropic_api_key() -> Optional[str]:
+    """Read Anthropic API key from env var."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        logger.warning("ANTHROPIC_API_KEY not configured")
+        return None
+    return key
+
+
 def _call_llm(model: str, system: str, user_msg: str, max_tokens: int = 4096) -> Optional[dict]:
     """Send a Claude API call expecting JSON. Returns parsed dict or None."""
-    client = anthropic.Anthropic(
-        api_key=st.secrets[ANTHROPIC_SECRET_KEY]["api_key"],
-    )
+    client = anthropic.Anthropic(api_key=_get_anthropic_api_key())
     try:
         response = client.messages.create(
             model=model,
@@ -1006,9 +1022,7 @@ def _call_llm(model: str, system: str, user_msg: str, max_tokens: int = 4096) ->
 
 def _call_llm_text(model: str, system: str, user_msg: str, max_tokens: int = 2048) -> Optional[str]:
     """Send a Claude API call expecting plain text. Returns string or None."""
-    client = anthropic.Anthropic(
-        api_key=st.secrets[ANTHROPIC_SECRET_KEY]["api_key"],
-    )
+    client = anthropic.Anthropic(api_key=_get_anthropic_api_key())
     try:
         response = client.messages.create(
             model=model,
@@ -1193,14 +1207,6 @@ def _build_market_context(md: MarketData) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 # SECRETS HELPER
 # ═══════════════════════════════════════════════════════════════════════════
-
-def _get_secret(section: str, key: str) -> Optional[str]:
-    """Safely retrieve a secret from st.secrets, returning None if not configured."""
-    try:
-        return st.secrets[section][key]
-    except (KeyError, FileNotFoundError):
-        return None
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PUBLIC API

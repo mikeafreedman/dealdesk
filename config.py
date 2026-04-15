@@ -77,23 +77,21 @@ WORD_TEMPLATE = WORD_TEMPLATES_DIR / "DealDesk_Report_Template_v4.docx"
 MUNICIPAL_REGISTRY_CSV = DATA_DIR / "municipal_registry.csv"
 
 # ── Anthropic / LLM ──────────────────────────────────────────
-ANTHROPIC_SECRET_KEY = "anthropic"          # key in st.secrets
-ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL_HAIKU  = "claude-haiku-4-5-20251001"
 MODEL_SONNET = "claude-sonnet-4-6"
 
 # ── HUD ──────────────────────────────────────────────────────
-HUD_API_KEY = "hud"                         # key in st.secrets
+HUD_API_KEY = os.environ.get("HUD_API_KEY", "")
 
 # ── Email (SMTP) ─────────────────────────────────────────────
-EMAIL_SECRET_KEY = "email"                  # key in st.secrets
 SMTP_PORT_DEFAULT = 587
-
-# ── Slack ─────────────────────────────────────────────────────
-SLACK_SECRET_KEY = "slack"                  # key in st.secrets
 
 # ── Google Maps / Street View ────────────────────────────────
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+
+# ── FRED (Federal Reserve Economic Data) ─────────────────────
+FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 
 # ── Pipeline defaults ─────────────────────────────────────────
 PDF_CONVERSION_TIMEOUT = 60                 # seconds

@@ -530,7 +530,7 @@ def _section_acquisition(a) -> CellMap:
     return [
         ("C17", a.purchase_price),
         ("C18", a.transfer_tax_rate),
-        ("C20", 0.0),  # closing_costs_fixed removed from S&U
+        ("C20", a.closing_costs_fixed),
     ]
 
 
@@ -539,6 +539,7 @@ def _section_uses(a) -> CellMap:
     excel_total_uses = (
         a.purchase_price +                              # C17 (acq section)
         a.purchase_price * a.transfer_tax_rate +        # C18→C19 (transfer tax)
+        a.closing_costs_fixed +                         # C20 (permanent loan closing costs)
         a.tenant_buyout +                               # C31
         # Professional
         a.legal_closing + a.title_insurance + a.legal_bank +

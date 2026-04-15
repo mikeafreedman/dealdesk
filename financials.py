@@ -31,9 +31,13 @@ import numpy as np
 import numpy_financial as npf
 
 import anthropic
-import streamlit as st
+import os
 
-from config import ANTHROPIC_SECRET_KEY, MODEL_SONNET
+from config import MODEL_SONNET
+
+
+def _get_anthropic_api_key():
+    return os.environ.get("ANTHROPIC_API_KEY", "") or None
 from models.models import AssetType, DealData, InvestmentStrategy, WaterfallType
 
 logger = logging.getLogger(__name__)
@@ -119,15 +123,20 @@ def _compute_sources_uses(deal: DealData) -> dict:
 
     # Total project cost before origination (used to size the loan)
     total_project_cost = (a.purchase_price + transfer_tax +
+                          a.closing_costs_fixed +
                           a.tenant_buyout + professional + financing_soft +
                           hard_costs)
     initial_loan = total_project_cost * a.ltv_pct
     origination_fee = initial_loan * a.origination_fee_pct
+    logger.info(
+        "ORIGINATION FEE: pct=%.2f%%, loan=$%,.0f, fee=$%,.0f",
+        a.origination_fee_pct * 100, initial_loan, origination_fee
+    )
 
     total_uses = total_project_cost + origination_fee
 
-    logger.info("TPC FIX: total_project_cost=%s (closing_costs_fixed double-count removed)",
-                f"{total_project_cost:,.2f}")
+    logger.info("TPC: total_project_cost=%s (incl closing_costs_fixed=%s)",
+                f"{total_project_cost:,.2f}", f"{a.closing_costs_fixed:,.2f}")
     logger.info(
         "LOAN SIZING: total_project_cost=%s × LTV=%s = loan=%s",
         f"{total_project_cost:,.2f}", f"{a.ltv_pct:.1%}", f"{initial_loan:,.2f}")
@@ -485,11 +494,24 @@ def _get_stabilization_factors(deal_data: DealData) -> list[float]:
     # Prefer extracted rent roll occupancy; fall back to a deal-level field
     # (if one is later added); final fallback to 1.0 (fully occupied).
     ext = getattr(deal_data, 'extracted_docs', None)
-    occupancy = (
-        (getattr(ext, 'occupancy_rate', None) if ext else None)
-        or getattr(deal_data, 'current_occupancy_rate', None)
-        or 1.0
-    )
+    raw_occ = (getattr(ext, 'occupancy_rate', None) if ext else None)
+    if raw_occ is not None:
+        try:
+            occupancy = float(raw_occ)
+        except (ValueError, TypeError):
+            occupancy = 1.0
+    else:
+        occupancy = getattr(deal_data, 'current_occupancy_rate', None) or 1.0
+        if isinstance(occupancy, str):
+            try:
+                occupancy = float(occupancy)
+            except (ValueError, TypeError):
+                occupancy = 1.0
+    logger.info("STAB DEBUG: ext=%s, ext.occupancy_rate=%s, deal.current_occupancy_rate=%s, final_occupancy=%.4f",
+                ext is not None,
+                getattr(ext, 'occupancy_rate', 'MISSING') if ext else 'NO_EXT',
+                getattr(deal_data, 'current_occupancy_rate', 'MISSING'),
+                occupancy)
     strategy = deal_data.investment_strategy
 
     if occupancy >= 0.85:
@@ -660,13 +682,11 @@ def _build_proforma(deal: DealData, insurance: float,
                 prepay = old_balance * refi.prepay_pct
                 # Closing costs: 1% origination + $3,500 flat, rounded to nearest $100
                 costs = round((new_loan * 0.01) + 3500, -2)
-                # Net proceeds can be negative (cash-in refi) — do NOT floor
-                refi_proceeds = new_loan - old_balance - prepay - costs
+                total_refi_costs = prepay + costs
+                refi_proceeds = max(0.0, new_loan - old_balance - total_refi_costs)
                 logger.info(
-                    "REFI [Year %d]: noi=%.2f, appraised=%.2f, "
-                    "new_loan=%.2f, prior_balance=%.2f, net_proceeds=%.2f",
-                    yr, noi, refi.appraised_value, new_loan,
-                    old_balance, refi_proceeds)
+                    "REFI [Year %d]: appraised=%.2f, new_loan=%.2f, net_proceeds=%.2f",
+                    yr, refi.appraised_value, new_loan, refi_proceeds)
 
                 # Capture pre-switch state for the DS SWITCH log
                 old_rate = loan_rate
@@ -1461,9 +1481,7 @@ _USER_5A = (
 
 def _call_5a(deal: DealData, mc_results: dict) -> Optional[str]:
     """Call Sonnet for Prompt 5A Monte Carlo narrative. Returns plain text or None."""
-    client = anthropic.Anthropic(
-        api_key=st.secrets[ANTHROPIC_SECRET_KEY]["api_key"],
-    )
+    client = anthropic.Anthropic(api_key=_get_anthropic_api_key())
     user_msg = _USER_5A.format(
         property_address=deal.address.full_address,
         asset_type=deal.asset_type.value,
@@ -1534,7 +1552,7 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
     # Office salaries are zeroed out in the Office-specific block below.
     # Only adjust for Industrial / Retail here.
     if asset != AssetType.OFFICE:
-        if a.salaries == 24_000.0 and gba and gba > 0:
+        if a.salaries == 0.0 and gba and gba > 0:
             rate = _INDUSTRIAL_SALARY_PSF if asset == AssetType.INDUSTRIAL else _OFFICE_SALARY_PSF
             old = a.salaries
             a.salaries = round(rate * gba, 2)
@@ -1542,13 +1560,13 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
                          "(%.2f $/SF × %s SF)",
                          asset.value, f"{old:,.0f}", f"{a.salaries:,.0f}", rate, f"{gba:,.0f}")
         else:
-            src = "user-set" if a.salaries != 24_000.0 else "default (no GBA)"
+            src = "user-set" if a.salaries != 0.0 else "default (no GBA)"
             logger.info("Expense scaling [%s]: salaries=$%s -- %s",
                          asset.value, f"{a.salaries:,.0f}", src)
 
     # ── Insurance ─────────────────────────────────────────────────
-    # Only adjust if still at the multifamily default of $18,000
-    if a.insurance == 18_000.0 and gba and gba > 0:
+    # Only scale if still at default (0.0) — user or T-12 backfill has priority
+    if a.insurance == 0.0 and gba and gba > 0:
         rate = _OFFICE_INSURANCE_PSF if asset in (AssetType.OFFICE, AssetType.RETAIL) else _INDUSTRIAL_INS_PSF
         old = a.insurance
         a.insurance = round(rate * gba, 2)
@@ -1556,14 +1574,14 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
                      "(%.2f $/SF × %s SF)",
                      asset.value, f"{old:,.0f}", f"{a.insurance:,.0f}", rate, f"{gba:,.0f}")
     else:
-        src = "user-set" if a.insurance != 18_000.0 else "default (no GBA)"
+        src = "user-set" if a.insurance != 0.0 else "default (no GBA)"
         logger.info("Expense scaling [%s]: insurance=$%s -- %s",
                      asset.value, f"{a.insurance:,.0f}", src)
 
     # ── Real Estate Taxes ─────────────────────────────────────────
     # If OPA parcel data has an assessed value, derive taxes from that
     parcel = deal.parcel_data
-    if a.re_taxes == 45_000.0 and parcel and parcel.assessed_value and parcel.assessed_value > 0:
+    if a.re_taxes == 0.0 and parcel and parcel.assessed_value and parcel.assessed_value > 0:
         # Philadelphia mill rate ≈ 1.3998% (combined city + school)
         mill_rate = 0.013998
         old = a.re_taxes
@@ -1572,7 +1590,7 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
                      "(OPA assessed $%s × %.4f mill rate)",
                      asset.value, f"{old:,.0f}", f"{a.re_taxes:,.0f}", f"{parcel.assessed_value:,.0f}", mill_rate)
     else:
-        if a.re_taxes != 45_000.0:
+        if a.re_taxes != 0.0:
             src = "user-set"
         elif parcel and parcel.assessed_value and parcel.assessed_value > 0:
             src = "user-set (not default)"

@@ -688,14 +688,14 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         <div class="assum-card-body">
           <div class="assum-row-label" style="margin-bottom:10px;font-weight:600">Professional &amp; Due Diligence</div>
           <div class="fg3" style="margin-bottom:8px">
-            <div class="field"><label>Legal &mdash; Closing &amp; Borrowing ($)</label><input class="fi" type="number" id="a_legal_closing" value="25000" oninput="markChanged()"></div>
-            <div class="field"><label>Title Insurance ($)</label><input class="fi" type="number" id="a_title_insurance" value="8000" oninput="markChanged()"></div>
-            <div class="field"><label>Legal &mdash; Bank ($)</label><input class="fi" type="number" id="a_legal_bank" value="5000" oninput="markChanged()"></div>
+            <div class="field"><label>Legal &mdash; Closing &amp; Borrowing ($)</label><input class="fi" type="number" id="a_legal_closing" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Title Insurance ($)</label><input class="fi" type="number" id="a_title_insurance" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Legal &mdash; Bank ($)</label><input class="fi" type="number" id="a_legal_bank" value="0" oninput="markChanged()"></div>
           </div>
           <div class="fg3" style="margin-bottom:8px">
-            <div class="field"><label>Appraisal ($)</label><input class="fi" type="number" id="a_appraisal" value="5000" oninput="markChanged()"></div>
-            <div class="field"><label>Environmental / Phase I ($)</label><input class="fi" type="number" id="a_environmental" value="6000" oninput="markChanged()"></div>
-            <div class="field"><label>Surveyor ($)</label><input class="fi" type="number" id="a_surveyor" value="3500" oninput="markChanged()"></div>
+            <div class="field"><label>Appraisal ($)</label><input class="fi" type="number" id="a_appraisal" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Environmental / Phase I ($)</label><input class="fi" type="number" id="a_environmental" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Surveyor ($)</label><input class="fi" type="number" id="a_surveyor" value="0" oninput="markChanged()"></div>
           </div>
           <div class="fg3" style="margin-bottom:8px">
             <div class="field"><label>Architect ($)</label><input class="fi" type="number" id="a_architect" value="0" oninput="markChanged()"></div>
@@ -713,9 +713,9 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
 
           <div class="assum-row-label" style="margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Project Soft Costs</div>
           <div class="fg3" style="margin-bottom:8px">
-            <div class="field"><label>Acquisition Fee ($)</label><input class="fi" type="number" id="a_acq_fee_fixed" value="25000" oninput="markChanged()"></div>
-            <div class="field"><label>Working Capital ($)</label><input class="fi" type="number" id="a_working_capital" value="15000" oninput="markChanged()"></div>
-            <div class="field"><label>Marketing ($)</label><input class="fi" type="number" id="a_marketing" value="5000" oninput="markChanged()"></div>
+            <div class="field"><label>Acquisition Fee ($)</label><input class="fi" type="number" id="a_acq_fee_fixed" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Working Capital ($)</label><input class="fi" type="number" id="a_working_capital" value="0" oninput="markChanged()"></div>
+            <div class="field"><label>Marketing ($)</label><input class="fi" type="number" id="a_marketing" value="0" oninput="markChanged()"></div>
           </div>
           <div class="fg3" style="margin-bottom:8px">
             <div class="field"><label>Real Estate Tax Carry ($)</label><input class="fi" type="number" id="a_re_tax_carry" value="0" oninput="markChanged()"></div>
@@ -763,35 +763,43 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
             <div class="field"><label>Lease-Up (Mo)</label><input class="fi" type="text" id="a_leaseup_months" value="0" oninput="markChanged()"><span class="field-note">Value-add: typically 6&ndash;18 mo</span></div>
           </div>
 
-          <div class="assum-row-label" style="margin-top:18px;margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Fixed Expenses &mdash; Year 1</div>
+          <div class="assum-row-label" style="margin-top:18px;margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Fixed Operating Expenses &mdash; Year 1</div>
           <div class="fg3" style="margin-bottom:8px">
-            <div class="field"><label>Real Estate Taxes ($)</label><input class="fi" type="number" id="a_re_taxes" value="45000" oninput="markChanged()"></div>
-            <div class="field"><label>Insurance ($)</label><input class="fi" type="number" id="a_insurance" value="18000" oninput="markChanged()"></div>
-            <div class="field"><label>Gas ($)</label><input class="fi" type="number" id="a_gas" value="12000" oninput="markChanged()"></div>
+            <div class="field"><label>Real Estate Taxes ($)</label><input class="fi" type="number" id="a_re_taxes" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Insurance ($)</label><input class="fi" type="number" id="a_insurance" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Gas ($)</label><input class="fi" type="number" id="a_gas" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
           </div>
           <div class="fg3" style="margin-bottom:8px">
-            <div class="field"><label>Water &amp; Sewer ($)</label><input class="fi" type="number" id="a_water_sewer" value="14000" oninput="markChanged()"></div>
-            <div class="field"><label>Electric ($)</label><input class="fi" type="number" id="a_electric" value="10000" oninput="markChanged()"></div>
-            <div class="field"><label>License / Inspections ($)</label><input class="fi" type="number" id="a_license" value="2500" oninput="markChanged()"></div>
+            <div class="field"><label>Water &amp; Sewer ($)</label><input class="fi" type="number" id="a_water_sewer" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Electric ($)</label><input class="fi" type="number" id="a_electric" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>License / Inspections ($)</label><input class="fi" type="number" id="a_license" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
           </div>
           <div class="fg3">
-            <div class="field"><label>Trash Removal ($)</label><input class="fi" type="number" id="a_trash" value="8000" oninput="markChanged()"></div>
+            <div class="field"><label>Trash Removal ($)</label><input class="fi" type="number" id="a_trash" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
           </div>
 
-          <div class="assum-row-label" style="margin-top:18px;margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Variable Expenses &mdash; Year 1</div>
+          <div class="assum-row-label" style="margin-top:18px;margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Variable Operating Expenses &mdash; Year 1</div>
           <div class="fg3" style="margin-bottom:8px">
-            <div class="field"><label>Management Fee (% of EGI)</label><input class="fi" type="number" id="a_mgmt_fee" value="6.00" oninput="markChanged()"><span class="field-note">Enter as percent (6 = 6%)</span></div>
-            <div class="field"><label>Repairs ($)</label><input class="fi" type="number" id="a_repairs" value="8000" oninput="markChanged()"></div>
-            <div class="field"><label>Cleaning / Maintenance ($)</label><input class="fi" type="number" id="a_cleaning" value="6000" oninput="markChanged()"></div>
+            <div class="field"><label>Management Fee (% of EGI)</label><input class="fi" type="number" id="a_mgmt_fee" value="0" placeholder="0 = not applicable" oninput="markChanged()"><span class="field-note">Enter as percent (6 = 6%)</span></div>
+            <div class="field"><label>Salaries ($)</label><input class="fi" type="number" id="a_salaries" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Repairs ($)</label><input class="fi" type="number" id="a_repairs" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
           </div>
           <div class="fg3" style="margin-bottom:8px">
-            <div class="field"><label>Landscape / Snow ($)</label><input class="fi" type="number" id="a_landscape" value="6000" oninput="markChanged()"></div>
-            <div class="field"><label>Admin / Legal / Acct. ($)</label><input class="fi" type="number" id="a_admin" value="5000" oninput="markChanged()"></div>
-            <div class="field"><label>Office / Phone / Supplies ($)</label><input class="fi" type="number" id="a_office" value="3000" oninput="markChanged()"></div>
+            <div class="field"><label>Exterminator ($)</label><input class="fi" type="number" id="a_exterminator" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Cleaning / Maintenance ($)</label><input class="fi" type="number" id="a_cleaning" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Turnover ($)</label><input class="fi" type="number" id="a_turnover" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
           </div>
           <div class="fg3" style="margin-bottom:8px">
-            <div class="field"><label>Miscellaneous ($)</label><input class="fi" type="number" id="a_misc_expense" value="2000" oninput="markChanged()"></div>
-            <div class="field"><label>Capital Reserves ($/unit/year)</label><input class="fi" type="number" id="a_cap_reserve" value="400" oninput="markChanged()"></div>
+            <div class="field"><label>Advertising ($)</label><input class="fi" type="number" id="a_advertising" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Landscape / Snow ($)</label><input class="fi" type="number" id="a_landscape" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Admin / Legal / Acct. ($)</label><input class="fi" type="number" id="a_admin" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Office / Phone / Supplies ($)</label><input class="fi" type="number" id="a_office" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Miscellaneous ($)</label><input class="fi" type="number" id="a_misc_expense" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+          </div>
+          <div class="fg3" style="margin-bottom:8px">
+            <div class="field"><label>Capital Reserves ($/unit/year)</label><input class="fi" type="number" id="a_cap_reserve" value="0" oninput="markChanged()"></div>
             <div class="field"><label>Commissions &mdash; Year 1 ($)</label><input class="fi" type="number" id="a_commissions" value="0" oninput="markChanged()"></div>
           </div>
           <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">Renovations &mdash; Year 1 is set in the Construction &amp; Renovation sub-section above.</div>
@@ -847,7 +855,12 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
           </div>
           <div class="assum-row">
             <div><div class="assum-row-label">Origination Fee</div><div class="assum-row-desc">Lender origination fee as a percentage of the initial loan amount. Applied as a financing cost in Sources &amp; Uses.</div></div>
-            <div class="field"><label>Fee (%)</label><input class="fi" type="text" id="a_origination_fee" value="1.00" oninput="markChanged()"><span class="field-note">Excel default: 1.0%</span></div>
+            <div class="field"><label>Origination Fee (%)</label><input class="fi" type="number" id="a_origination_fee_pct" value="1.0" placeholder="1.0" min="0" max="10" step="0.25" oninput="markChanged(); updateOriginationFee();"><span class="field-note">% of initial loan amount — dollar amount auto-calculated</span></div>
+            <div class="field"><label>Origination Fee ($) <span style="font-size:11px;color:#7A9E7E;">(computed)</span></label><input class="fi" type="text" id="a_mortgage_fees_computed" readonly style="background:#f0ede8;color:#5C3D26;font-style:italic;" placeholder="Auto-calculated"><span class="field-note">Loan amount × origination fee %</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Closing Costs</div><div class="assum-row-desc">Lump-sum closing costs for the permanent loan (lender legal, title, recording, etc.). Applied as a financing cost in Sources &amp; Uses.</div></div>
+            <div class="field"><label>Closing Costs ($)</label><input class="fi" type="number" id="a_closing_costs_fixed" value="0" min="0" step="100" oninput="markChanged()"><span class="field-note">Enter dollar amount — added directly to Uses</span></div>
           </div>
         </div>
       </div>
@@ -886,7 +899,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
           <div class="fg3">
             <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi1_orig_fee" value="1.00" oninput="markChanged()"></div>
             <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi1_prepay" value="1.00" oninput="markChanged()"><span class="field-note">% of outstanding balance</span></div>
-            <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi1_closing" value="25000" oninput="markChanged()"></div>
+            <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi1_closing" value="0" oninput="markChanged()"></div>
           </div>
         </div>
       </div>
@@ -922,7 +935,7 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
           <div class="fg3">
             <div class="field"><label>Origination Fee (%)</label><input class="fi" type="text" id="a_refi2_orig_fee" value="1.00" oninput="markChanged()"></div>
             <div class="field"><label>Prepayment Penalty (%)</label><input class="fi" type="text" id="a_refi2_prepay" value="1.00" oninput="markChanged()"></div>
-            <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi2_closing" value="25000" oninput="markChanged()"></div>
+            <div class="field"><label>Closing Costs ($)</label><input class="fi" type="text" id="a_refi2_closing" value="0" oninput="markChanged()"></div>
           </div>
         </div>
       </div>
@@ -1082,19 +1095,13 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
 
       <!-- Hidden: retained fields not surfaced (thresholds, legacy duplicates) -->
       <div style="display:none" aria-hidden="true">
-        <input type="text" id="a_closing_costs_fixed" value="75000">
         <input type="text" id="a_cam_reimbursements" value="0">
         <input type="text" id="a_fee_income" value="0">
         <input type="text" id="a_mortgage_carry" value="0">
-        <input type="text" id="a_mortgage_fees" value="17500">
         <input type="text" id="a_mezz_interest" value="0">
         <input type="text" id="a_mezz_debt" value="0">
         <input type="text" id="a_tax_credit_eq" value="0">
         <input type="text" id="a_grants" value="0">
-        <input type="text" id="a_salaries" value="24000">
-        <input type="text" id="a_exterminator" value="3600">
-        <input type="text" id="a_turnover" value="5000">
-        <input type="text" id="a_advertising" value="4000">
         <input type="text" id="a_min_em" value="1.80">
         <input type="text" id="a_min_irr" value="12.00">
         <input type="text" id="a_min_coc" value="7.00">
@@ -1233,41 +1240,41 @@ const DEFAULTS = {
   // §1 Property Information
   a_hold_period:'10', a_num_units:'', a_gba_sf:'', a_lot_sf:'', a_year_built:'',
   // §2 Acquisition
-  a_transfer_tax:'2.139', a_closing_costs_fixed:'75000', a_tenant_buyout:'0',
+  a_transfer_tax:'2.139', a_closing_costs_fixed:'0', a_tenant_buyout:'0',
   // §3 Professional & Due Diligence
-  a_legal_closing:'25000', a_title_insurance:'8000', a_legal_bank:'5000',
-  a_appraisal:'5000', a_environmental:'6000', a_surveyor:'3500',
+  a_legal_closing:'0', a_title_insurance:'0', a_legal_bank:'0',
+  a_appraisal:'0', a_environmental:'0', a_surveyor:'0',
   a_architect:'0', a_structural:'0', a_civil_eng:'0', a_meps:'0',
   a_legal_zoning:'0', a_geotech:'0',
   // §4 Financing costs, soft costs, hard costs, sources
-  a_acq_fee_fixed:'25000', a_mortgage_carry:'0', a_mortgage_fees:'17500', a_mezz_interest:'0',
-  a_working_capital:'15000', a_marketing:'5000', a_re_tax_carry:'0', a_prop_ins_carry:'0',
+  a_acq_fee_fixed:'0', a_mortgage_carry:'0', a_mezz_interest:'0',
+  a_working_capital:'0', a_marketing:'0', a_re_tax_carry:'0', a_prop_ins_carry:'0',
   a_dev_fee:'0', a_dev_pref:'0', a_permits:'0',
   a_stormwater:'0', a_demo:'0', a_const_hard:'0', a_const_reserve:'0', a_gc_overhead:'0',
   a_mezz_debt:'0', a_tax_credit_eq:'0', a_grants:'0',
   // §5 Initial financing
   a_ltv_pct:'70.00', a_interest_rate:'6.50', a_amort_years:'30',
-  a_loan_term:'10', a_origination_fee:'1.00', a_io_period:'0',
+  a_loan_term:'10', a_origination_fee_pct:'1.0', a_io_period:'0',
   // §6–8 Refi events (year, appraised value, ltv, rate, amort, term, orig fee, prepay, closing)
   a_refi1_year:'5',  a_refi1_appraised:'3200000', a_refi1_cap_rate:'', a_refi1_ltv:'70', a_refi1_rate:'6.00',
-  a_refi1_amort:'30', a_refi1_term:'10', a_refi1_orig_fee:'1.00', a_refi1_prepay:'1.00', a_refi1_closing:'25000',
+  a_refi1_amort:'30', a_refi1_term:'10', a_refi1_orig_fee:'1.00', a_refi1_prepay:'1.00', a_refi1_closing:'0',
   a_refi2_year:'8',  a_refi2_appraised:'3800000', a_refi2_cap_rate:'', a_refi2_ltv:'65', a_refi2_rate:'5.50',
-  a_refi2_amort:'30', a_refi2_term:'10', a_refi2_orig_fee:'1.00', a_refi2_prepay:'1.00', a_refi2_closing:'25000',
+  a_refi2_amort:'30', a_refi2_term:'10', a_refi2_orig_fee:'1.00', a_refi2_prepay:'1.00', a_refi2_closing:'0',
   a_refi3_year:'0',  a_refi3_appraised:'0',       a_refi3_cap_rate:'', a_refi3_ltv:'65', a_refi3_rate:'5.50',
   a_refi3_amort:'30', a_refi3_term:'10', a_refi3_orig_fee:'1.00', a_refi3_prepay:'0',    a_refi3_closing:'0',
   // §8 Income
   a_vacancy:'7.50', a_rev_growth:'3.00', a_exp_growth:'3.00',
   a_loss_to_lease:'3.00', a_cam_reimbursements:'0', a_fee_income:'0',
   // §9 Fixed expenses
-  a_re_taxes:'45000', a_insurance:'18000', a_gas:'12000',
-  a_water_sewer:'14000', a_electric:'10000', a_license:'2500', a_trash:'8000',
+  a_re_taxes:'0', a_insurance:'0', a_gas:'0',
+  a_water_sewer:'0', a_electric:'0', a_license:'0', a_trash:'0',
   // §10 Variable expenses
-  a_mgmt_fee:'6.00', a_salaries:'24000', a_repairs:'8000',
-  a_exterminator:'3600', a_cleaning:'6000', a_turnover:'5000',
-  a_advertising:'4000', a_landscape:'6000', a_admin:'5000',
-  a_office:'3000', a_misc_expense:'2000',
+  a_mgmt_fee:'0', a_salaries:'0', a_repairs:'0',
+  a_exterminator:'0', a_cleaning:'0', a_turnover:'0',
+  a_advertising:'0', a_landscape:'0', a_admin:'0',
+  a_office:'0', a_misc_expense:'0',
   // §11 Below-the-line
-  a_cap_reserve:'400', a_commissions:'0', a_renovations_yr1:'0',
+  a_cap_reserve:'0', a_commissions:'0', a_renovations_yr1:'0',
   // §11B Leasing costs
   a_ti_new_psf:'0', a_ti_renewal_psf:'0', a_commission_new_pct:'5.0', a_commission_renewal_pct:'2.5',
   a_renewal_probability_default:'70', a_lease_term_years:'5',
@@ -1473,6 +1480,29 @@ function toggleRefiEvent(n) {
 }
 
 function markChanged() { setSaveStatus('unsaved'); }
+
+function updateOriginationFee() {
+  var purchasePrice = parseFloat((document.getElementById('f_purchase_price') || document.getElementById('a_purchase_price') || {}).value || '0') || 0;
+  var ltv = parseFloat((document.getElementById('a_ltv_pct') || document.getElementById('a_ltv') || {}).value || '70') || 70;
+  var hardCosts = parseFloat((document.getElementById('a_hard_costs') || document.getElementById('f_reno_cost') || {}).value || '0') || 0;
+  var totalProjectCost = purchasePrice + hardCosts;
+  var loanAmount = totalProjectCost * (ltv / 100);
+  var origPct = parseFloat((document.getElementById('a_origination_fee_pct') || {}).value || '1.0') || 1.0;
+  var dollarAmount = loanAmount * (origPct / 100);
+  var el = document.getElementById('a_mortgage_fees_computed');
+  if (el) {
+    el.value = dollarAmount > 0
+      ? '$' + dollarAmount.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})
+      : '$0';
+  }
+}
+document.addEventListener('DOMContentLoaded', function(){
+  ['f_purchase_price','a_purchase_price','a_ltv_pct','a_ltv','a_hard_costs','f_reno_cost','a_origination_fee_pct'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateOriginationFee);
+  });
+  updateOriginationFee();
+});
 function setSaveStatus(state) {
   const el = document.getElementById('save-status');
   if(!el) return;
@@ -1603,7 +1633,7 @@ function openModal() {
     document.getElementById('f_description').scrollIntoView({behavior:'smooth',block:'center'});
     return;
   }
-  const acqFee = document.getElementById('a_acq_fee_fixed')?.value || '25000';
+  const acqFee = document.getElementById('a_acq_fee_fixed')?.value || '0';
   const dispFee = document.getElementById('a_disp_fee')?.value || '2.00';
   const ltv  = document.getElementById('a_ltv_pct')?.value || '—';
   const rate = document.getElementById('a_interest_rate')?.value || '—';
@@ -1784,7 +1814,6 @@ async function submitRun() {
       a_geotech:              _num('a_geotech'),
       a_acq_fee_fixed:        _num('a_acq_fee_fixed'),
       a_mortgage_carry:       _num('a_mortgage_carry'),
-      a_mortgage_fees:        _num('a_mortgage_fees'),
       a_mezz_interest:        _num('a_mezz_interest'),
       a_working_capital:      _num('a_working_capital'),
       a_marketing:            _num('a_marketing'),
@@ -1805,7 +1834,7 @@ async function submitRun() {
       a_interest_rate:        _num('a_interest_rate'),
       a_amort_years:          _num('a_amort_years'),
       a_loan_term:            _num('a_loan_term'),
-      a_origination_fee:      _num('a_origination_fee'),
+      a_origination_fee_pct:  _num('a_origination_fee_pct'),
       a_io_period:            _num('a_io_period'),
       a_refi1_on:             _chk('a_refi1_on'),
       a_refi1_year:           _num('a_refi1_year'),

@@ -358,14 +358,16 @@ def _backfill_expenses(assumptions: FinancialAssumptions, extracted: ExtractedDo
         if not assume_field:
             continue
         current = getattr(assumptions, assume_field, None)
-        if not _is_blank(current):
-            continue  # user already set
+        # Treat 0.0 as "not set" for expenses — allow extraction to fill
+        if current is not None and current != 0.0 and not _is_blank(current):
+            continue  # user explicitly set a non-zero value
         if _is_blank(amount):
             continue
         try:
             setattr(assumptions, assume_field, float(amount))
             provenance[assume_field] = f"t12:{t12_key}"
-            logger.info("Backfilled expense %s from T-12 line '%s'", assume_field, t12_key)
+            logger.info("Backfilled expense %s = $%.2f from T-12 line '%s'",
+                        assume_field, float(amount), t12_key)
         except (ValueError, TypeError):
             pass
 

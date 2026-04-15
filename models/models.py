@@ -295,8 +295,8 @@ class FinancialAssumptions(BaseModel):
 
     # §6–8 Refinancing events — List[RefiEvent], max 3
     refi_events: List[RefiEvent] = Field(default_factory=lambda: [
-        RefiEvent(active=False, year=5,  appraised_value=3200000, cap_rate=0.07, ltv=0.70, rate=0.060, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=25000),
-        RefiEvent(active=False, year=8,  appraised_value=3800000, cap_rate=0.07, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=25000),
+        RefiEvent(active=False, year=5,  appraised_value=3200000, cap_rate=0.07, ltv=0.70, rate=0.060, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=0),
+        RefiEvent(active=False, year=8,  appraised_value=3800000, cap_rate=0.07, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=0),
         RefiEvent(active=False, year=0,  appraised_value=0,       cap_rate=0.07, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.00, closing_costs=0),
     ])
 
