@@ -366,6 +366,24 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
   <div class="topbar">
     <div class="topbar-title" id="topbar-title">New Underwrite</div>
     <div class="topbar-badge" id="topbar-badge">Input Required</div>
+    <button onclick="logOut()" style="
+      margin-left:auto;
+      background: transparent;
+      border: 1px solid #4A3728;
+      border-radius: 6px;
+      color: #8B7355;
+      font-family: 'Century Gothic', sans-serif;
+      font-size: 12px;
+      letter-spacing: 1px;
+      padding: 6px 14px;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;"
+      onmouseover="this.style.color='#C4A882';
+                   this.style.borderColor='#8B7355'"
+      onmouseout="this.style.color='#8B7355';
+                  this.style.borderColor='#4A3728'">
+      SIGN OUT
+    </button>
   </div>
 
   <div class="screens">
@@ -494,9 +512,10 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
     <!-- SCREEN 4 — DEAL ARCHIVE -->
     <div class="screen" id="screen-archive">
       <div class="step-label">Deal Archive</div>
-      <div class="deal-list">
-        <div class="deal-row"><div class="deal-dot complete"></div><div><div class="deal-name">5140 Germantown Ave — Philadelphia, PA</div><div class="deal-meta">Mixed-Use · Value-Add · Analyzed March 31, 2026</div></div><div class="deal-irr">17.8% IRR</div><div class="deal-status complete">Complete</div></div>
-        <div class="deal-row"><div class="deal-dot progress"></div><div><div class="deal-name">722 Sandy Street — Norristown, PA</div><div class="deal-meta">Multifamily · Ground-Up · Analyzed March 28, 2026</div></div><div class="deal-irr">—</div><div class="deal-status progress">In Progress</div></div>
+      <div class="deal-list" id="deal-list-container">
+        <div style="padding:40px;text-align:center;color:var(--muted);font-size:13px">
+          Loading your deal archive&hellip;
+        </div>
       </div>
     </div>
 
@@ -765,6 +784,22 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
           <div class="assum-row">
             <div><div class="assum-row-label">Lease-Up Period (Months)</div><div class="assum-row-desc">Months from CO/delivery to stabilized occupancy. Drives pre-stabilization vacancy.</div></div>
             <div class="field"><label>Lease-Up (Mo)</label><input class="fi" type="text" id="a_leaseup_months" value="0" oninput="markChanged()"><span class="field-note">Value-add: typically 6&ndash;18 mo</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Renovation Tier</div><div class="assum-row-desc">Scope of physical work driving the quality-adjusted market rent. Light=90% FMR, Heavy=100% FMR, New=115% FMR.</div></div>
+            <div class="field"><label>Tier</label><select class="fi" id="a_renovation_tier" oninput="markChanged()">
+              <option value="light_cosmetic">Light Cosmetic</option>
+              <option value="heavy_rehab">Heavy Rehab</option>
+              <option value="new_construction">New Construction</option>
+            </select><span class="field-note">Drives HUD FMR multiplier at stabilization</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Per-Unit Lease-Up (Months)</div><div class="assum-row-desc">Months to re-lease a renovated unit after the renovation downtime completes. Default 1.</div></div>
+            <div class="field"><label>Lease-Up / Unit (Mo)</label><input class="fi" type="number" id="a_lease_up_months" value="1" min="1" max="12" step="1" oninput="markChanged()"><span class="field-note">Separate from project lease-up above</span></div>
+          </div>
+          <div class="assum-row">
+            <div><div class="assum-row-label">Est. Quality-Adjusted Market Rent</div><div class="assum-row-desc">Auto-computed from HUD FMR × renovation tier multiplier after submission. Populated from server logs.</div></div>
+            <div class="field"><label>Computed ($/mo)</label><input class="fi" type="text" id="computed_market_rent_display" value="Computed after submission" readonly style="background:#f4f0e8;color:var(--muted)"><span class="field-note">Read-only &mdash; derived server-side</span></div>
           </div>
 
           <div class="assum-row-label" style="margin-top:18px;margin-bottom:10px;font-weight:600;border-top:1px solid var(--rule);padding-top:14px">Fixed Operating Expenses &mdash; Year 1</div>
@@ -1252,6 +1287,8 @@ const DEFAULTS = {
   a_ti_new_psf:'0', a_ti_renewal_psf:'0', a_commission_new_pct:'5.0', a_commission_renewal_pct:'2.5',
   a_renewal_probability_default:'70', a_lease_term_years:'5',
   a_construction_months:'0', a_draw_start_lag:'1', a_leaseup_months:'0',
+  // §11A-R Renovation scope (HUD-FMR multiplier driver)
+  a_renovation_tier:'light_cosmetic', a_lease_up_months:'1',
   // §12 Exit
   a_exit_cap_rate:'7.00', a_disp_fee:'2.00',
   // §13 Waterfall / Partnership
@@ -1324,8 +1361,7 @@ function updateToggleLbl(id) {
 
 // ── ASSUMPTIONS LOAD / SAVE / RESET ──────────────────────────────────────
 
-function loadAssumptions() {
-  const saved = JSON.parse(localStorage.getItem('fp_assumptions') || '{}');
+function _applyAssumptions(saved, ht, savedSec) {
   Object.keys(DEFAULTS).forEach(k => {
     const el = document.getElementById(k);
     if (!el) return;
@@ -1347,7 +1383,6 @@ function loadAssumptions() {
     if(fields) fields.classList.toggle('refi-collapsed', !isOn);
   });
   // Hurdle types (5 tiers — Tier 5 is "Above T4" residual, no hurdle type needed but kept for parity)
-  const ht = JSON.parse(localStorage.getItem('fp_hurdle_types') || '{}');
   [1,2,3,4,5].forEach(n => {
     const type = ht['t'+n] || 'irr';
     const btns = document.querySelectorAll('#ht'+n+' .ht-btn');
@@ -1358,15 +1393,40 @@ function loadAssumptions() {
     if(hu) hu.textContent = type==='irr' ? '% IRR' : '× EM';
   });
   // Assumptions-screen section defaults
-  const savedSec = JSON.parse(localStorage.getItem('fp_sections') || '{}');
   REPORT_SECTIONS.forEach(s => {
     const el = document.getElementById('toggle_'+s.id);
     if(el) el.checked = savedSec[s.id] !== undefined ? savedSec[s.id] : s.on;
   });
+}
+
+async function loadAssumptions() {
+  // Start from localStorage so fields paint instantly even if the server is slow.
+  let saved    = JSON.parse(localStorage.getItem('fp_assumptions')  || '{}');
+  let ht       = JSON.parse(localStorage.getItem('fp_hurdle_types') || '{}');
+  let savedSec = JSON.parse(localStorage.getItem('fp_sections')     || '{}');
+  _applyAssumptions(saved, ht, savedSec);
+
+  // Then overlay the server copy (per-user account state). If present, it wins.
+  try {
+    const resp = await fetch('/api/assumptions', {credentials: 'include'});
+    if (resp.ok) {
+      const server = await resp.json();
+      if (server && typeof server === 'object' && server.assumptions) {
+        saved    = server.assumptions || saved;
+        ht       = server.hurdle_types || ht;
+        savedSec = server.sections     || savedSec;
+        localStorage.setItem('fp_assumptions',  JSON.stringify(saved));
+        localStorage.setItem('fp_hurdle_types', JSON.stringify(ht));
+        localStorage.setItem('fp_sections',     JSON.stringify(savedSec));
+        _applyAssumptions(saved, ht, savedSec);
+      }
+    }
+  } catch (err) { /* offline/unauthenticated — keep localStorage values */ }
+
   setSaveStatus('saved');
 }
 
-function saveAssumptions() {
+async function saveAssumptions() {
   const data = {};
   Object.keys(DEFAULTS).forEach(k => {
     const el = document.getElementById(k);
@@ -1374,14 +1434,12 @@ function saveAssumptions() {
     data[k] = el.type === 'checkbox' ? el.checked : el.value;
   });
   [1,2,3].forEach(n => { const cb=document.getElementById('a_refi'+n+'_on'); if(cb) data['a_refi'+n+'_on']=cb.checked; });
-  localStorage.setItem('fp_assumptions', JSON.stringify(data));
   // Hurdle types (5 tiers)
   const ht = {};
   [1,2,3,4,5].forEach(n => {
     const btns = document.querySelectorAll('#ht'+n+' .ht-btn');
     ht['t'+n] = (btns[1] && btns[1].classList.contains('active')) ? 'em' : 'irr';
   });
-  localStorage.setItem('fp_hurdle_types', JSON.stringify(ht));
   // Section defaults
   const secs = {};
   REPORT_SECTIONS.forEach(s => {
@@ -1389,8 +1447,23 @@ function saveAssumptions() {
     const el = document.getElementById('toggle_'+s.id);
     if(el) secs[s.id] = el.checked;
   });
-  localStorage.setItem('fp_sections', JSON.stringify(secs));
-  setSaveStatus('saved');
+
+  localStorage.setItem('fp_assumptions',  JSON.stringify(data));
+  localStorage.setItem('fp_hurdle_types', JSON.stringify(ht));
+  localStorage.setItem('fp_sections',     JSON.stringify(secs));
+
+  try {
+    const resp = await fetch('/api/assumptions', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({assumptions: data, hurdle_types: ht, sections: secs}),
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    setSaveStatus('saved');
+  } catch (err) {
+    setSaveStatus('offline');
+  }
 }
 
 function resetAssumptions() {
@@ -1496,8 +1569,9 @@ document.addEventListener('DOMContentLoaded', function(){
 function setSaveStatus(state) {
   const el = document.getElementById('save-status');
   if(!el) return;
-  if(state==='saved') { el.textContent='✓ All changes saved'; el.className='save-status saved'; }
-  else { el.textContent='Unsaved changes'; el.className='save-status'; }
+  if(state==='saved')        { el.textContent='✓ All changes saved';               el.className='save-status saved'; }
+  else if(state==='offline') { el.textContent='Saved locally — server unavailable'; el.className='save-status'; }
+  else                       { el.textContent='Unsaved changes';                    el.className='save-status'; }
 }
 
 // SCREEN NAVIGATION
@@ -1507,7 +1581,7 @@ const SCREEN_META = {
   archive:     ['Deal Archive',     'History'],
   assumptions: ['Assumptions',      'Settings'],
 };
-const SCREEN_ORDER = ['new','archive','assumptions'];
+const SCREEN_ORDER = ['new','assumptions','archive'];
 
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
@@ -1519,6 +1593,67 @@ function showScreen(id) {
   document.getElementById('topbar-title').textContent = SCREEN_META[id][0];
   document.getElementById('topbar-badge').textContent = SCREEN_META[id][1];
   document.getElementById('submit-bar').style.display = id==='new'?'flex':'none';
+  if (id === 'archive') renderArchive();
+}
+
+// ── DEAL ARCHIVE (per-user, server-backed) ──────────────────────────────
+function _escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, ch => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]
+  ));
+}
+
+function _strategyLabel(s) {
+  return ({
+    stabilized_hold: 'Stabilized Hold',
+    value_add:       'Value-Add',
+    opportunistic:   'Opportunistic',
+  })[s] || s || '';
+}
+
+async function renderArchive() {
+  const c = document.getElementById('deal-list-container');
+  if (!c) return;
+  try {
+    const resp = await fetch('/api/deals', {credentials: 'include'});
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const deals = await resp.json();
+    if (!Array.isArray(deals) || deals.length === 0) {
+      c.innerHTML = `<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px">
+        No deals yet. Run an underwriting analysis from the New Underwrite screen — completed deals will appear here.
+      </div>`;
+      return;
+    }
+    c.innerHTML = deals.map(d => {
+      const irr = (typeof d.lp_irr === 'number')
+        ? (d.lp_irr * 100).toFixed(1) + '% IRR'
+        : '—';
+      let dateLbl = '';
+      if (d.analyzed_date) {
+        const dt = new Date(d.analyzed_date);
+        if (!isNaN(dt)) dateLbl = dt.toLocaleDateString('en-US',
+          {year:'numeric', month:'long', day:'numeric'});
+      }
+      const statusKey = d.status === 'complete' ? 'complete' : 'progress';
+      const statusLbl = statusKey === 'complete' ? 'Complete' : 'In Progress';
+      const meta = [d.asset_type, _strategyLabel(d.strategy),
+                    dateLbl ? 'Analyzed ' + dateLbl : '']
+                   .filter(Boolean).join(' · ');
+      return `<div class="deal-row">
+        <div class="deal-dot ${statusKey}"></div>
+        <div>
+          <div class="deal-name">${_escapeHtml(d.deal_name || d.address || 'Untitled')}</div>
+          <div class="deal-meta">${_escapeHtml(meta)}</div>
+        </div>
+        <div class="deal-irr">${_escapeHtml(irr)}</div>
+        <div class="deal-status ${statusKey}">${statusLbl}</div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    c.innerHTML = `<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px">
+      Unable to load deal archive. Please refresh the page.
+    </div>`;
+  }
 }
 
 function toggleCard(head) {
@@ -1894,6 +2029,8 @@ async function submitRun() {
       a_construction_months:  _num('a_construction_months'),
       a_draw_start_lag:       _num('a_draw_start_lag'),
       a_leaseup_months:       _num('a_leaseup_months'),
+      a_renovation_tier:      document.getElementById('a_renovation_tier')?.value || 'light_cosmetic',
+      a_lease_up_months:      _num('a_lease_up_months'),
       a_exit_cap_rate:        _num('a_exit_cap_rate'),
       a_disp_fee:             _num('a_disp_fee'),
       a_gp_equity_pct:        _num('a_gp_equity_pct'),
@@ -2238,6 +2375,11 @@ document.addEventListener('DOMContentLoaded', () => {
         function removeCommRow(btn) {
           btn.closest('.comm-rr-row').remove();
           updateGPRTotals();
+        }
+
+        async function logOut() {
+          await fetch('/auth/logout', { method: 'POST' });
+          window.location.href = '/login';
         }
 
       </script>

@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DealDesk — Login</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Century Gothic', 'Futura', sans-serif;
+    background: #1a1210;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .card {
+    background: #2C1F14;
+    border: 1px solid #4A3728;
+    border-radius: 16px;
+    width: 100%;
+    max-width: 440px;
+    overflow: hidden;
+  }
+
+  .card-header {
+    background: #2C1F14;
+    padding: 36px 40px 28px;
+    border-bottom: 1px solid #4A6E50;
+  }
+
+  .logo-mark {
+    width: 40px;
+    height: 40px;
+    background: #4A6E50;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 20px;
+  }
+
+  .logo-mark span {
+    color: #F5EFE4;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+
+  .brand-name {
+    font-size: 24px;
+    font-weight: 700;
+    color: #F5EFE4;
+    letter-spacing: 2px;
+  }
+
+  .brand-sub {
+    font-size: 11px;
+    color: #7A9E7E;
+    letter-spacing: 3px;
+    margin-top: 4px;
+  }
+
+  .card-body { padding: 36px 40px 40px; }
+
+  .step-label {
+    font-size: 13px;
+    color: #C4A882;
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+  }
+
+  .step-desc {
+    font-size: 12px;
+    color: #8B7355;
+    margin-bottom: 24px;
+    line-height: 1.6;
+  }
+
+  .input-group { margin-bottom: 16px; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    color: #C4A882;
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
+  }
+
+  input[type="email"],
+  input[type="text"] {
+    width: 100%;
+    background: #1a1210;
+    border: 1px solid #4A3728;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 15px;
+    color: #F5EFE4;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  input[type="email"]:focus,
+  input[type="text"]:focus { border-color: #4A6E50; }
+
+  input::placeholder { color: #5C3D26; }
+
+  input.otp-input {
+    font-size: 28px;
+    letter-spacing: 12px;
+    text-align: center;
+    font-weight: 700;
+  }
+
+  .btn {
+    width: 100%;
+    background: #4A6E50;
+    color: #F5EFE4;
+    border: none;
+    border-radius: 8px;
+    padding: 14px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-top: 8px;
+  }
+
+  .btn:hover { background: #5C8A63; }
+  .btn:disabled {
+    background: #3d5a42;
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+
+  .btn-ghost {
+    width: 100%;
+    background: transparent;
+    color: #8B7355;
+    border: 1px solid #4A3728;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    margin-top: 10px;
+    transition: color 0.2s, border-color 0.2s;
+  }
+
+  .btn-ghost:hover {
+    color: #C4A882;
+    border-color: #8B7355;
+  }
+
+  .error-msg {
+    background: rgba(139, 32, 32, 0.2);
+    border: 1px solid #8B2020;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: #e07070;
+    margin-bottom: 16px;
+    display: none;
+  }
+
+  .success-msg {
+    background: rgba(74, 110, 80, 0.2);
+    border: 1px solid #4A6E50;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: #B2C9B4;
+    margin-bottom: 16px;
+    display: none;
+  }
+
+  .remember-row {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    margin-top: 16px;
+    margin-bottom: 4px;
+  }
+
+  .remember-row.visible { display: flex; }
+
+  .remember-row input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    accent-color: #4A6E50;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+
+  .remember-label {
+    font-size: 12px;
+    color: #8B7355;
+    cursor: pointer;
+    letter-spacing: 0.3px;
+    line-height: 1.4;
+  }
+
+  .remember-note {
+    font-size: 11px;
+    color: #5C3D26;
+    margin-top: 4px;
+    display: none;
+    line-height: 1.5;
+  }
+
+  .remember-note.visible { display: block; }
+
+  .card-footer {
+    padding: 16px 40px 20px;
+    border-top: 1px solid #3d2e1e;
+  }
+
+  .footer-text {
+    font-size: 11px;
+    color: #5C3D26;
+    line-height: 1.6;
+  }
+
+  #step-email { display: block; }
+  #step-code  { display: none; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="card-header">
+    <div class="logo-mark"><span>D</span></div>
+    <div class="brand-name">DEALDESK</div>
+    <div class="brand-sub">FREEDMAN PROPERTIES</div>
+  </div>
+
+  <div class="card-body">
+
+    <!-- Step 1: Email entry -->
+    <div id="step-email">
+      <p class="step-label">Access Request</p>
+      <p class="step-desc">Enter your email address. If you are an
+        authorized user, a one-time access code will be sent to you.</p>
+
+      <div id="email-error" class="error-msg"></div>
+      <div id="email-success" class="success-msg"></div>
+
+      <div class="input-group">
+        <label for="email-input">EMAIL ADDRESS</label>
+        <input type="email" id="email-input"
+               placeholder="you@example.com"
+               autocomplete="email" />
+      </div>
+
+      <button class="btn" id="send-btn" onclick="requestCode()">
+        SEND ACCESS CODE
+      </button>
+    </div>
+
+    <!-- Step 2: OTP entry -->
+    <div id="step-code">
+      <p class="step-label">Enter Access Code</p>
+      <p class="step-desc" id="code-desc">
+        A 6-digit code was sent to your email.
+        It expires in 10 minutes.
+      </p>
+
+      <div id="code-error" class="error-msg"></div>
+
+      <div class="input-group">
+        <label for="code-input">ACCESS CODE</label>
+        <input type="text" id="code-input" class="otp-input"
+               maxlength="6" placeholder="——————"
+               autocomplete="one-time-code"
+               inputmode="numeric" />
+      </div>
+
+      <div class="remember-row" id="remember-row">
+        <input type="checkbox" id="remember-me" />
+        <label class="remember-label" for="remember-me">
+          Remember this device
+        </label>
+      </div>
+      <p class="remember-note" id="remember-note">
+        Keeps you logged in for 30 days on this device.
+      </p>
+
+      <button class="btn" id="verify-btn" onclick="verifyCode()">
+        ENTER DEALDESK
+      </button>
+      <button class="btn-ghost" onclick="goBack()">
+        ← Use a different email
+      </button>
+    </div>
+
+  </div>
+
+  <div class="card-footer">
+    <p class="footer-text">
+      Authorized users only &bull; Confidential &bull;
+      Freedman Properties &bull; Narberth, PA
+    </p>
+  </div>
+</div>
+
+<script>
+  let currentEmail = '';
+
+  async function requestCode() {
+    const email = document.getElementById('email-input').value.trim();
+    const errEl = document.getElementById('email-error');
+    const sucEl = document.getElementById('email-success');
+    const btn   = document.getElementById('send-btn');
+
+    errEl.style.display = 'none';
+    sucEl.style.display = 'none';
+
+    if (!email || !email.includes('@')) {
+      errEl.textContent = 'Please enter a valid email address.';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'SENDING...';
+
+    try {
+      const res = await fetch('/auth/request-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        currentEmail = email;
+        document.getElementById('code-desc').textContent =
+          `A 6-digit code was sent to ${email}. `
+          + `It expires in 10 minutes.`;
+
+        // Show Remember Me checkbox only for trusted emails
+        const trusted = data.trusted === true;
+        const rememberRow  = document.getElementById('remember-row');
+        const rememberNote = document.getElementById('remember-note');
+        if (trusted) {
+          rememberRow.classList.add('visible');
+          rememberNote.classList.add('visible');
+        } else {
+          rememberRow.classList.remove('visible');
+          rememberNote.classList.remove('visible');
+          document.getElementById('remember-me').checked = false;
+        }
+
+        document.getElementById('step-email').style.display = 'none';
+        document.getElementById('step-code').style.display  = 'block';
+        setTimeout(() => {
+          document.getElementById('code-input').focus();
+        }, 100);
+      } else {
+        errEl.textContent = data.detail
+          || 'Something went wrong. Please try again.';
+        errEl.style.display = 'block';
+      }
+    } catch (e) {
+      errEl.textContent = 'Network error. Please try again.';
+      errEl.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'SEND ACCESS CODE';
+    }
+  }
+
+  async function verifyCode() {
+    const code  = document.getElementById('code-input').value.trim();
+    const errEl = document.getElementById('code-error');
+    const btn   = document.getElementById('verify-btn');
+
+    errEl.style.display = 'none';
+
+    if (!code || code.length !== 6) {
+      errEl.textContent =
+        'Please enter the 6-digit code from your email.';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'VERIFYING...';
+
+    try {
+      const rememberMe =
+        document.getElementById('remember-me').checked;
+      const res = await fetch('/auth/verify-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: currentEmail,
+          code,
+          remember_me: rememberMe,
+        }),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        btn.textContent = 'ACCESS GRANTED';
+        window.location.href = '/';
+      } else {
+        errEl.textContent = data.detail
+          || 'Invalid or expired code. Please try again.';
+        errEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'ENTER DEALDESK';
+      }
+    } catch (e) {
+      errEl.textContent = 'Network error. Please try again.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'ENTER DEALDESK';
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('email-input')
+      .addEventListener('keydown', e => {
+        if (e.key === 'Enter') requestCode();
+      });
+    document.getElementById('code-input')
+      .addEventListener('keydown', e => {
+        if (e.key === 'Enter') verifyCode();
+      });
+    // Auto-submit when all 6 digits are entered
+    document.getElementById('code-input')
+      .addEventListener('input', e => {
+        if (e.target.value.length === 6) verifyCode();
+      });
+  });
+
+  function goBack() {
+    document.getElementById('code-error').style.display  = 'none';
+    document.getElementById('code-input').value = '';
+    document.getElementById('remember-me').checked = false;
+    document.getElementById('step-code').style.display  = 'none';
+    document.getElementById('step-email').style.display = 'block';
+  }
+</script>
+</body>
+</html>

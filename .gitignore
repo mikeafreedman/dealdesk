@@ -4,6 +4,7 @@ venv/
 # Secrets — NEVER commit
 .streamlit/secrets.toml
 .env
+auth_config.py
 
 # Python compiled files
 __pycache__/
@@ -13,6 +14,9 @@ __pycache__/
 # Generated deal outputs (PDFs, Excel, HTML reports)
 outputs/
 data/output/
+
+# Per-user saved state (assumptions + deal archive)
+user_data/
 
 # Mac system files
 .DS_Store

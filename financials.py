@@ -38,7 +38,10 @@ from config import MODEL_SONNET
 
 def _get_anthropic_api_key():
     return os.environ.get("ANTHROPIC_API_KEY", "") or None
-from models.models import AssetType, DealData, InvestmentStrategy, WaterfallType
+from models.models import (
+    AssetType, DealData, InvestmentStrategy, WaterfallType,
+    RenovationTier, RENOVATION_DOWNTIME_MONTHS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -415,6 +418,115 @@ def _gpr_yr1(deal: DealData) -> float:
 
     logger.warning("GPR: all fallbacks exhausted — returning 0")
     return 0.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3A  RENOVATION-AWARE UNIT CASHFLOW SCHEDULE  (helper — NOT yet wired)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _build_unit_cashflow_schedule(deal: DealData) -> List[Dict]:
+    """Month-by-month rent schedule for every unit, aggregated to annual GPR.
+
+    Each unit follows this sequence (renovation path):
+        [0 … lease_expiry_month):       current_rent
+        [lease_expiry_month … +downtime): 0 (offline)
+        [downtime … +lease_up_months):  0 (leasing up)
+        [stabilized …):                 market_rent, grown by annual_rent_growth
+
+    For ``RenovationTier.NEW_CONSTRUCTION`` every unit contributes $0 for the
+    full construction window (``const_period_months``) and then market rent
+    from completion onward, escalating at ``annual_rent_growth``.
+
+    **Not yet plumbed into the main pro-forma.** The existing pro-forma
+    builder (_build_proforma, line 726) uses a flat Year-1 GPR escalated by
+    ``annual_rent_growth``, combined with a ``stab_factors`` ramp. Wiring
+    this schedule into GPR requires coordinated changes in _build_proforma
+    (line 791), _run_monte_carlo (uses ``bp['gpr_yr1']`` as base at line
+    1489), and the sensitivity matrix builder (also consumes ``gpr_yr1``).
+    Until that integration is reviewed end-to-end, this helper is called
+    from ``run_financials`` purely to log the alternate annual GPR so the
+    delta vs. the flat model is visible in ``server_output.log``.
+
+    Returns one dict per unit with keys:
+        unit_id, curr_rent, mkt_rent, annual_gpr (dict yr→$),
+        lease_expiry_month, reno_start, reno_end, leaseup_end.
+    """
+    a = deal.assumptions
+    tier_val = getattr(a, "renovation_tier",
+                       RenovationTier.LIGHT_COSMETIC.value)
+    if isinstance(tier_val, RenovationTier):
+        tier_val = tier_val.value
+    downtime    = RENOVATION_DOWNTIME_MONTHS.get(tier_val, 2)
+    lease_up    = int(getattr(a, "lease_up_months", 1) or 1)
+    mkt_default = float(getattr(a, "quality_adjusted_market_rent", 0) or 0)
+    rent_growth = float(getattr(a, "annual_rent_growth", 0.03) or 0.03)
+    hold_years  = int(getattr(a, "hold_period", 10) or 10)
+    hold_months = hold_years * 12
+    constr_months = int(getattr(a, "const_period_months", 0) or 0)
+
+    units = (deal.extracted_docs.unit_mix
+             if deal.extracted_docs and deal.extracted_docs.unit_mix
+             else [])
+    is_new_construction = (tier_val == RenovationTier.NEW_CONSTRUCTION.value)
+
+    schedules: List[Dict] = []
+    for u in units:
+        curr_rent = float(u.get("monthly_rent") or 0)
+        mkt       = float(u.get("market_rent") or mkt_default or 0)
+
+        # lease_expiry_year is a hold-year integer (1-based, 0 = unknown).
+        # Translate to month-offset; fall back to construction end month for
+        # new construction or if the lease is already expired / unknown.
+        try:
+            expiry_yr = int(u.get("lease_expiry_year") or 0)
+        except (TypeError, ValueError):
+            expiry_yr = 0
+        if expiry_yr > 0:
+            lease_expiry_month = expiry_yr * 12
+        else:
+            lease_expiry_month = max(constr_months, 0)
+
+        reno_start  = lease_expiry_month
+        reno_end    = reno_start + downtime
+        leaseup_end = reno_end + lease_up
+
+        monthly: List[float] = []
+        for m in range(hold_months):
+            if is_new_construction:
+                if m < constr_months:
+                    monthly.append(0.0)
+                else:
+                    yrs_stable = (m - constr_months) / 12.0
+                    monthly.append(mkt * ((1 + rent_growth) ** yrs_stable))
+            else:
+                if m < reno_start:
+                    monthly.append(curr_rent)
+                elif m < leaseup_end:
+                    monthly.append(0.0)
+                else:
+                    yrs_stable = (m - leaseup_end) / 12.0
+                    monthly.append(mkt * ((1 + rent_growth) ** yrs_stable))
+
+        annual_gpr: Dict[int, float] = {}
+        for yr in range(1, hold_years + 1):
+            start = (yr - 1) * 12
+            end   = yr * 12
+            annual_gpr[yr] = sum(monthly[start:end])
+
+        count = int(u.get("count") or 1)
+        schedules.append({
+            "unit_id":            u.get("unit_id") or u.get("unit_number", ""),
+            "count":              count,
+            "curr_rent":          curr_rent,
+            "mkt_rent":           mkt,
+            "annual_gpr":         {k: v * count for k, v in annual_gpr.items()},
+            "lease_expiry_month": lease_expiry_month,
+            "reno_start":         reno_start,
+            "reno_end":           reno_end,
+            "leaseup_end":        leaseup_end,
+        })
+
+    return schedules
 
 
 def _year_income(gpr_yr1: float, year: int, a) -> Tuple[float, float]:
@@ -1896,6 +2008,38 @@ def run_financials(deal: DealData) -> DealData:
         # ── GPR — always store regardless of strategy ─────────────────
         fo.gross_potential_rent = _gpr_yr1(deal)
         logger.info(f"FINANCIALS GPR computed: ${fo.gross_potential_rent:,.0f}")
+
+        # ── Renovation-aware unit schedule (helper-only — NOT yet wired) ─
+        # See _build_unit_cashflow_schedule docstring. This call is purely
+        # diagnostic: it builds the schedule, logs the alternative annual
+        # GPR by year, and raises a WARNING so the gap to the flat-escalation
+        # pro-forma is visible. The actual replacement site is
+        # financials.py:791 (inside _build_proforma where _year_noi is called)
+        # plus the corresponding gpr_yr1 consumers in the sensitivity and
+        # Monte Carlo builders near line 1489.
+        try:
+            _unit_schedules = _build_unit_cashflow_schedule(deal)
+            if _unit_schedules:
+                _hold = a.hold_period or 10
+                _alt_gpr_by_yr = {
+                    yr: sum(s["annual_gpr"].get(yr, 0) for s in _unit_schedules)
+                    for yr in range(1, _hold + 1)
+                }
+                logger.warning(
+                    "UNIT CASHFLOW SCHEDULE built (%d units, tier=%s) — "
+                    "NOT yet wired into pro-forma GPR. "
+                    "Insertion target: financials.py:791 (_build_proforma "
+                    "_year_noi call) + Monte Carlo/sensitivity "
+                    "gpr_yr1 consumers (~line 1489). Alt annual GPR: %s",
+                    len(_unit_schedules),
+                    getattr(a, "renovation_tier", "?"),
+                    {k: f"${v:,.0f}" for k, v in _alt_gpr_by_yr.items()},
+                )
+        except Exception as _unit_exc:
+            logger.warning(
+                "UNIT CASHFLOW SCHEDULE: helper raised %s — diagnostic skipped",
+                _unit_exc,
+            )
 
         # ── Year-1 metrics ────────────────────────────────────────────
         if not is_sale and proforma:

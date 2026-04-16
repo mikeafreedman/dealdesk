@@ -24,7 +24,24 @@ import openpyxl
 from openpyxl.styles import PatternFill, Font
 
 from config import get_excel_template, OUTPUTS_DIR
-from models.models import AssetType, DealData, InvestmentStrategy
+from models.models import (
+    AssetType, DealData, InvestmentStrategy,
+    RENOVATION_TIER_MULTIPLIERS, RENOVATION_DOWNTIME_MONTHS,
+)
+
+
+# DealDesk sage-light fill applied to the Market Rent column so analysts
+# can visually distinguish it from the white (input) Current Rent column.
+SAGE_MARKET_FILL = PatternFill(
+    start_color="B2C9B4", end_color="B2C9B4", fill_type="solid",
+)
+
+# Human-readable labels for renovation_tier enum values.
+_RENO_TIER_LABELS = {
+    "light_cosmetic":   "Light Cosmetic Renovation",
+    "heavy_rehab":      "Heavy Rehab",
+    "new_construction": "New Construction",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +224,12 @@ def _populate_rent_roll(ws, deal: DealData) -> None:
     else:
         _populate_rent_roll_residential(ws, units, deal)
 
+    # ── Renovation summary cells (applies to both residential + commercial).
+    # Rows 27–30 are between residential (ends row 25) and commercial
+    # headers (row 34). Column P = label, Q = value. If these positions
+    # conflict with a template-side label, just relocate this helper.
+    _write_renovation_summary(ws, deal)
+
 
 def _populate_rent_roll_residential(ws, units: list, deal: DealData | None = None) -> None:
     """Write residential unit data to rows 6–25."""
@@ -263,6 +286,8 @@ def _populate_rent_roll_residential(ws, units: list, deal: DealData | None = Non
             ws[f"H{row}"] = _normalise_status(u.get("status"))
             ws[f"I{row}"] = u.get("lease_end")
             ws[f"J{row}"] = u.get("market_rent")
+            # Visual distinction: Market Rent cell = sage-light fill.
+            ws[f"J{row}"].fill = SAGE_MARKET_FILL
             # Leasing fields
             ws[f"K{row}"] = u.get("market_rent_sf") or 0
             ws[f"L{row}"] = u.get("lease_term_years") or 1
@@ -388,6 +413,42 @@ def _normalise_status(raw: str | None) -> str:
     return raw.title()
 
 
+def _write_renovation_summary(ws, deal: DealData) -> None:
+    """Write renovation scope context onto the Rent Roll tab.
+
+    Rows 27–30 of columns P/Q — a zone with no existing writes today.
+    If this collides with a label in the XLSX template, relocate the
+    four (row, col) positions below.
+    """
+    a = deal.assumptions
+    tier_val = getattr(a, "renovation_tier", "light_cosmetic") or "light_cosmetic"
+    multiplier = RENOVATION_TIER_MULTIPLIERS.get(tier_val, 1.0)
+    downtime   = RENOVATION_DOWNTIME_MONTHS.get(tier_val, 2)
+    leaseup    = int(getattr(a, "lease_up_months", 1) or 1)
+    qamr       = a.quality_adjusted_market_rent or 0
+
+    ws["P27"] = "Renovation Tier"
+    ws["Q27"] = _RENO_TIER_LABELS.get(tier_val, "Renovation")
+
+    ws["P28"] = "Quality-Adjusted Market Rent"
+    ws["Q28"] = (
+        f"${qamr:,.0f}/mo (HUD FMR × {multiplier * 100:.0f}%)"
+        if qamr else f"N/A (HUD FMR × {multiplier * 100:.0f}%)"
+    )
+
+    ws["P29"] = "Renovation Downtime"
+    ws["Q29"] = f"{downtime} months per unit"
+
+    ws["P30"] = "Lease-Up Period"
+    ws["Q30"] = f"{leaseup} month(s) per unit"
+
+    logger.info(
+        "EXCEL Rent Roll: wrote renovation summary — tier=%s, QAMR=$%s, "
+        "downtime=%dmo, leaseup=%dmo",
+        tier_val, qamr or "n/a", downtime, leaseup,
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SENSITIVITY TAB POPULATION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -490,6 +551,7 @@ def _build_cell_map(deal: DealData) -> CellMap:
         cells += _section_variable_expenses(a)
         cells += _section_below_the_line(a)
         cells += _section_dev_period(a)
+        cells += _section_renovation(a)
 
     # ── Sections 12–15: Exit, Waterfall, EM, Sensitivity ────────
     #    Row positions shift between Hold and Sale templates.
@@ -1082,6 +1144,24 @@ def _section_dev_period(a) -> CellMap:
         ("C183", a.leaseup_concessions),
         ("C184", a.leaseup_marketing),
         # C187 = Total Carry Costs (formula)
+    ]
+
+
+def _section_renovation(a) -> CellMap:
+    """Section 11A-R: Renovation scope + quality-adjusted market rent.
+
+    Rows 185–187 sit between the dev period block (ends row 184) and the
+    11B leasing cost header at row 188. If the XLSX template places labels
+    or formulas in these rows, relocate this section accordingly.
+    """
+    tier_val = getattr(a, "renovation_tier", "light_cosmetic") or "light_cosmetic"
+    return [
+        ("B185", "Renovation Tier"),
+        ("C185", _RENO_TIER_LABELS.get(tier_val, "Light Cosmetic")),
+        ("B186", "Quality-Adjusted Market Rent ($/mo)"),
+        ("C186", a.quality_adjusted_market_rent or 0),
+        ("B187", "Lease-Up Period (months)"),
+        ("C187", int(getattr(a, "lease_up_months", 1) or 1)),
     ]
 
 

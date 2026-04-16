@@ -1,0 +1,4 @@
+2026-04-16 17:11:20,742  uvicorn.error  INFO  Started server process [17064]
+2026-04-16 17:11:20,743  uvicorn.error  INFO  Waiting for application startup.
+2026-04-16 17:11:20,743  uvicorn.error  INFO  Application startup complete.
+2026-04-16 17:11:20,743  uvicorn.error  INFO  Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)

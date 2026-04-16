@@ -41,6 +41,29 @@ class InvestmentStrategy(str, Enum):
     OPPORTUNISTIC   = "opportunistic"
 
 
+class RenovationTier(str, Enum):
+    """Renovation scope classifier used to compute quality-adjusted market rent."""
+    LIGHT_COSMETIC   = "light_cosmetic"
+    HEAVY_REHAB      = "heavy_rehab"
+    NEW_CONSTRUCTION = "new_construction"
+
+
+# Market-rent multipliers applied to HUD FMR based on renovation scope.
+RENOVATION_TIER_MULTIPLIERS: Dict[str, float] = {
+    RenovationTier.LIGHT_COSMETIC.value:   0.90,
+    RenovationTier.HEAVY_REHAB.value:      1.00,
+    RenovationTier.NEW_CONSTRUCTION.value: 1.15,
+}
+
+# Months a unit is offline during renovation (new construction bypasses —
+# all units come online together at completion).
+RENOVATION_DOWNTIME_MONTHS: Dict[str, int] = {
+    RenovationTier.LIGHT_COSMETIC.value:   2,
+    RenovationTier.HEAVY_REHAB.value:      4,
+    RenovationTier.NEW_CONSTRUCTION.value: 0,
+}
+
+
 class WaterfallType(int, Enum):
     FULL   = 1   # Tiered promote (default)
     SIMPLE = 0   # Single LP/GP split
@@ -142,6 +165,16 @@ class MarketData(BaseModel):
     first_street_wind:    Optional[float] = None
     supply_pipeline_narrative: Optional[str] = None
     debt_market_narrative:     Optional[str] = None   # Prompt 5B output
+    transit_options:    List[dict] = Field(default_factory=list)
+    nearby_amenities:   List[dict] = Field(default_factory=list)
+    # Zillow ZORI (ZIP-level median asking rent) and Census ACS 2022 median
+    # contract rent by bedroom count (B25031). Used by the market-rent engine
+    # as cross-checks against HUD FMR.
+    zori_median_rent:        Optional[float] = None
+    zori_rent_trend:         str             = ""
+    census_median_rent_1br:  Optional[float] = None
+    census_median_rent_2br:  Optional[float] = None
+    census_median_rent_3br:  Optional[float] = None
 
 
 class RentRollUnit(BaseModel):
@@ -271,6 +304,16 @@ class FinancialAssumptions(BaseModel):
     leaseup_vacancy_rate:    float = 0.25
     leaseup_concessions:     float = 0.0
     leaseup_marketing:       float = 0.0
+
+    # §11A-R Renovation scope (drives the quality-adjusted market-rent engine).
+    # Distinct from leaseup_period_months (which is the project-level lease-up
+    # window in months). renovation_tier classifies the scope of the rehab;
+    # lease_up_months is the per-unit re-lease delay after a unit comes back
+    # online post-renovation; quality_adjusted_market_rent is the HUD-FMR
+    # × tier-multiplier value computed by market._compute_market_rents.
+    renovation_tier:               str            = RenovationTier.LIGHT_COSMETIC.value
+    lease_up_months:               int            = 1
+    quality_adjusted_market_rent:  Optional[float] = None
 
     # For Sale / Disposition inputs (for_sale strategy)
     sale_price_arv:               float = 0.0

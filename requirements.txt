@@ -71,3 +71,6 @@ watchdog==6.0.0
 xlsxwriter==3.2.9
 python-dotenv>=1.0.0
 matplotlib>=3.8.0
+python-jose[cryptography]
+passlib
+itsdangerous

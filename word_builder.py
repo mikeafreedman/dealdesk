@@ -1139,6 +1139,308 @@ def _build_context(deal: DealData) -> dict:
     except Exception as e:
         logger.warning("NARRATIVE CTX: failed to refresh context — %s", e)
 
+    # ═══════════════════════════════════════════════════════════════════
+    # EXPLICIT TEMPLATE CONTEXT KEYS — kpi_rows, parcel_a_*, transit_rows,
+    # hbu_content, income_* — built from the real model attribute paths.
+    # ═══════════════════════════════════════════════════════════════════
+    def _safe_fmt(val, fmt="${:,.0f}", fallback="N/A"):
+        try:
+            if val is None:
+                return fallback
+            return fmt.format(float(val))
+        except (TypeError, ValueError):
+            return fallback
+
+    # ── Fix 1: KPI table rows ────────────────────────────────────────
+    kpi_rows = [
+        {"label": "Purchase Price",
+         "value": _safe_fmt(a.purchase_price)},
+        {"label": "Total Project Cost",
+         "value": _safe_fmt(fo.total_uses)},
+        {"label": "Total Equity Required",
+         "value": _safe_fmt(fo.total_equity_required)},
+        {"label": "GP Equity",
+         "value": _safe_fmt(fo.gp_equity)},
+        {"label": "LP Equity",
+         "value": _safe_fmt(fo.lp_equity)},
+        {"label": "Year 1 NOI",
+         "value": _safe_fmt(fo.noi_yr1)},
+        {"label": "Going-In Cap Rate",
+         "value": (_safe_fmt((fo.going_in_cap_rate or 0) * 100, fmt="{:.2f}%")
+                   if fo.going_in_cap_rate is not None else "N/A")},
+        {"label": "Year 1 DSCR",
+         "value": _safe_fmt(fo.dscr_yr1, fmt="{:.2f}x")},
+        {"label": "Year 1 Cash-on-Cash",
+         "value": (_safe_fmt((fo.cash_on_cash_yr1 or 0) * 100, fmt="{:.2f}%")
+                   if fo.cash_on_cash_yr1 is not None else "N/A")},
+        {"label": "Project IRR",
+         "value": (_safe_fmt((fo.project_irr or 0) * 100, fmt="{:.1f}%")
+                   if fo.project_irr is not None else "N/A")},
+        {"label": "LP IRR",
+         "value": (_safe_fmt((fo.lp_irr or 0) * 100, fmt="{:.1f}%")
+                   if fo.lp_irr is not None else "N/A")},
+        {"label": "LP Equity Multiple",
+         "value": _safe_fmt(fo.lp_equity_multiple, fmt="{:.2f}x")},
+        {"label": "Hold Period",
+         "value": (f"{a.hold_period} years" if a.hold_period else "N/A")},
+        {"label": "Exit Cap Rate",
+         "value": (_safe_fmt((a.exit_cap_rate or 0) * 100, fmt="{:.2f}%")
+                   if a.exit_cap_rate else "N/A")},
+    ]
+    ctx["kpi_rows"] = kpi_rows
+    logger.info("KPI_ROWS built: %d rows", len(kpi_rows))
+    for r in kpi_rows:
+        logger.info("  KPI: %s = %s", r["label"], r["value"])
+
+    # ── Fix 6: HBU content alias (real path: deal.zoning.hbu_narrative) ─
+    hbu_text = (
+        getattr(deal.zoning, "hbu_narrative", None)
+        or getattr(deal.zoning, "hbu_conclusion", None)
+        or ""
+    )
+    ctx["hbu_content"] = hbu_text or (
+        "Highest and best use analysis is pending zoning verification. "
+        "This section will be completed once the municipal zoning code "
+        "scrape and buildable-capacity analysis return data for the "
+        "subject parcel."
+    )
+    logger.info("HBU: content length=%d chars", len(ctx["hbu_content"]))
+
+    # ── Fix 4: Parcel A context keys from real ParcelData ────────────
+    pd_ = deal.parcel_data
+
+    def _p_str(v, fallback="N/A"):
+        return str(v) if v not in (None, "") else fallback
+
+    def _p_money(v, fallback="N/A"):
+        try:
+            return f"${float(v):,.0f}" if v not in (None, "") else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    def _p_area(v, fallback="N/A"):
+        try:
+            return f"{float(v):,.0f} SF" if v not in (None, "") else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    ctx["parcel_a_address"]      = deal.address.full_address or "N/A"
+    ctx["parcel_a_account"]      = _p_str(pd_.parcel_id        if pd_ else None)
+    ctx["parcel_a_owner"]        = _p_str(pd_.owner_name       if pd_ else None)
+    ctx["parcel_a_zoning"]       = _p_str(
+        (pd_.zoning_code if pd_ else None) or deal.zoning.zoning_code,
+        "Pending verification",
+    )
+    ctx["parcel_a_land_area"]    = _p_area(pd_.lot_area_sf     if pd_ else None)
+    ctx["parcel_a_building_sf"]  = _p_area(pd_.building_sf     if pd_ else None)
+    ctx["parcel_a_year_built"]   = _p_str(pd_.year_built       if pd_ else None)
+    ctx["parcel_a_assessed"]     = _p_money(pd_.assessed_value if pd_ else None)
+    ctx["parcel_a_taxable_land"] = _p_money(pd_.land_value     if pd_ else None)
+    ctx["parcel_a_taxable_bldg"] = _p_money(pd_.improvement_value if pd_ else None)
+    ctx["parcel_a_stories"]      = "N/A"
+    ctx["parcel_a_category"]     = "N/A"
+
+    # Parcel B is not in the current data model — always blank.
+    ctx["parcel_b_address"]    = ""
+    ctx["parcel_b_account"]    = "N/A"
+    ctx["parcel_b_owner"]      = "N/A"
+    ctx["parcel_b_zoning"]     = "N/A"
+    ctx["parcel_b_land_area"]  = "N/A"
+    ctx["parcel_b_year_built"] = "N/A"
+    ctx["parcel_b_assessed"]   = "N/A"
+
+    ctx["parcel_census_tract"] = deal.address.census_tract or "N/A"
+    ctx["parcel_fips"]         = deal.address.fips_code or "N/A"
+    logger.info("PARCEL A: account=%s owner=%s zoning=%s",
+                ctx["parcel_a_account"],
+                ctx["parcel_a_owner"],
+                ctx["parcel_a_zoning"])
+
+    # ── Fix 7: Transit rows for the template ─────────────────────────
+    transit_list = list(getattr(md, "transit_options", []) or [])
+    ctx["transit_rows"] = [
+        {
+            "mode":        t.get("mode", "Transit"),
+            "route":       t.get("route", "—"),
+            "distance":    t.get("distance", "—"),
+            "destination": t.get("destination", "—"),
+        }
+        for t in transit_list[:8]
+    ]
+    logger.info("TRANSIT ROWS: %d rows", len(ctx["transit_rows"]))
+
+    # ── Fix 8: Income Summary from in-place rent roll ────────────────
+    # fo.gross_potential_rent is $0 during construction; fall back to rent roll.
+    _units = (ext.unit_mix or [])
+    _rr_monthly_total = 0.0
+    for u in _units:
+        try:
+            monthly_raw = u.get("monthly_rent", 0) or u.get("current_rent", 0) or 0
+            monthly = float(monthly_raw)
+            count_raw = u.get("count")
+            count = float(count_raw) if count_raw not in (None, "") else 1.0
+            _rr_monthly_total += monthly * count
+        except (TypeError, ValueError):
+            continue
+    _rr_gpr = _rr_monthly_total * 12.0
+    _fo_gpr = float(fo.gross_potential_rent or 0)
+    _gpr_val = _fo_gpr if _fo_gpr > 0 else _rr_gpr
+    _vac_rate = float(a.vacancy_rate or 0.0)
+    _ltl_rate = float(a.loss_to_lease or 0.0)
+    _other = float((a.cam_reimbursements or 0) + (a.fee_income or 0))
+    _vacancy_loss = _gpr_val * _vac_rate
+    _ltl_loss     = _gpr_val * _ltl_rate
+    _egi_val      = _gpr_val - _vacancy_loss - _ltl_loss + _other
+    ctx["income_gpr"]           = f"${_gpr_val:,.0f}"
+    ctx["income_vacancy_loss"]  = f"(${_vacancy_loss:,.0f})"
+    ctx["income_vacancy_pct"]   = f"({_vac_rate * 100:.1f}%)"
+    ctx["income_loss_to_lease"] = f"(${_ltl_loss:,.0f})"
+    ctx["income_ltl_pct"]       = f"({_ltl_rate * 100:.1f}%)"
+    ctx["income_other"]         = f"${_other:,.0f}"
+    ctx["income_egi"]           = f"${_egi_val:,.0f}"
+    ctx["income_egi_pct"]       = (f"{(_egi_val / _gpr_val * 100):.1f}%"
+                                    if _gpr_val > 0 else "N/A")
+    logger.info("EGI CALC: GPR=%s vacancy=%s ltl=%s EGI=%s (source=%s)",
+                ctx["income_gpr"],
+                ctx["income_vacancy_loss"],
+                ctx["income_loss_to_lease"],
+                ctx["income_egi"],
+                "model" if _fo_gpr > 0 else "rent_roll")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # RENT + SALE COMP CONTEXT (Section 11.1 benchmarks + 11.3 sale comps)
+    # Sourced from deal.comps.rent_comps / deal.comps.sale_comps (Pydantic
+    # RentComp / SaleComp) — NOT from market_data; comps have always lived
+    # on deal.comps. Market-level benchmarks (ZORI/Census/HUD FMR) are read
+    # from market_data directly and prepended to the listings.
+    # ═══════════════════════════════════════════════════════════════════
+    _rent_comps = list(getattr(deal.comps, "rent_comps", None) or [])
+    _sale_comps = list(getattr(deal.comps, "sale_comps", None) or [])
+
+    def _fmt_rent_mo(v):
+        try:
+            return f"${float(v):,.0f}/mo" if v else "N/A"
+        except Exception:
+            return "N/A"
+
+    def _fmt_dist(v):
+        try:
+            return f"{float(v):.2f} mi" if v is not None else "—"
+        except Exception:
+            return "—"
+
+    def _fmt_price(v):
+        try:
+            return f"${float(v):,.0f}" if v else "N/A"
+        except Exception:
+            return "N/A"
+
+    _tier_labels = {
+        "light_cosmetic":   "Light Cosmetic (90% FMR)",
+        "heavy_rehab":      "Heavy Rehab (100% FMR)",
+        "new_construction": "New Construction (115% FMR)",
+    }
+
+    # ── Benchmark rows: ZORI + Census + HUD FMR + quality-adjusted ─
+    _benchmark_rows = []
+    _zori = getattr(md, "zori_median_rent", None)
+    _zori_trend = getattr(md, "zori_rent_trend", "") or ""
+    if _zori:
+        _benchmark_rows.append({
+            "property": f"ZIP {getattr(deal.address,'zip_code','')} Median",
+            "type":     "All Units",
+            "beds":     "—",
+            "rent_mo":  _fmt_rent_mo(_zori),
+            "rent_sf":  "—",
+            "distance": "Zip-Level",
+            "note":     f"Zillow ZORI {_zori_trend}".strip(),
+        })
+    _c2br = getattr(md, "census_median_rent_2br", None)
+    if _c2br:
+        _benchmark_rows.append({
+            "property": "Census Tract Median",
+            "type":     "2BR",
+            "beds":     "2",
+            "rent_mo":  _fmt_rent_mo(_c2br),
+            "rent_sf":  "—",
+            "distance": "Tract-Level",
+            "note":     "Census ACS 2022 B25031",
+        })
+    _fmr_2br_raw = md.fmr_2br
+    if _fmr_2br_raw:
+        _benchmark_rows.append({
+            "property": "HUD Fair Market Rent",
+            "type":     "2BR",
+            "beds":     "2",
+            "rent_mo":  f"${_fmr_2br_raw:,.0f}/mo",
+            "rent_sf":  "—",
+            "distance": "MSA-Level",
+            "note":     "HUD FMR FY2025",
+        })
+    _qamr = getattr(a, "quality_adjusted_market_rent", None)
+    if _qamr:
+        _benchmark_rows.append({
+            "property": "DealDesk Quality-Adjusted Market Rent",
+            "type":     "Subject",
+            "beds":     "—",
+            "rent_mo":  _fmt_rent_mo(_qamr),
+            "rent_sf":  "—",
+            "distance": "Subject Property",
+            "note":     _tier_labels.get(
+                getattr(a, "renovation_tier", "") or "", "Computed"),
+        })
+
+    # ── Active Craigslist listings (source prefix "Craigslist") ──
+    _cl_rows = []
+    for rc in _rent_comps[:6]:
+        src = str(getattr(rc, "source", "") or "")
+        if not src.startswith("Craigslist"):
+            continue
+        _cl_rows.append({
+            "property": (src.replace("Craigslist:", "").strip()[:40]
+                         or "Active Listing"),
+            "type":     rc.unit_type or "—",
+            "beds":     str(rc.beds) if rc.beds else "—",
+            "rent_mo":  _fmt_rent_mo(rc.monthly_rent),
+            "rent_sf":  "—",
+            "distance": _fmt_dist(rc.distance_miles),
+            "note":     "Craigslist Active",
+        })
+
+    ctx["rent_comp_rows"] = _benchmark_rows + _cl_rows
+    ctx["has_rent_comps"] = len(ctx["rent_comp_rows"]) > 0
+    ctx["zori_median_rent"]  = _fmt_rent_mo(_zori)
+    ctx["zori_rent_trend"]   = _zori_trend or "N/A"
+    ctx["census_median_2br"] = _fmt_rent_mo(_c2br)
+    ctx["quality_adjusted_market_rent"] = _fmt_rent_mo(_qamr)
+    ctx["renovation_tier_label"] = _tier_labels.get(
+        getattr(a, "renovation_tier", "") or "", "Renovation")
+    logger.info("RENT COMP ROWS: %d (%d benchmarks + %d listings)",
+                len(ctx["rent_comp_rows"]),
+                len(_benchmark_rows), len(_cl_rows))
+
+    # ── Sale comp rows (Section 11.3) ────────────────────────────
+    _sale_rows = []
+    _sorted_sales = sorted(
+        _sale_comps,
+        key=lambda x: (x.distance_miles if x.distance_miles is not None else 99),
+    )
+    for sc in _sorted_sales[:8]:
+        _sale_rows.append({
+            "address":        sc.address or "N/A",
+            "sale_date":      sc.sale_date or "N/A",
+            "price":          _fmt_price(sc.sale_price),
+            "price_per_sf":   _fmt_price(sc.price_per_sf),
+            "price_per_unit": _fmt_price(sc.price_per_unit),
+            "units":          str(sc.num_units) if sc.num_units else "N/A",
+            "cap_rate":       (f"{sc.cap_rate:.1f}%" if sc.cap_rate else "N/A"),
+            "distance":       _fmt_dist(sc.distance_miles),
+            "source":         sc.source or "N/A",
+        })
+    ctx["sale_comp_rows"] = _sale_rows
+    ctx["has_sale_comps"] = len(_sale_rows) > 0
+    logger.info("SALE COMP ROWS: %d total", len(_sale_rows))
+
     return ctx
 
 
@@ -1344,6 +1646,8 @@ def _populate_exec_summary_kpi(doc, deal: DealData) -> None:
         return
 
     logger.info("EXEC KPI: found KPI table, populating %d rows", len(kpi_rows))
+    logger.info("KPI TABLE: irr=%s lp_irr=%s em=%s",
+                fo.project_irr, fo.lp_irr, fo.lp_equity_multiple)
     populate_table(target, kpi_rows)
 
 
@@ -1647,6 +1951,13 @@ def _build_image_context(deal: DealData, tpl: DocxTemplate) -> dict:
         try:
             ctx["photo_gallery_hero"] = InlineImage(
                 tpl, street_view_path, width=Mm(160), height=Mm(100))
+            # Override the "no photos" note: the street-view hero IS a photo.
+            ctx["photo_gallery_note"] = (
+                "Hero image: Google Street View capture of the property "
+                "frontage on the report date. Replace with site-inspection "
+                "photographs prior to investment committee presentation."
+            )
+            logger.info("PHOTO GALLERY: inserting street view from %s", street_view_path)
             logger.info("STREET VIEW: wired as photo_gallery_hero")
         except Exception as exc:
             logger.warning("STREET VIEW: InlineImage failed — %s", exc)
@@ -1654,6 +1965,28 @@ def _build_image_context(deal: DealData, tpl: DocxTemplate) -> dict:
     else:
         logger.warning("STREET VIEW: path not found or None — %s", street_view_path)
         ctx.setdefault("photo_gallery_hero", None)
+
+    # ── Fix 2: street_view_image context alias (template uses {{ street_view_image }})
+    _sv_candidates = [
+        street_view_path,
+        os.path.join("outputs", f"{deal.deal_id or 'unknown'}_street_view.jpg"),
+    ]
+    ctx["street_view_image"] = None
+    ctx["has_street_view"] = False
+    for _sv in _sv_candidates:
+        if _sv and os.path.exists(_sv):
+            try:
+                ctx["street_view_image"] = InlineImage(
+                    tpl, _sv, width=Mm(140))
+                ctx["has_street_view"] = True
+                logger.info("STREET VIEW: embedded from %s", _sv)
+                break
+            except Exception as exc:
+                logger.warning("STREET VIEW alias: InlineImage failed (%s) — %s",
+                               _sv, exc)
+    if not ctx["has_street_view"]:
+        logger.warning("STREET VIEW: no image available for alias — tried %s",
+                       _sv_candidates)
 
     # Photo/floor plan/supply pipeline chart placeholders — not yet wired
     # but referenced in the template.  Set to None so {%tr if %} removes them.
@@ -1732,46 +2065,69 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
             ["Year Built", str(pd_.year_built) if pd_.year_built else "—", ""],
             ["Zoning", pd_.zoning_code or "—", ""],
         ]
-    _safe_pop(9, parcel_rows)
+    logger.info("PARCEL CTX: parcel_id=%s owner=%s zoning=%s",
+                getattr(pd_, 'parcel_id', None) if pd_ else None,
+                getattr(pd_, 'owner_name', None) if pd_ else None,
+                getattr(z, 'zoning_code', None) if z else None)
+    _pop_by_header(doc, "Parcel ID", parcel_rows, "PARCEL")
 
-    # ── Table 11 (idx=10): Ownership History ──────────────────────
-    _safe_pop(10, [])  # No deed history data on DealData yet
+    # ── Ownership History ─────────────────────────────────────────
+    _pop_by_header(doc, "Date", [], "OWNERSHIP_HIST")
 
-    # ── Table 12 (idx=11): Current Ownership & Entity ─────────────
+    # ── Current Ownership & Entity ────────────────────────────────
     owner_rows = []
     if pd_ and pd_.owner_name:
         owner_rows = [
             ["Owner Name", pd_.owner_name or "Not provided"],
             ["Entity Type", pd_.owner_entity or "Not provided"],
         ]
-    _safe_pop(11, owner_rows)
+    _pop_by_header(doc, "Field", owner_rows, "OWNER_ENTITY")
 
-    # ── Table 13 (idx=12): Liens, Mortgages & Encumbrances ───────
+    # ── Liens, Mortgages & Encumbrances ──────────────────────────
     _safe_pop(12, [["—", "No recorded liens on file", "—", "—", "—", "—"]])
 
-    # ── Table 14 (idx=13): Zoning Standards ───────────────────────
-    zoning_rows = []
-    if z.zoning_code:
-        zoning_rows.append(["Zoning Code", z.zoning_code, "N/A", z.zoning_code_chapter or "Title 14"])
-    if z.max_height_ft:
-        zoning_rows.append(["Max Height", f"{z.max_height_ft:.0f} ft", "—", ""])
-    if z.max_far:
-        zoning_rows.append(["Max FAR", f"{z.max_far:.2f}", "—", ""])
-    if z.max_lot_coverage_pct:
-        zoning_rows.append(["Max Lot Coverage", f"{z.max_lot_coverage_pct:.0%}", "—", ""])
-    if not zoning_rows:
-        zoning_rows = [["Zoning Code", z.zoning_code or "Pending verification", "N/A", "Title 14"]]
-    _safe_pop(13, zoning_rows)
+    # ── Zoning Standards (always 12 rows) ─────────────────────────
+    zoning_rows = [
+        ["Zoning District",    z.zoning_code or "Pending verification",  "—",  z.zoning_code_chapter or "Title 14"],
+        ["District Name",      z.zoning_district or "—",                 "—",  ""],
+        ["Max Height (ft)",    f"{z.max_height_ft:.0f} ft" if z.max_height_ft else "—", "—", ""],
+        ["Max Stories",        str(z.max_stories) if z.max_stories else "—", "—", ""],
+        ["Min Lot Area (SF)",  f"{z.min_lot_area_sf:,.0f}" if z.min_lot_area_sf else "—", "—", ""],
+        ["Max Lot Coverage",   f"{z.max_lot_coverage_pct:.0%}" if z.max_lot_coverage_pct else "—", "—", ""],
+        ["Max FAR",            f"{z.max_far:.2f}" if z.max_far else "—", "—", ""],
+        ["Front Setback (ft)", f"{z.front_setback_ft:.0f}" if z.front_setback_ft else "—", "—", ""],
+        ["Rear Setback (ft)",  f"{z.rear_setback_ft:.0f}" if z.rear_setback_ft else "—", "—", ""],
+        ["Side Setback (ft)",  f"{z.side_setback_ft:.0f}" if z.side_setback_ft else "—", "—", ""],
+        ["Parking Required",   str(z.min_parking_spaces) if z.min_parking_spaces else "—", "—", ""],
+        ["Permitted Uses",     ", ".join(z.permitted_uses) if z.permitted_uses else "—", "—", ""],
+    ]
+    _pop_by_header(doc, "Parameter", zoning_rows, "ZONING")
 
-    # ── Table 16 (idx=15): Transportation & Access ────────────────
-    transit_rows = [["Transit data", "Pending enrichment", "—", "Run market.py with Google Maps API"]]
-    _safe_pop(15, transit_rows)
+    # ── Transportation & Access ───────────────────────────────────
+    transit_data = list(getattr(md, "transit_options", []) or [])
+    transit_rows = [
+        [t.get("mode", "—"), t.get("route", "—"),
+         t.get("distance", "—"), t.get("destination", "—")]
+        for t in transit_data[:8]
+    ]
+    if not transit_rows:
+        transit_rows = [["Transit data", "No nearby transit found", "—", "OSM Overpass"]]
+    logger.info("TRANSIT TABLE: %d rows", len(transit_rows))
+    _pop_by_header(doc, "Mode", transit_rows, "TRANSIT")
 
-    # ── Table 17 (idx=16): Nearby Amenities ───────────────────────
-    amenity_rows = [["Amenity data", "Pending enrichment", "—", "Run market.py with Google Maps API"]]
-    _safe_pop(16, amenity_rows)
+    # ── Nearby Amenities ──────────────────────────────────────────
+    amenity_data = list(getattr(md, "nearby_amenities", []) or [])
+    amenity_rows = [
+        [a_item.get("category", "—"), a_item.get("name", "—"),
+         a_item.get("distance", "—"), a_item.get("notes", "")]
+        for a_item in amenity_data[:15]
+    ]
+    if not amenity_rows:
+        amenity_rows = [["Amenity data", "No nearby amenities found", "—", "OpenStreetMap"]]
+    logger.info("AMENITY TABLE: %d rows", len(amenity_rows))
+    _pop_by_header(doc, "Category", amenity_rows, "AMENITY")
 
-    # ── Table 19 (idx=18): Key Demographic Indicators ─────────────
+    # ── Key Demographic Indicators ────────────────────────────────
     if md.population_1mi or md.median_hh_income_1mi or md.population_3mi:
         demo_rows = [
             ["Population", f"{md.population_1mi:,}" if md.population_1mi else "—",
@@ -1784,14 +2140,13 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
              "—", "—", "BLS / ACS 2022"],
         ]
     else:
-        # Fallback — narrative-consistent values when API data unavailable
         demo_rows = [
             ["Population", "—", "1,593,208", "\u2191 Growing", "2022 ACS 5-Year"],
             ["Median HH Income", "—", "$57,537", "Stable", "2022 ACS 5-Year"],
             ["Renter Occupancy", "—", "47.8%", "High", "2022 ACS 5-Year"],
             ["Unemployment Rate", "—", "8.6%", "Above MSA avg", "BLS / ACS 2022"],
         ]
-    _safe_pop(18, demo_rows)
+    _pop_by_header(doc, "Indicator", demo_rows, "DEMOGRAPHICS")
 
     # ── Table 21 (idx=20): Pipeline Register ──────────────────────
     _safe_pop(20, [["No pipeline data available", "—", "—", "CoStar data required", "—", "—"]])
@@ -1862,30 +2217,36 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
     logger.info("RENT ROLL TABLE: populate call returned")
 
     # ── Table 24 (idx=23): Income Summary ─────────────────────────
-    gpr = fo.gross_potential_rent or 0
-    egi = fo.effective_gross_income or 0
-    vac_rate = a.vacancy_rate or 0.05
-    ltl_rate = a.loss_to_lease or 0.03
+    gpr = fo.gross_potential_rent if fo.gross_potential_rent is not None else 0
+    egi = fo.effective_gross_income
+    vac_rate = a.vacancy_rate if a.vacancy_rate is not None else 0.05
+    ltl_rate = a.loss_to_lease if a.loss_to_lease is not None else 0.03
     vacancy = gpr * vac_rate
     ltl = gpr * ltl_rate
     other_inc = (a.cam_reimbursements or 0) + (a.fee_income or 0)
+    if egi is None and gpr is not None:
+        egi = gpr * (1 - vac_rate) * (1 - ltl_rate) + other_inc
+        logger.info("EGI: fallback computed = $%.0f (gpr=%.0f vac=%.3f ltl=%.3f)",
+                    egi, gpr, vac_rate, ltl_rate)
+    if egi is None:
+        egi = 0
+    logger.info("EGI: $%.0f", egi)
 
     income_summary_rows = [
         ["Gross Potential Rent (GPR)",
-         f"${gpr:,.0f}" if gpr else "N/A", "100.0%",
+         f"${gpr:,.0f}" if gpr is not None else "N/A", "100.0%",
          "In-place rent × 12 months"],
         ["Less: Vacancy & Bad Debt",
-         f"(${abs(vacancy):,.0f})" if vacancy else "N/A",
+         f"(${abs(vacancy):,.0f})" if vacancy is not None else "N/A",
          f"({vac_rate*100:.1f}%)", "Vacancy allowance"],
         ["Less: Loss to Lease",
-         f"(${abs(ltl):,.0f})" if ltl else "N/A",
+         f"(${abs(ltl):,.0f})" if ltl is not None else "N/A",
          f"({ltl_rate*100:.1f}%)", "Market adjustment"],
         ["Fee / Other Income",
-         f"${other_inc:,.0f}" if other_inc else "$0",
-         "", "CAM / fee income"],
+         f"${other_inc:,.0f}", "", "CAM / fee income"],
         ["Effective Gross Income (EGI)",
-         f"${egi:,.0f}" if egi else "N/A",
-         f"{egi/gpr*100:.1f}%" if gpr and egi else "N/A",
+         f"${egi:,.0f}" if egi is not None else "N/A",
+         f"{egi/gpr*100:.1f}%" if gpr else "N/A",
          "After vacancy & concessions"],
     ]
     logger.info("INCOME SUMMARY: built %d rows", len(income_summary_rows))
@@ -2130,19 +2491,77 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
     eq_mult  = fo.project_equity_multiple
     fcf_y1   = (fo.pro_forma_years[0].get("fcf") if fo.pro_forma_years else None)
 
+    # ── Conservative scenario: re-run financials on a deepcopy with
+    #    rent growth -1pp, exit cap +0.5pp, vacancy +2pp ──────────────
+    cons = {}
+    try:
+        import copy as _copy
+        from financials import run_financials as _run_fin
+        cdeal = _copy.deepcopy(deal)
+        ca = cdeal.assumptions
+        ca.annual_rent_growth = max(0.0, (ca.annual_rent_growth or 0.03) - 0.01)
+        ca.exit_cap_rate      = (ca.exit_cap_rate or 0.07) + 0.005
+        ca.vacancy_rate       = (ca.vacancy_rate or 0.05) + 0.02
+        # Reset financial outputs so the engine fully recomputes
+        from models.models import FinancialOutputs as _FO
+        cdeal.financial_outputs = _FO()
+        cdeal = _run_fin(cdeal)
+        cfo = cdeal.financial_outputs
+        cons = {
+            "lp_irr":   cfo.lp_irr,
+            "lp_em":    cfo.lp_equity_multiple,
+            "proj_irr": cfo.project_irr,
+            "dscr_y1":  cfo.dscr_yr1,
+            "gi_cap":   cfo.going_in_cap_rate,
+            "coc_y1":   cfo.cash_on_cash_yr1,
+            "exit_px":  cfo.gross_sale_price,
+            "net_exit": cfo.net_equity_at_exit,
+            "eq_mult":  cfo.project_equity_multiple,
+        }
+        logger.info("SCENARIO: base computed, conservative computed (lp_irr=%s vs %s)",
+                    lp_irr, cfo.lp_irr)
+    except Exception as exc:
+        logger.warning("SCENARIO conservative re-run failed: %s", exc)
+
+    def _c(key, fmt):
+        v = cons.get(key)
+        return fmt(v) if v is not None else "N/A"
+
     scenario_rows = [
-        ["LP IRR",              _safe_pct(lp_irr),   "N/A",  "12.0%"],
-        ["LP Equity Multiple",  _safe_x(lp_em),      "N/A",  "1.8x"],
-        ["Project IRR",         _safe_pct(proj_irr), "N/A",  "—"],
-        ["Year 1 DSCR",         _safe_x(dscr_y1),    "N/A",  "1.20x"],
-        ["Going-In Cap Rate",   _safe_pct(gi_cap, 2),"N/A",  "≥5.5%"],
-        ["Year 1 Cash-on-Cash", _safe_pct(coc_y1),   "N/A",  "≥6.0%"],
-        ["Gross Exit Price",    _safe_dollar(exit_px),"N/A",  "—"],
-        ["Net Equity at Exit",  _safe_dollar(net_exit),"N/A", "—"],
-        ["Equity Multiple",     _safe_x(eq_mult),    "N/A",  "—"],
+        ["LP IRR",              _safe_pct(lp_irr),    _c("lp_irr", _safe_pct),                 "12.0%"],
+        ["LP Equity Multiple",  _safe_x(lp_em),       _c("lp_em", _safe_x),                    "1.8x"],
+        ["Project IRR",         _safe_pct(proj_irr),  _c("proj_irr", _safe_pct),               "—"],
+        ["Year 1 DSCR",         _safe_x(dscr_y1),     _c("dscr_y1", _safe_x),                  "1.20x"],
+        ["Going-In Cap Rate",   _safe_pct(gi_cap, 2), _c("gi_cap", lambda v: _safe_pct(v, 2)), "≥5.5%"],
+        ["Year 1 Cash-on-Cash", _safe_pct(coc_y1),    _c("coc_y1", _safe_pct),                 "≥6.0%"],
+        ["Gross Exit Price",    _safe_dollar(exit_px),_c("exit_px", _safe_dollar),             "—"],
+        ["Net Equity at Exit",  _safe_dollar(net_exit),_c("net_exit", _safe_dollar),           "—"],
+        ["Equity Multiple",     _safe_x(eq_mult),     _c("eq_mult", _safe_x),                  "—"],
     ]
     logger.info("SCENARIO: built %d rows", len(scenario_rows))
-    _pop_by_header(doc, "Metric", scenario_rows, "SCENARIO")
+    # Find the Scenario Comparison table specifically (avoid KPI table which also has "Metric")
+    _scenario_table = None
+    for _st in doc.tables:
+        if not _st.rows:
+            continue
+        _hdr = ' '.join(c.text for c in _st.rows[0].cells).lower()
+        if 'metric' in _hdr and ('scenario' in _hdr or 'base' in _hdr or 'conservative' in _hdr):
+            _scenario_table = _st
+            break
+    if _scenario_table is None:
+        # Fallback: 4-column table with "Metric" in first cell
+        for _st in doc.tables:
+            if not _st.rows:
+                continue
+            _hdr = ' '.join(c.text for c in _st.rows[0].cells).lower()
+            if 'metric' in _hdr and len(_st.rows[0].cells) == 4:
+                _scenario_table = _st
+                break
+    if _scenario_table and scenario_rows:
+        populate_table(_scenario_table, scenario_rows)
+        logger.info("SCENARIO: populated %d rows", len(scenario_rows))
+    else:
+        logger.warning("SCENARIO: could not find Scenario Comparison table")
 
     # ── Table 58 (idx=57): Go/No-Go Assessment ───────────────────
     def _verdict(condition):
@@ -2289,6 +2708,38 @@ def _populate_docx(deal: DealData) -> Path:
         elif val is None:
             logger.warning(f"CTX NONE: {key}")
 
+    # ── Fix 9: master context audit (critical keys) ──────────────────
+    logger.info("=" * 60)
+    logger.info("WORD BUILDER CONTEXT AUDIT — DEAL %s", deal.deal_id)
+    logger.info("=" * 60)
+    _critical_keys = [
+        "kpi_rows", "street_view_image", "has_street_view",
+        "parcel_a_account", "parcel_a_zoning", "parcel_a_owner",
+        "parcel_census_tract", "parcel_fips",
+        "hbu_content", "transit_rows", "income_egi",
+        "income_gpr", "fmr_2br",
+    ]
+    for _k in _critical_keys:
+        _v = ctx.get(_k)
+        if isinstance(_v, list):
+            logger.info("  CTX[%s] = list(%d items)", _k, len(_v))
+        elif _v is None:
+            logger.warning("  CTX[%s] = MISSING/NONE \u2190 FIX NEEDED", _k)
+        else:
+            # IMPORTANT: Do NOT call str() on InlineImage objects —
+            # that triggers _insert_image() before tpl.render() and crashes.
+            # Check type name safely instead.
+            _type_name = type(_v).__name__
+            if _type_name == "InlineImage":
+                logger.info("  CTX[%s] = InlineImage(ready)", _k)
+            else:
+                try:
+                    _repr = str(_v)[:80]
+                except Exception:
+                    _repr = f"<{_type_name}>"
+                logger.info("  CTX[%s] = %s", _k, _repr)
+    logger.info("=" * 60)
+
     try:
         tpl.render(ctx)
     finally:
@@ -2300,6 +2751,21 @@ def _populate_docx(deal: DealData) -> Path:
             except Exception:
                 pass
     _strip_highlight(tpl.docx)
+
+    # ── Fix 3: remove leaked Jinja conditional-comment paragraphs ────
+    _paras_to_remove = []
+    for _para in tpl.docx.paragraphs:
+        _txt = _para.text or ""
+        if ("Conditional block" in _txt
+                or "image_placements.json" in _txt
+                or "renders only when image_type" in _txt):
+            _paras_to_remove.append(_para)
+    for _para in _paras_to_remove:
+        _p = _para._element
+        _p.getparent().remove(_p)
+    if _paras_to_remove:
+        logger.info("FLOOR PLAN: removed %d leaked conditional paragraph(s)",
+                    len(_paras_to_remove))
 
     # ── Populate data tables FIRST against original-template indices ──
     n_tables_before = len(tpl.docx.tables)

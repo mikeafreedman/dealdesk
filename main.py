@@ -8,21 +8,31 @@ Usage:  python main.py
 """
 
 import base64
+import json
 import logging
 import os
+import re
 import sys
 import socket
 import tempfile
 import traceback
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Cookie
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel
+from pydantic import BaseModel as PydanticBaseModel
+from auth import (
+    generate_otp, verify_otp, is_approved, is_trusted,
+    send_otp_email, create_session_token,
+    get_current_user, SESSION_COOKIE,
+)
+from auth_config import REMEMBER_ME_DAYS
 
 from models.models import (
     AssetType,
@@ -72,6 +82,62 @@ STAGES = [
 
 _excel_cache: Dict[str, str] = {}  # deal_id → xlsx file path
 
+# ── Per-user JSON store (assumptions + deals archive) ────────────────────
+
+USER_DATA_DIR = Path(__file__).resolve().parent / "user_data"
+
+
+def _user_file(email: str) -> Path:
+    safe = re.sub(r"[^a-z0-9]+", "_", email.lower()).strip("_") or "user"
+    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return USER_DATA_DIR / f"{safe}.json"
+
+
+def _read_user(email: str) -> Dict[str, Any]:
+    p = _user_file(email)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("USER_STORE: failed to read %s: %s", p, exc)
+        return {}
+
+
+def _write_user(email: str, data: Dict[str, Any]) -> None:
+    _user_file(email).write_text(
+        json.dumps(data, indent=2, default=str), encoding="utf-8"
+    )
+
+
+def _record_deal(email: str, deal: DealData, deal_name: str) -> None:
+    """Append a completed-deal summary to the user's archive."""
+    try:
+        fo = getattr(deal, "financial_outputs", None)
+        record = {
+            "deal_id":       deal.deal_id,
+            "deal_name":     deal_name or deal.address.full_address or "Untitled",
+            "address":       deal.address.full_address,
+            "asset_type":    deal.asset_type.value if deal.asset_type else "",
+            "strategy":      deal.investment_strategy.value if deal.investment_strategy else "",
+            "purchase_price": deal.assumptions.purchase_price,
+            "hold_period":   deal.assumptions.hold_period,
+            "lp_irr":        getattr(fo, "lp_irr", None) if fo else None,
+            "project_irr":   getattr(fo, "project_irr", None) if fo else None,
+            "analyzed_date": datetime.utcnow().isoformat(),
+            "status":        "complete",
+        }
+        user = _read_user(email)
+        deals = user.setdefault("deals", [])
+        # Replace any prior entry for the same deal_id (idempotent re-runs)
+        deals = [d for d in deals if d.get("deal_id") != record["deal_id"]]
+        deals.insert(0, record)
+        user["deals"] = deals
+        _write_user(email, user)
+    except Exception as exc:
+        logger.warning("USER_STORE: failed to record deal for %s: %s", email, exc)
+
+
 # ── FastAPI app ──────────────────────────────────────────────────────────
 
 app = FastAPI(title="DealDesk CRE Underwriting API")
@@ -90,6 +156,16 @@ class UploadedFile(BaseModel):
     name: str
     content_base64: str
     type: str  # "om", "rent_roll", "financials"
+
+
+class OTPRequest(PydanticBaseModel):
+    email: str
+
+
+class OTPVerify(PydanticBaseModel):
+    email: str
+    code: str
+    remember_me: bool = False
 
 
 class UnderwriteRequest(BaseModel):
@@ -294,6 +370,10 @@ class UnderwriteRequest(BaseModel):
     a_draw_start_lag:          Optional[float] = None
     a_leaseup_months:          Optional[float] = None
 
+    # Renovation scope (drives the market-rent engine in market.py)
+    a_renovation_tier:         Optional[str]   = None   # light_cosmetic | heavy_rehab | new_construction
+    a_lease_up_months:         Optional[int]   = None   # per-unit re-lease delay
+
     # Rent roll (from frontend form)
     rent_roll: Optional[List[Dict[str, Any]]] = None
     residential_rent_roll: Optional[List[Dict[str, Any]]] = None
@@ -494,6 +574,10 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         commission_new_pct=float(req.a_commission_new_pct or 5.0) / 100.0,
         commission_renewal_pct=float(req.a_commission_renewal_pct or 2.5) / 100.0,
         lease_term_years=float(req.a_lease_term_years or 5),
+        # Renovation scope — accept the frontend string or fall back to the
+        # model default (light_cosmetic). lease_up_months is per-unit re-lease.
+        renovation_tier=(req.a_renovation_tier or "light_cosmetic"),
+        lease_up_months=int(req.a_lease_up_months or 1),
         # Exit
         exit_cap_rate=req.a_exit_cap_rate / 100.0,
         disposition_costs_pct=req.a_disp_fee / 100.0,
@@ -549,9 +633,81 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
 
 # ── Routes ───────────────────────────────────────────────────────────────
 
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Serve the login page. Redirect to app if already logged in."""
+    user = get_current_user(request)
+    if user:
+        return RedirectResponse(url="/", status_code=302)
+    with open("login.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+
+@app.post("/auth/request-code")
+async def request_code(body: OTPRequest):
+    """Validate email is approved, generate OTP, send it."""
+    email = body.email.strip().lower()
+    if not is_approved(email):
+        raise HTTPException(
+            status_code=403,
+            detail="This email address is not authorized for DealDesk access."
+        )
+    code = generate_otp(email)
+    sent = send_otp_email(email, code)
+    if not sent:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to send access code. Please try again."
+        )
+    return {"message": "Code sent", "trusted": is_trusted(email)}
+
+
+@app.post("/auth/verify-code")
+async def verify_code_route(body: OTPVerify):
+    """Verify OTP and set session cookie."""
+    email = body.email.strip().lower()
+    if not verify_otp(email, body.code):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired code. Please request a new one."
+        )
+    token = create_session_token(email)
+    response = JSONResponse(content={"message": "Authenticated"})
+
+    use_remember_me = body.remember_me and is_trusted(email)
+
+    if use_remember_me:
+        max_age = REMEMBER_ME_DAYS * 24 * 60 * 60
+        logger.info(f"AUTH: Setting 30-day persistent cookie for {email}")
+    else:
+        max_age = None
+        logger.info(f"AUTH: Setting session cookie for {email}")
+
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=max_age,
+    )
+    return response
+
+
+@app.post("/auth/logout")
+async def logout():
+    """Clear session cookie and redirect to login."""
+    response = RedirectResponse(url="/login", status_code=302)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
 @app.get("/")
-async def serve_frontend():
+async def serve_frontend(request: Request):
     """Serve the static HTML frontend."""
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
     html_path = Path(__file__).resolve().parent / "fp_underwriting_FINAL_v7.html"
     if not html_path.exists():
         raise HTTPException(status_code=404, detail="Frontend HTML file not found")
@@ -567,8 +723,11 @@ async def serve_frontend():
 
 
 @app.post("/underwrite")
-async def underwrite(req: UnderwriteRequest):
+async def underwrite(req: UnderwriteRequest, request: Request):
     """Run the full underwriting pipeline and return the PDF report."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         logger.info("Payload f_purchase_price = %s (type: %s)", req.f_purchase_price, type(req.f_purchase_price).__name__)
         logger.info(f"PAYLOAD DEBUG — f_purchase_price: {req.f_purchase_price}, "
@@ -736,6 +895,9 @@ async def underwrite(req: UnderwriteRequest):
         if deal.deal_id and deal.output_xlsx_path:
             _excel_cache[deal.deal_id] = deal.output_xlsx_path
 
+        # Persist deal summary to the signed-in user's archive
+        _record_deal(user, deal, req.f_deal_name)
+
         logger.info("Pipeline finished — PDF: %s | Excel: %s", deal.output_pdf_path, deal.output_xlsx_path)
 
         # Return PDF as file download
@@ -757,9 +919,59 @@ async def underwrite(req: UnderwriteRequest):
         raise HTTPException(status_code=500, detail=traceback.format_exc())
 
 
+@app.get("/api/me")
+async def api_me(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"email": user}
+
+
+@app.get("/api/assumptions")
+async def api_get_assumptions(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return _read_user(user).get("assumptions", {})
+
+
+@app.post("/api/assumptions")
+async def api_save_assumptions(request: Request, body: Dict[str, Any]):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    data = _read_user(user)
+    data["assumptions"] = body
+    _write_user(user, data)
+    return {"message": "Saved"}
+
+
+@app.get("/api/deals")
+async def api_get_deals(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return _read_user(user).get("deals", [])
+
+
+@app.delete("/api/deals/{deal_id}")
+async def api_delete_deal(deal_id: str, request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    data = _read_user(user)
+    before = len(data.get("deals", []))
+    data["deals"] = [d for d in data.get("deals", []) if d.get("deal_id") != deal_id]
+    _write_user(user, data)
+    return {"removed": before - len(data["deals"])}
+
+
 @app.get("/download/excel/{deal_id}")
-async def download_excel(deal_id: str):
+async def download_excel(deal_id: str, request: Request):
     """Return a previously generated Excel file by deal_id."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     xlsx_path = _excel_cache.get(deal_id)
     if not xlsx_path or not Path(xlsx_path).exists():
         raise HTTPException(status_code=404, detail=f"Excel file not found for deal {deal_id}")

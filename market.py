@@ -21,13 +21,18 @@ return None, never crash the pipeline.
 
 from __future__ import annotations
 
+import csv as csv_mod
+import io
 import json
 import logging
+import math
 import os
 import re
+from collections import Counter
 from datetime import datetime
 from io import StringIO
 from typing import Any, Dict, List, Optional
+from xml.etree import ElementTree as ET
 
 import anthropic
 import pandas as pd
@@ -38,7 +43,11 @@ from config import (
     MODEL_SONNET,
     MUNICIPAL_REGISTRY_CSV,
 )
-from models.models import DealData, MarketData, ParcelData, ZoningData
+from models.models import (
+    DealData, MarketData, ParcelData, ZoningData,
+    RentComp, SaleComp,
+    RenovationTier, RENOVATION_TIER_MULTIPLIERS, RENOVATION_DOWNTIME_MONTHS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -478,15 +487,39 @@ def _census_geocode(deal: DealData) -> None:
         return
 
     full = _normalize_address_for_geocoding(full)
-    logger.info("Census Geocoder: geocoding address '%s'", full)
 
-    # Parse address components for the geocoder
-    params = {
-        "address": full,
-        "benchmark": "Public_AR_Current",
-        "vintage": "Current_Current",
-        "format": "json",
-    }
+    # Build multi-part components: strip hyphenated ranges from street number
+    street = (addr.street or "").strip()
+    street = re.sub(r'^(\d+)\s*[-–]\s*\d+\s+', r'\1 ', street)
+    street = re.sub(r'(?i)\b([nsew])\.\b', r'\1', street)
+    street = re.sub(r'(?i)\b(ne|nw|se|sw)\.\b', r'\1', street)
+    city = (addr.city or "").strip()
+    state = (addr.state or "").strip()
+    zip_code = (addr.zip_code or "").strip()
+
+    logger.info("GEOCODE input: street='%s' city='%s' state='%s' zip='%s'",
+                street, city, state, zip_code)
+
+    # Use multi-part query when we have the components, else fall back to single-line
+    if street and city and state:
+        params = {
+            "street": street,
+            "city": city,
+            "state": state,
+            "benchmark": "Public_AR_Current",
+            "vintage": "Current_Current",
+            "format": "json",
+        }
+        if zip_code:
+            params["zip"] = zip_code
+    else:
+        params = {
+            "address": full,
+            "benchmark": "Public_AR_Current",
+            "vintage": "Current_Current",
+            "format": "json",
+        }
+    logger.info("Census Geocoder: geocoding address '%s'", full)
 
     lat = None
     lon = None
@@ -517,6 +550,8 @@ def _census_geocode(deal: DealData) -> None:
         logger.info("Census Geocoder: lat=%.6f, lon=%.6f for '%s'", lat, lon or 0, full)
     if lon is not None:
         addr.longitude = lon
+    if lat is not None and lon is not None:
+        logger.info("GEOCODE result: lat=%.6f lng=%.6f", lat, lon)
     if lat is None or lon is None:
         logger.warning("Census Geocoder: coordinates missing for '%s'", full)
         _geocode_fallback(addr, full)
@@ -784,30 +819,39 @@ _FRED_SERIES = {
 
 
 def _fetch_fred_series(series_id: str) -> Optional[float]:
-    """Fetch the most recent observation for a FRED series (no API key required)."""
+    """Fetch the most recent observation for a FRED series."""
     is_cpi = series_id == "CPIAUCSL"
-    import os
+    api_key = os.environ.get("FRED_API_KEY", "")
+    if not api_key:
+        logger.warning("FRED %s: skipped — FRED_API_KEY not configured", series_id)
+        return None
     params = {
         "series_id": series_id,
         "file_type": "json",
         "sort_order": "desc",
         "limit": 13 if is_cpi else 1,
-        "api_key": os.environ.get("FRED_API_KEY", ""),
+        "api_key": api_key,
     }
     try:
         resp = requests.get(_FRED_BASE, params=params, timeout=_REQUEST_TIMEOUT)
         resp.raise_for_status()
         obs = resp.json().get("observations", [])
         if not obs:
+            logger.warning("FRED %s: failed - no observations returned", series_id)
             return None
 
         if is_cpi:
-            return _cpi_yoy(obs)
+            val = _cpi_yoy(obs)
+            if val is not None:
+                logger.info("FRED %s: %.4f", series_id, val)
+            return val
 
-        val = obs[0].get("value", ".")
-        return _safe_float(val)
+        val = _safe_float(obs[0].get("value", "."))
+        if val is not None:
+            logger.info("FRED %s: %.4f", series_id, val)
+        return val
     except Exception as exc:
-        logger.warning("FRED fetch failed (%s): %s", series_id, exc)
+        logger.warning("FRED %s: failed - %s", series_id, exc)
         return None
 
 
@@ -980,6 +1024,10 @@ def _fetch_hud_fmr(deal: DealData) -> None:
         logger.warning("HUD FMR: could not determine county entity — skipping")
         return
 
+    # HUD expects 5-digit county FIPS suffixed with 99999 (state+county+99999)
+    if len(entity_id) == 5 and entity_id.isdigit():
+        entity_id = entity_id + "99999"
+
     logger.info("HUD FMR: querying entity_id=%s", entity_id)
 
     # Fetch FMR data
@@ -991,7 +1039,12 @@ def _fetch_hud_fmr(deal: DealData) -> None:
         )
         resp.raise_for_status()
         data = resp.json().get("data", {})
-        basicdata = data.get("basicdata", data)
+        # County response: data.basicdata is a list of sub-areas; metro: dict
+        basic = data.get("basicdata", data) if isinstance(data, dict) else {}
+        if isinstance(basic, list):
+            basicdata = basic[0] if basic else {}
+        else:
+            basicdata = basic
 
         md = deal.market_data
         # Map bedroom counts: 0BR=Efficiency, 1BR, 2BR, 3BR, 4BR
@@ -1007,6 +1060,8 @@ def _fetch_hud_fmr(deal: DealData) -> None:
         deal.provenance.field_sources["hud_fmr"] = f"hud_fmr_{datetime.utcnow().strftime('%Y-%m-%d')}"
         logger.info("HUD FMR: studio=%s, 1BR=%s, 2BR=%s, 3BR=%s",
                      md.fmr_studio, md.fmr_1br, md.fmr_2br, md.fmr_3br)
+        if md.fmr_2br is not None:
+            logger.info("HUD FMR 2BR: $%.0f", md.fmr_2br)
     except Exception as exc:
         logger.warning("HUD FMR data fetch failed (entity %s): %s", entity_id, exc)
 
@@ -1015,42 +1070,284 @@ def _fetch_hud_fmr(deal: DealData) -> None:
 # STEP 7 — FEMA FLOOD ZONE
 # ═══════════════════════════════════════════════════════════════════════════
 
-_FEMA_NFHL_URL = "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query"
+_FEMA_ENDPOINTS = [
+    ("hazards-arcgis",
+     "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query"),
+    ("msc-fallback",
+     "https://msc.fema.gov/arcgis/rest/services/NFHL_Prod/NFHLREST_Admin/MapServer/28/query"),
+]
 
 
-def _fetch_fema_flood(deal: DealData) -> None:
-    """Step 7: Query FEMA NFHL for flood zone at the property's lat/lon."""
-    lat = deal.address.latitude
-    lon = deal.address.longitude
-    if lat is None or lon is None:
+def _fetch_fema_flood_zone(deal, lat: float, lng: float) -> Optional[str]:
+    """Query FEMA NFHL for the flood zone at (lat, lng).
+
+    Tries the updated hazards.fema.gov ArcGIS path first, falls back to MSC.
+    Writes results to deal.market_data and returns the zone string (or None).
+    """
+    if lat is None or lng is None:
         logger.warning("FEMA: no lat/lon — skipping flood zone lookup")
-        return
+        return None
 
     params = {
-        "geometry": f"{lon},{lat}",
+        "geometry": f"{lng},{lat}",
         "geometryType": "esriGeometryPoint",
         "inSR": "4326",
         "spatialRel": "esriSpatialRelIntersects",
-        "outFields": "FLD_ZONE,DFIRM_ID",
+        "outFields": "FLD_ZONE,ZONE_SUBTY,SFHA_TF",
         "returnGeometry": "false",
         "f": "json",
     }
-    try:
-        resp = requests.get(_FEMA_NFHL_URL, params=params, timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        features = resp.json().get("features", [])
-        if not features:
-            logger.info("FEMA: no flood zone features at (%.4f, %.4f)", lat, lon)
-            return
 
-        attrs = features[0].get("attributes", {})
-        md = deal.market_data
-        md.fema_flood_zone = attrs.get("FLD_ZONE") or md.fema_flood_zone
-        md.fema_panel_number = attrs.get("DFIRM_ID") or md.fema_panel_number
-        deal.provenance.field_sources["fema_flood"] = f"fema_nfhl_{datetime.utcnow().strftime('%Y-%m-%d')}"
-        logger.info("FEMA: zone=%s, panel=%s", md.fema_flood_zone, md.fema_panel_number)
+    for label, url in _FEMA_ENDPOINTS:
+        try:
+            resp = requests.get(url, params=params, timeout=_REQUEST_TIMEOUT)
+            if resp.status_code == 404:
+                logger.warning("FEMA %s: 404 at %s", label, url)
+                continue
+            resp.raise_for_status()
+            features = resp.json().get("features", [])
+            if not features:
+                logger.info("FEMA %s: no flood zone features at (%.4f, %.4f)",
+                            label, lat, lng)
+                return None
+            attrs = features[0].get("attributes", {}) or {}
+            zone = attrs.get("FLD_ZONE")
+            md = deal.market_data
+            md.fema_flood_zone = zone or md.fema_flood_zone
+            sfha = attrs.get("SFHA_TF")
+            if sfha is not None and hasattr(md, "fema_sfha"):
+                md.fema_sfha = sfha
+            deal.provenance.field_sources["fema_flood"] = (
+                f"fema_{label}_{datetime.utcnow().strftime('%Y-%m-%d')}"
+            )
+            logger.info("FEMA %s: zone=%s, sfha=%s subty=%s",
+                        label, zone, sfha, attrs.get("ZONE_SUBTY"))
+            return zone
+        except Exception as exc:
+            logger.warning("FEMA %s fetch failed (%.4f, %.4f): %s",
+                           label, lat, lng, exc)
+            continue
+
+    logger.warning(
+        "FEMA: all endpoints failed for (%.4f, %.4f) — zone set to 'Not Determined'",
+        lat, lng,
+    )
+    return None
+
+
+def _fetch_fema_flood(deal: DealData) -> None:
+    """Step 7 wrapper: pulls lat/lon from the deal and delegates to the cascade."""
+    _fetch_fema_flood_zone(deal, deal.address.latitude, deal.address.longitude)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TRANSIT & AMENITIES (OSM Overpass + Google Places)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_OVERPASS_MIRRORS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.fr/api/interpreter",
+]
+
+
+def _overpass_post(query: str):
+    """POST an Overpass QL query, trying mirrors in order. Raises on final failure."""
+    last_exc = None
+    for url in _OVERPASS_MIRRORS:
+        try:
+            r = requests.post(
+                url, data={"data": query},
+                headers={"User-Agent": "DealDesk-CRE/1.0"},
+                timeout=_REQUEST_TIMEOUT,
+            )
+            if r.status_code == 200:
+                return r
+            last_exc = Exception(f"{r.status_code} from {url}")
+        except Exception as exc:
+            last_exc = exc
+            continue
+    raise last_exc or Exception("all Overpass mirrors failed")
+
+
+def _haversine_miles(lat1, lon1, lat2, lon2) -> float:
+    from math import radians, sin, cos, asin, sqrt
+    R = 3958.756
+    lat1, lat2 = radians(lat1), radians(lat2)
+    dlat = lat2 - lat1
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+    return 2 * R * asin(sqrt(a))
+
+
+def _fetch_transit_and_amenities(deal: DealData) -> None:
+    """Populate market_data.transit_options (OSM Overpass) and
+    market_data.nearby_amenities (Google Places Nearby Search)."""
+    addr = deal.address
+    lat, lng = addr.latitude, addr.longitude
+    if not lat or not lng or lat == 0.0:
+        logger.warning("TRANSIT/AMENITY: skipping — no geocoordinates")
+        return
+
+    md = deal.market_data
+
+    # ── Transit via OSM Overpass (no key) ────────────────────────────
+    try:
+        # Broader SEPTA/transit coverage — rail, subway entrances, tram,
+        # stop_position, bus stops, bus stations. 800m radius for everything
+        # so stations that sit just outside a tight radius (e.g. subway
+        # entrance set back from street) are still captured.
+        radius = 800
+        q = (
+            "[out:json][timeout:25];"
+            "("
+            f"node[\"railway\"=\"station\"](around:{radius},{lat},{lng});"
+            f"node[\"railway\"=\"subway_entrance\"](around:{radius},{lat},{lng});"
+            f"node[\"railway\"=\"tram_stop\"](around:{radius},{lat},{lng});"
+            f"node[\"public_transport\"=\"station\"](around:{radius},{lat},{lng});"
+            f"node[\"public_transport\"=\"stop_position\"](around:{radius},{lat},{lng});"
+            f"node[\"highway\"=\"bus_stop\"](around:{radius},{lat},{lng});"
+            f"node[\"amenity\"=\"bus_station\"](around:{radius},{lat},{lng});"
+            ");"
+            "out body 40;"
+        )
+        r = requests.post(
+            "https://overpass-api.de/api/interpreter",
+            data={"data": q},
+            headers={"User-Agent": "DealDesk-CRE/1.0"},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        logger.info("OVERPASS STATUS: %d", r.status_code)
+        r.raise_for_status()
+        elements = r.json().get("elements", []) or []
+        logger.info("OVERPASS RESULTS: %d elements found", len(elements))
+        stops = []
+        for el in elements:
+            tags = el.get("tags", {}) or {}
+            name = (tags.get("name") or tags.get("ref")
+                    or tags.get("route_ref") or "Unnamed stop")
+            if tags.get("railway") in ("station", "subway_entrance", "tram_stop"):
+                mode = "Rail/Subway"
+            elif tags.get("highway") == "bus_stop" or tags.get("amenity") == "bus_station":
+                mode = "Bus"
+            elif tags.get("public_transport"):
+                mode = "Transit"
+            else:
+                mode = "Transit"
+            d = _haversine_miles(lat, lng, el.get("lat", lat), el.get("lon", lng))
+            stops.append({
+                "mode": mode,
+                "route": tags.get("network") or tags.get("operator") or "SEPTA",
+                "distance": f"{d:.2f} mi",
+                "destination": name,
+                "_d": d,
+            })
+        stops.sort(key=lambda s: s["_d"])
+        md.transit_options = [{k: v for k, v in s.items() if k != "_d"} for s in stops[:10]]
+        logger.info("TRANSIT: %d stops found", len(md.transit_options))
     except Exception as exc:
-        logger.warning("FEMA NFHL fetch failed (%.4f, %.4f): %s", lat, lon, exc)
+        logger.warning("TRANSIT (Overpass) failed: %s", exc)
+
+    # ── Amenities via Google Places Nearby Search ────────────────────
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    if not api_key:
+        logger.warning("AMENITY: GOOGLE_MAPS_API_KEY not configured — skipping")
+        return
+
+    # Places API (New) — POST with field mask. Legacy nearbysearch is deprecated.
+    categories = [
+        (["supermarket", "grocery_store"], "Grocery"),
+        (["hospital"],                     "Healthcare"),
+        (["university"],                   "Education"),
+        (["park"],                         "Park"),
+        (["restaurant"],                   "Dining"),
+    ]
+    amenities = []
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location",
+    }
+    for types, label in categories:
+        try:
+            payload = {
+                "includedTypes": types,
+                "maxResultCount": 3,
+                "locationRestriction": {
+                    "circle": {
+                        "center": {"latitude": lat, "longitude": lng},
+                        "radius": 1200,
+                    }
+                },
+            }
+            r = requests.post(
+                "https://places.googleapis.com/v1/places:searchNearby",
+                headers=headers, json=payload, timeout=_REQUEST_TIMEOUT,
+            )
+            data = r.json() or {}
+            if r.status_code != 200:
+                logger.warning("AMENITY %s: %s %s", label, r.status_code,
+                               (data.get("error", {}) or {}).get("message", "")[:100])
+                continue
+            for place in (data.get("places") or [])[:3]:
+                loc = place.get("location") or {}
+                plat = loc.get("latitude"); plng = loc.get("longitude")
+                name = (place.get("displayName") or {}).get("text") or "—"
+                addr_str = place.get("formattedAddress") or ""
+                if plat is None or plng is None:
+                    continue
+                d = _haversine_miles(lat, lng, plat, plng)
+                amenities.append({
+                    "category": label,
+                    "name": name,
+                    "distance": f"{d:.2f} mi",
+                    "notes": addr_str[:60],
+                })
+        except Exception as exc:
+            logger.warning("AMENITY %s failed: %s", label, exc)
+    md.nearby_amenities = amenities
+    logger.info("AMENITY: %d amenities found (Google Places)", len(amenities))
+
+    # ── Fallback: OSM Overpass for amenities when Google Places returns nothing
+    if not amenities:
+        try:
+            q = (
+                "[out:json][timeout:25];("
+                f"node[\"shop\"~\"supermarket|convenience\"](around:1200,{lat},{lng});"
+                f"node[\"amenity\"=\"hospital\"](around:2000,{lat},{lng});"
+                f"node[\"amenity\"=\"university\"](around:2000,{lat},{lng});"
+                f"node[\"leisure\"=\"park\"](around:1200,{lat},{lng});"
+                f"node[\"amenity\"=\"restaurant\"](around:800,{lat},{lng});"
+                ");out body 25;"
+            )
+            r = _overpass_post(q)
+            r.raise_for_status()
+            for el in (r.json().get("elements") or []):
+                tags = el.get("tags", {}) or {}
+                if tags.get("shop") in ("supermarket", "convenience"):
+                    label = "Grocery"
+                elif tags.get("amenity") == "hospital":
+                    label = "Healthcare"
+                elif tags.get("amenity") == "university":
+                    label = "Education"
+                elif tags.get("leisure") == "park":
+                    label = "Park"
+                elif tags.get("amenity") == "restaurant":
+                    label = "Dining"
+                else:
+                    continue
+                d = _haversine_miles(lat, lng, el.get("lat", lat), el.get("lon", lng))
+                amenities.append({
+                    "category": label,
+                    "name": tags.get("name") or "—",
+                    "distance": f"{d:.2f} mi",
+                    "notes": (tags.get("addr:street") or tags.get("operator") or "OpenStreetMap")[:60],
+                })
+            amenities.sort(key=lambda a: float(a["distance"].split()[0]))
+            md.nearby_amenities = amenities[:15]
+            logger.info("AMENITY: %d amenities found (OSM fallback)", len(md.nearby_amenities))
+        except Exception as exc:
+            logger.warning("AMENITY (OSM fallback) failed: %s", exc)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1124,38 +1421,66 @@ def _fetch_phl_opa(deal: DealData, pd_obj: ParcelData, addr) -> None:
     if not street_number or not street_name:
         logger.warning("PROPERTY RECORDS (PHL): no street number/name — skipping")
         return
-    name_token = street_name.split()[0] if street_name else ""
-    like_pattern = f"{street_number}%{name_token}%"
-    query = (
-        "SELECT parcel_number, owner_1, owner_2, building_description, "
-        "category_code_description, total_area, total_livable_area, "
-        "number_of_rooms, number_stories, year_built, market_value, "
-        "sale_date, sale_price, zoning "
-        "FROM opa_properties_public "
-        f"WHERE address LIKE '{like_pattern}' LIMIT 5"
-    )
-    try:
-        resp = requests.get(
-            "https://phl.carto.com/api/v2/sql",
-            params={"q": query}, timeout=_REQUEST_TIMEOUT
+    # OPA's `location` field is uppercase, abbreviated, no apartment numbers
+    # e.g. "2-08 S 46TH ST". Pick the most distinctive token (skip directionals).
+    name_tokens = street_name.upper().split() if street_name else []
+    DIRECTIONALS = {"N", "S", "E", "W", "NE", "NW", "SE", "SW"}
+    name_token = next((t for t in name_tokens if t not in DIRECTIONALS), "")
+    patterns = [
+        f"{street_number} %{name_token}%",        # "2 %46TH%"
+        f"{street_number}-%{name_token}%",        # "2-%46TH%" (range form, e.g. 2-08)
+        f"%{street_number}%{name_token}%",        # very loose
+    ]
+    rows = []
+    matched_pattern = None
+    last_status = None
+    for pat in patterns:
+        query = (
+            "SELECT parcel_number, owner_1, owner_2, "
+            "category_code_description, total_area, total_livable_area, "
+            "number_stories, year_built, market_value, "
+            "taxable_land, taxable_building, "
+            "sale_date, sale_price, zoning, location "
+            "FROM opa_properties_public "
+            f"WHERE location ILIKE '{pat}' LIMIT 5"
         )
-        resp.raise_for_status()
-        rows = resp.json().get("rows", [])
-    except Exception as exc:
-        logger.warning("PROPERTY RECORDS (PHL) failed: %s", exc)
-        return
+        logger.info("OPA QUERY: pattern='%s' sql=%s", pat, query)
+        try:
+            resp = requests.get(
+                "https://phl.carto.com/api/v2/sql",
+                params={"q": query}, timeout=_REQUEST_TIMEOUT
+            )
+            last_status = resp.status_code
+            resp.raise_for_status()
+            rows = resp.json().get("rows", [])
+            logger.info("OPA RESPONSE: status=%d rows=%d pattern='%s'",
+                        resp.status_code, len(rows), pat)
+            if rows:
+                matched_pattern = pat
+                break
+        except Exception as exc:
+            logger.warning("PROPERTY RECORDS (PHL) failed (pattern '%s'): %s", pat, exc)
+            continue
     if not rows:
-        logger.info("PROPERTY RECORDS (PHL): no match for '%s'", like_pattern)
+        logger.warning("OPA: no parcel found for '%s %s' (last_status=%s)",
+                       street_number, street_name, last_status)
         return
+    logger.info("OPA: matched pattern '%s' (%d rows)", matched_pattern, len(rows))
     row = rows[0]
     parcel_number = row.get("parcel_number") or ""
     owner = " ".join(filter(None, [row.get("owner_1"), row.get("owner_2")])).strip()
     zoning = row.get("zoning") or ""
     market_value = _safe_float(row.get("market_value"))
+    taxable_land = _safe_float(row.get("taxable_land"))
+    taxable_bldg = _safe_float(row.get("taxable_building"))
     pd_obj.parcel_id = parcel_number or pd_obj.parcel_id
     pd_obj.owner_name = owner or pd_obj.owner_name
     pd_obj.zoning_code = zoning or pd_obj.zoning_code
     pd_obj.assessed_value = market_value if market_value is not None else pd_obj.assessed_value
+    if taxable_land is not None:
+        pd_obj.land_value = taxable_land
+    if taxable_bldg is not None:
+        pd_obj.improvement_value = taxable_bldg
     pd_obj.last_sale_date = row.get("sale_date") or pd_obj.last_sale_date
     pd_obj.last_sale_price = _safe_float(row.get("sale_price")) or pd_obj.last_sale_price
     pd_obj.lot_area_sf = _safe_float(row.get("total_area")) or pd_obj.lot_area_sf
@@ -1628,6 +1953,403 @@ def _build_market_context(md: MarketData) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════════════════
+# COMP PIPELINE — ZORI, Census rents, Craigslist, OPA sales, Redfin
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Canonical Craigslist subdomain slugs. Widen as needed.
+_CRAIGSLIST_SLUGS: Dict[tuple, str] = {
+    ("PA", "Philadelphia"):   "philadelphia",
+    ("PA", "Pittsburgh"):     "pittsburgh",
+    ("NJ", "Newark"):         "newjersey",
+    ("NJ", "Jersey City"):    "newjersey",
+    ("NY", "New York"):       "newyork",
+    ("NY", "Brooklyn"):       "newyork",
+    ("DC", "Washington"):     "washingtondc",
+    ("MD", "Baltimore"):      "baltimore",
+    ("VA", "Richmond"):       "richmond",
+    ("MA", "Boston"):         "boston",
+    ("IL", "Chicago"):        "chicago",
+    ("TX", "Houston"):        "houston",
+    ("TX", "Dallas"):         "dallas",
+    ("CA", "Los Angeles"):    "losangeles",
+    ("CA", "San Francisco"):  "sfbay",
+    ("FL", "Miami"):          "miami",
+    ("FL", "Tampa"):          "tampa",
+    ("GA", "Atlanta"):        "atlanta",
+    ("CO", "Denver"):         "denver",
+    ("AZ", "Phoenix"):        "phoenix",
+    ("WA", "Seattle"):        "seattle",
+    ("OR", "Portland"):       "portland",
+    ("MN", "Minneapolis"):    "minneapolis",
+    ("MO", "St. Louis"):      "stlouis",
+    ("OH", "Columbus"):       "columbus",
+    ("OH", "Cleveland"):      "cleveland",
+    ("MI", "Detroit"):        "detroit",
+    ("NC", "Charlotte"):      "charlotte",
+    ("NC", "Raleigh"):        "raleigh",
+    ("TN", "Nashville"):      "nashville",
+    ("TN", "Memphis"):        "memphis",
+}
+
+
+def _get_craigslist_city_slug(state: str, city: str) -> str:
+    key = (state.upper()[:2], city.strip())
+    if key in _CRAIGSLIST_SLUGS:
+        return _CRAIGSLIST_SLUGS[key]
+    for (s, _c), slug in _CRAIGSLIST_SLUGS.items():
+        if s == state.upper()[:2]:
+            return slug
+    logger.warning("CRAIGSLIST: no slug for %s, %s", city, state)
+    return ""
+
+
+def _fetch_zori_rent(zip_code: str, md: MarketData) -> None:
+    """Zillow ZORI: ZIP-level median asking rent + YoY trend. Writes md.zori_*."""
+    url = (
+        "https://files.zillowstatic.com/research/public_csvs/zori/"
+        "Zip_zori_uc_sfrcondomfr_sm_month.csv"
+    )
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        reader = csv_mod.DictReader(io.StringIO(resp.text))
+        target_row = None
+        for row in reader:
+            if str(row.get("RegionName", "")).zfill(5) == zip_code.zfill(5):
+                target_row = row
+                break
+        if not target_row:
+            logger.warning("ZORI: no data for zip %s", zip_code)
+            return
+        date_cols = sorted([
+            k for k in target_row
+            if k and len(k) == 10 and k[4] == "-" and k[7] == "-"
+            and target_row[k]
+        ])
+        if not date_cols:
+            return
+        latest = _safe_float(target_row[date_cols[-1]])
+        md.zori_median_rent = latest
+        if len(date_cols) >= 13:
+            prior = _safe_float(target_row[date_cols[-13]])
+            if prior and prior > 0 and latest:
+                pct = ((latest - prior) / prior) * 100
+                md.zori_rent_trend = (
+                    f"+{pct:.1f}% YoY" if pct >= 0 else f"{pct:.1f}% YoY"
+                )
+        logger.info(
+            "ZORI: zip=%s rent=$%.0f trend=%s",
+            zip_code, latest or 0, md.zori_rent_trend,
+        )
+    except Exception as exc:
+        logger.warning("ZORI failed: %s", exc)
+
+
+def _fetch_census_rents(state_fips: str, county_fips: str,
+                         tract: str, md: MarketData) -> None:
+    """ACS 5-yr 2022 median contract rent by bedroom (B25031_004E/5E/6E)."""
+    if not all([state_fips, county_fips, tract]):
+        logger.warning("CENSUS RENTS: missing FIPS/tract")
+        return
+    # Tract codes at ACS are 6-digit. Input tract may be 11-digit GEOID —
+    # in that case the last 6 digits are the tract number.
+    tract_clean = tract.replace(".", "")
+    if len(tract_clean) >= 11:
+        tract_clean = tract_clean[-6:]
+    tract_clean = tract_clean.zfill(6)
+    variables = "B25031_004E,B25031_005E,B25031_006E"
+    url = (
+        f"https://api.census.gov/data/2022/acs/acs5"
+        f"?get={variables}"
+        f"&for=tract:{tract_clean}"
+        f"&in=state:{state_fips}%20county:{county_fips}"
+    )
+    try:
+        resp = requests.get(url, timeout=_REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        if len(data) < 2:
+            return
+        row = dict(zip(data[0], data[1]))
+        md.census_median_rent_1br = _safe_float(row.get("B25031_004E"))
+        md.census_median_rent_2br = _safe_float(row.get("B25031_005E"))
+        md.census_median_rent_3br = _safe_float(row.get("B25031_006E"))
+        logger.info(
+            "CENSUS RENTS: 1BR=$%s 2BR=$%s 3BR=$%s",
+            md.census_median_rent_1br,
+            md.census_median_rent_2br,
+            md.census_median_rent_3br,
+        )
+    except Exception as exc:
+        logger.warning("CENSUS RENTS failed: %s", exc)
+
+
+def _fetch_craigslist_rentals(zip_code: str, city_slug: str,
+                               deal: DealData,
+                               max_results: int = 10) -> None:
+    """Craigslist 2BR RSS → append RentComp rows into deal.comps.rent_comps.
+
+    Craigslist frequently blocks non-browser user agents and has deprecated
+    many RSS endpoints, so this fetch is treated as best-effort and warnings
+    are not escalated.
+    """
+    if not city_slug:
+        return
+    url = (
+        f"https://{city_slug}.craigslist.org/search/apa"
+        f"?postal={zip_code}&bedrooms=2&format=rss"
+    )
+    try:
+        resp = requests.get(
+            url, timeout=_REQUEST_TIMEOUT,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; DealDesk/1.0)"},
+        )
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+        items = root.findall(".//item") or root.findall("channel/item")
+        count = 0
+        for item in items[:max_results]:
+            title_elem = item.find("title")
+            title = (title_elem.text if title_elem is not None else "") or ""
+            price_m = re.search(r"\$([0-9,]+)", title)
+            price = (
+                _safe_float(price_m.group(1).replace(",", ""))
+                if price_m else None
+            )
+            br_m = re.search(
+                r"(\d)\s*(?:br|bed|bedroom)", title, re.IGNORECASE,
+            )
+            beds = int(br_m.group(1)) if br_m else 0
+            if price and price > 200:
+                # Use the existing Pydantic RentComp (models.py line 446).
+                # Field names: address, unit_type, beds, monthly_rent, source.
+                # Listing title goes into `source_notes` via source field.
+                deal.comps.rent_comps.append(RentComp(
+                    address=zip_code,
+                    unit_type=f"{beds}BR" if beds else "Unknown",
+                    beds=beds or None,
+                    monthly_rent=price,
+                    source=f"Craigslist: {title[:60]}",
+                ))
+                count += 1
+        logger.info("CRAIGSLIST: zip=%s fetched %d listings", zip_code, count)
+    except Exception as exc:
+        logger.warning("CRAIGSLIST failed (%s/%s): %s",
+                       city_slug, zip_code, exc)
+
+
+def _fetch_opa_nearby_sales(lat: float, lon: float, deal: DealData) -> None:
+    """Philadelphia OPA: recent nearby multifamily sales → SaleComp list."""
+    r = 0.005  # ~0.35 mi at PHL latitude
+    sql = (
+        "SELECT location, sale_date, sale_price, total_area, "
+        "total_livable_area, number_stories, unit_count, "
+        "category_code_description, parcel_number, lat, lng "
+        "FROM opa_properties_public "
+        f"WHERE lat BETWEEN {lat - r} AND {lat + r} "
+        f"AND lng BETWEEN {lon - r} AND {lon + r} "
+        "AND sale_price > 50000 "
+        "AND sale_date >= '2022-01-01' "
+        "AND category_code_description ILIKE '%multi%' "
+        "ORDER BY sale_date DESC LIMIT 10"
+    )
+    try:
+        resp = requests.get(
+            "https://phl.carto.com/api/v2/sql",
+            params={"q": sql}, timeout=_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        rows = resp.json().get("rows", [])
+        logger.info("OPA NEARBY SALES: %d comps", len(rows))
+        for row in rows:
+            price = _safe_float(row.get("sale_price"))
+            area = (_safe_float(row.get("total_livable_area"))
+                    or _safe_float(row.get("total_area")))
+            units = _safe_float(row.get("unit_count")) or 1
+            dlat = float(row.get("lat") or lat) - lat
+            dlon = float(row.get("lng") or lon) - lon
+            dist = math.sqrt(dlat ** 2 + dlon ** 2) * 69.0
+            # Existing Pydantic SaleComp field names: sq_ft, num_units,
+            # distance_miles, source.
+            deal.comps.sale_comps.append(SaleComp(
+                address=row.get("location", ""),
+                sale_date=str(row.get("sale_date", ""))[:10],
+                sale_price=price,
+                price_per_sf=(price / area
+                              if price and area and area > 0 else None),
+                price_per_unit=(price / units
+                                if price and units > 0 else None),
+                num_units=int(units) if units else None,
+                sq_ft=int(area) if area else None,
+                distance_miles=round(dist, 2),
+                source=f"OPA: {row.get('category_code_description', '') or 'Multifamily'}",
+            ))
+    except Exception as exc:
+        logger.warning("OPA NEARBY SALES failed: %s", exc)
+
+
+def _fetch_redfin_sales(zip_code: str, deal: DealData) -> None:
+    """Redfin gis-csv export for recent sales in the ZIP.
+
+    Redfin rate-limits unauthenticated requests and can return 403 or change
+    the region_id contract; treat as best-effort. Requires a browser UA.
+    """
+    url = (
+        "https://www.redfin.com/stingray/api/gis-csv"
+        f"?al=1&num_homes=50&ord=redfin-recommended-asc"
+        f"&page_number=1&region_id={zip_code}&region_type=2"
+        f"&sold_within_days=730&uipt=2,3&v=8"
+    )
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/csv,*/*",
+        "Referer": "https://www.redfin.com/",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        if resp.status_code != 200:
+            logger.warning(
+                "REDFIN: status=%d zip=%s", resp.status_code, zip_code,
+            )
+            return
+        lines = resp.text.splitlines()
+        header_idx = next(
+            (i for i, l in enumerate(lines)
+             if "ADDRESS" in l.upper() or "PRICE" in l.upper()),
+            0,
+        )
+        reader = csv_mod.DictReader(
+            io.StringIO("\n".join(lines[header_idx:])),
+        )
+        count = 0
+        for row in reader:
+            price = _safe_float(
+                str(row.get("PRICE", "")).replace("$", "").replace(",", ""),
+            )
+            if not price or price < 50000:
+                continue
+            sqft = _safe_float(
+                str(row.get("SQUARE FEET", "")).replace(",", ""),
+            )
+            ppsf = _safe_float(
+                str(row.get("$/SQUARE FEET", "")).replace("$", "")
+                                                  .replace(",", ""),
+            )
+            beds = _safe_float(str(row.get("BEDS", "")))
+            deal.comps.sale_comps.append(SaleComp(
+                address=row.get("ADDRESS", ""),
+                sale_date=str(row.get("SOLD DATE", ""))[:10],
+                sale_price=price,
+                price_per_sf=ppsf,
+                sq_ft=int(sqft) if sqft else None,
+                num_units=int(beds) if beds else None,
+                source=f"Redfin: {int(beds) if beds else '?'}BR",
+            ))
+            count += 1
+            if count >= 8:
+                break
+        logger.info("REDFIN: zip=%s fetched %d comps", zip_code, count)
+    except Exception as exc:
+        logger.warning("REDFIN failed: %s", exc)
+
+
+def _compute_market_rents(deal: DealData) -> None:
+    """Compute the quality-adjusted market rent for every unit.
+
+    - Picks the dominant bedroom count from the rent roll
+    - Pulls the matching HUD FMR (fmr_studio/fmr_1br/2br/3br)
+    - Applies the renovation tier multiplier
+    - Writes the result to deal.assumptions.quality_adjusted_market_rent and
+      to each unit_mix row's ``market_rent`` key
+    - Cross-checks (log-only) against ZORI and Census medians
+    """
+    a  = deal.assumptions
+    md = deal.market_data
+
+    tier_val = getattr(a, "renovation_tier",
+                       RenovationTier.LIGHT_COSMETIC.value)
+    # Accept either a RenovationTier enum or its string value.
+    if isinstance(tier_val, RenovationTier):
+        tier_val = tier_val.value
+    multiplier = RENOVATION_TIER_MULTIPLIERS.get(tier_val, 0.90)
+
+    units = getattr(deal.extracted_docs, "unit_mix", []) or []
+    if not units:
+        logger.warning("MARKET RENTS: no units in rent roll — skipping")
+        return
+
+    # Parse dominant bedroom count. unit_mix rows may carry either an integer
+    # `beds`/`bedrooms` key or a string `unit_type` like "1BR" / "2 Bed".
+    br_counts: Counter = Counter()
+    for u in units:
+        br_val = u.get("beds") or u.get("bedrooms")
+        if br_val is None:
+            ut = str(u.get("unit_type", ""))
+            m = re.search(r"(\d)", ut)
+            br_val = int(m.group(1)) if m else 0
+            if "studio" in ut.lower():
+                br_val = 0
+        try:
+            br_counts[int(br_val)] += int(u.get("count") or 1)
+        except (TypeError, ValueError):
+            br_counts[0] += 1
+    dominant_br = br_counts.most_common(1)[0][0] if br_counts else 2
+
+    # Real HUD FMR attribute names on MarketData: fmr_studio/1br/2br/3br.
+    # fmr_4br is not in the model; it lives in provenance.field_sources.
+    fmr_map = {
+        0: md.fmr_studio,
+        1: md.fmr_1br,
+        2: md.fmr_2br,
+        3: md.fmr_3br,
+    }
+    base_fmr = fmr_map.get(dominant_br) or md.fmr_2br
+    if not base_fmr:
+        logger.warning(
+            "MARKET RENTS: no HUD FMR available for %dBR — "
+            "cannot compute market rents", dominant_br,
+        )
+        return
+
+    computed_rent = round(float(base_fmr) * multiplier, 0)
+    a.quality_adjusted_market_rent = computed_rent
+
+    logger.info(
+        "MARKET RENTS: tier=%s multiplier=%.2f HUD_FMR_%dBR=$%.0f "
+        "→ computed_market_rent=$%.0f",
+        tier_val, multiplier, dominant_br, base_fmr, computed_rent,
+    )
+    if md.zori_median_rent:
+        logger.info(
+            "MARKET RENTS cross-check: ZORI_zip=$%.0f computed=$%.0f diff=%.1f%%",
+            md.zori_median_rent, computed_rent,
+            ((computed_rent - md.zori_median_rent) / md.zori_median_rent * 100),
+        )
+    census_rent = {
+        1: md.census_median_rent_1br,
+        2: md.census_median_rent_2br,
+        3: md.census_median_rent_3br,
+    }.get(dominant_br)
+    if census_rent:
+        logger.info(
+            "MARKET RENTS cross-check: Census_%dBR=$%.0f computed=$%.0f diff=%.1f%%",
+            dominant_br, census_rent, computed_rent,
+            ((computed_rent - census_rent) / census_rent * 100),
+        )
+
+    for u in units:
+        u["market_rent"] = computed_rent
+    logger.info(
+        "MARKET RENTS: wrote $%.0f market_rent to %d units",
+        computed_rent, len(units),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1707,6 +2429,88 @@ def enrich_market_data(deal: DealData) -> DealData:
     # ── STEP 7B: Property records (parcel, owner, zoning) ─────────
     logger.info("Step 7B: Property records...")
     _fetch_property_records(deal)
+
+    # ── STEP 7C: Philadelphia zoning fallback via Atlas/ArcGIS ────
+    if (not deal.zoning.zoning_code
+            and (addr.state or "").upper() == "PA"
+            and (addr.city or "").lower() == "philadelphia"
+            and addr.latitude and addr.longitude):
+        try:
+            r = requests.get(
+                "https://services.arcgis.com/fLeGjb7u4uXqeF9q/arcgis/rest/services/"
+                "Zoning_BaseDistricts/FeatureServer/0/query",
+                params={
+                    "geometry": f"{addr.longitude},{addr.latitude}",
+                    "geometryType": "esriGeometryPoint",
+                    "inSR": "4326",
+                    "spatialRel": "esriSpatialRelIntersects",
+                    "outFields": "CODE,LONG_CODE",
+                    "returnGeometry": "false",
+                    "f": "json",
+                },
+                timeout=_REQUEST_TIMEOUT,
+            )
+            r.raise_for_status()
+            feats = r.json().get("features", []) or []
+            if feats:
+                attrs = feats[0].get("attributes", {}) or {}
+                zc = attrs.get("CODE") or attrs.get("LONG_CODE")
+                if zc:
+                    deal.zoning.zoning_code = zc
+                    if deal.parcel_data:
+                        if not deal.parcel_data.zoning_code:
+                            deal.parcel_data.zoning_code = zc
+                    else:
+                        deal.parcel_data = ParcelData(zoning_code=zc)
+                    logger.info("ATLAS zoning lookup: %s", zc)
+        except Exception as exc:
+            logger.warning("ATLAS zoning lookup failed: %s", exc)
+
+    # ── STEP 7D: Transit & Amenities (OSM + Google Places) ───────
+    logger.info("Step 7D: Transit & Amenities...")
+    _fetch_transit_and_amenities(deal)
+
+    # ── STEP 7E: Comp pipeline + quality-adjusted market rent ────
+    #   Runs here because HUD FMR (Step 6), lat/lon (Step 2), OPA
+    #   zoning (Step 7B) and census_tract/fips_code are all populated.
+    logger.info("Step 7E: Comp pipeline...")
+    _zip    = getattr(deal.address, "zip_code", "") or ""
+    _city   = getattr(deal.address, "city", "") or ""
+    _state  = getattr(deal.address, "state", "") or ""
+    _slug   = _get_craigslist_city_slug(_state, _city) if _state and _city else ""
+    _lat    = getattr(deal.address, "latitude", None)
+    _lon    = getattr(deal.address, "longitude", None)
+
+    if _zip:
+        _fetch_zori_rent(_zip, deal.market_data)
+
+    _full_fips   = str(deal.address.fips_code or "")
+    _state_fips  = _full_fips[:2] if len(_full_fips) >= 2 else ""
+    _county_fips = _full_fips[2:] if len(_full_fips) >= 5 else ""
+    _tract       = str(deal.address.census_tract or "")
+    if _state_fips and _county_fips and _tract:
+        _fetch_census_rents(_state_fips, _county_fips, _tract, deal.market_data)
+
+    if _zip and _slug:
+        _fetch_craigslist_rentals(_zip, _slug, deal)
+
+    # OPA nearby-sales is Philly-specific; only run when we're in PA/Philly.
+    if (_state or "").upper() == "PA" and (_city or "").lower() == "philadelphia":
+        if _lat and _lon:
+            _fetch_opa_nearby_sales(_lat, _lon, deal)
+
+    if _zip:
+        _fetch_redfin_sales(_zip, deal)
+
+    # Quality-adjusted market-rent engine (requires HUD FMR from Step 6).
+    _compute_market_rents(deal)
+
+    logger.info(
+        "COMPS SUMMARY: %d rent comps, %d sale comps | market_rent=$%s",
+        len(deal.comps.rent_comps),
+        len(deal.comps.sale_comps),
+        deal.assumptions.quality_adjusted_market_rent or "N/A",
+    )
 
     # ── STEP 8: EPA Environmental Flags ───────────────────────────
     logger.info("Step 8: EPA environmental flags...")
@@ -1799,6 +2603,19 @@ def enrich_market_data(deal: DealData) -> DealData:
         logger.info("Prompt 3C complete — HBU analysis written")
     else:
         logger.warning("Prompt 3C failed — continuing without HBU")
+
+    # ── MARKET DATA SUMMARY ──────────────────────────────────────
+    _opa_found = bool(deal.parcel_data and deal.parcel_data.parcel_id)
+    logger.info("=== MARKET DATA SUMMARY ===")
+    logger.info("  Geocode: lat=%.6f lng=%.6f", addr.latitude or 0, addr.longitude or 0)
+    logger.info("  FRED: T10=%.2f%% SOFR=%.2f%% MTG30=%.2f%% CPI=%.2f%%",
+                (md.dgs10_rate or 0) * 100, (md.sofr_rate or 0) * 100,
+                (md.mortgage30_rate or 0) * 100, (md.cpi_yoy or 0) * 100)
+    logger.info("  HUD FMR 2BR: $%.0f", md.fmr_2br or 0)
+    logger.info("  OPA parcel: %s", "found" if _opa_found else "not found")
+    logger.info("  FEMA zone: %s", md.fema_flood_zone or "not determined")
+    logger.info("  EPA flags: %d", len(md.epa_env_flags or []))
+    logger.info("===========================")
 
     logger.info("Market data enrichment complete for %s", deal.deal_id)
     return deal
