@@ -435,8 +435,23 @@ def _synthesize_rent_roll(deal: DealData) -> None:
     # Fill any remaining None values by interpolation from what we have
     filled = {k: v for k, v in market_rents.items() if v is not None}
     if not filled:
-        # Last resort: use form-level monthly_rent or $1,200 default
-        base = float(deal.assumptions.monthly_rent or 1200)
+        # Last resort: derive a base rent from the extracted rent roll if we
+        # have one, then fall back to quality_adjusted_market_rent, then
+        # to the hardcoded $1,200 floor. FinancialAssumptions has no
+        # monthly_rent field — reading it raises AttributeError.
+        _units = (deal.extracted_docs.unit_mix
+                  if deal.extracted_docs and deal.extracted_docs.unit_mix
+                  else [])
+        _sampled_rents = [
+            float(u.get("monthly_rent") or u.get("current_rent") or 0)
+            for u in _units
+            if (u.get("monthly_rent") or u.get("current_rent"))
+        ]
+        base = (
+            sum(_sampled_rents) / len(_sampled_rents)
+            if _sampled_rents
+            else float(deal.assumptions.quality_adjusted_market_rent or 1200)
+        )
         market_rents = {
             "Studio": round(base * 0.75),
             "1BR":    round(base * 0.90),
