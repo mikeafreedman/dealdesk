@@ -57,6 +57,7 @@ from risk import analyze_insurance
 from financials import run_financials
 from excel_builder import populate_excel
 from word_builder import generate_report
+from report_builder import generate_report as generate_report_playwright
 
 logger = logging.getLogger(__name__)
 _fmt = "%(asctime)s  %(name)s  %(levelname)s  %(message)s"
@@ -890,6 +891,14 @@ async def underwrite(req: UnderwriteRequest, request: Request):
 
             elif stage_name == "word_builder":
                 deal = generate_report(deal)
+                # Parallel Playwright/HTML-CSS build (Option 1 scaffold —
+                # runs alongside the docx pipeline so outputs can be
+                # compared). Failures here never abort the request.
+                try:
+                    pw_pdf = generate_report_playwright(deal)
+                    logger.info("PLAYWRIGHT PDF: %s", pw_pdf)
+                except Exception as exc:
+                    logger.warning("PLAYWRIGHT PDF failed (non-fatal): %s", exc)
 
         # Cache Excel path for download endpoint
         if deal.deal_id and deal.output_xlsx_path:

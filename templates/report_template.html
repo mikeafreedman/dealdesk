@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ full_address }} — Investment Underwriting Report</title>
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+
+{# ═══════════════════════════════════════════ #}
+{# COVER                                        #}
+{# ═══════════════════════════════════════════ #}
+<div class="cover-page">
+  <div class="cover-badge">{{ asset_type }} · {{ investment_strategy|replace("_", " ")|title }}</div>
+  <div class="cover-address">{{ full_address or property_name or "Subject Property" }}</div>
+  <div class="cover-subaddress">{{ city }}{% if city and state %}, {% endif %}{{ state }} {{ zip_code }}</div>
+  <div class="cover-divider"></div>
+
+  <div class="cover-meta-grid">
+    <div class="cover-meta-cell">
+      <div class="cover-meta-label">Asking Price</div>
+      <div class="cover-meta-value">{{ asking_price or "Not Disclosed" }}</div>
+    </div>
+    <div class="cover-meta-cell">
+      <div class="cover-meta-label">Asset Type</div>
+      <div class="cover-meta-value">{{ asset_type }}</div>
+    </div>
+    <div class="cover-meta-cell">
+      <div class="cover-meta-label">Units / Building SF</div>
+      <div class="cover-meta-value">{{ num_units or "—" }} units<br>{{ building_sf }}</div>
+    </div>
+    <div class="cover-meta-cell">
+      <div class="cover-meta-label">Strategy</div>
+      <div class="cover-meta-value">{{ investment_strategy|replace("_", " ")|title }}</div>
+    </div>
+    <div class="cover-meta-cell">
+      <div class="cover-meta-label">Hold Period</div>
+      <div class="cover-meta-value">{{ hold_period }} years</div>
+    </div>
+    <div class="cover-meta-cell">
+      <div class="cover-meta-label">Report Date</div>
+      <div class="cover-meta-value">{{ report_date }}</div>
+    </div>
+    <div class="cover-meta-cell">
+      <div class="cover-meta-label">Prepared By</div>
+      <div class="cover-meta-value">{{ sponsor_name }}</div>
+    </div>
+    <div class="cover-meta-cell">
+      <div class="cover-meta-label">Deal ID</div>
+      <div class="cover-meta-value">{{ deal_id[:8] if deal_id else "—" }}</div>
+    </div>
+    <div class="cover-meta-cell">
+      <div class="cover-meta-label">Zoning</div>
+      <div class="cover-meta-value">{{ zoning or zoning_code or "Pending" }}</div>
+    </div>
+  </div>
+
+  <div class="cover-footer">
+    <div class="cover-footer-left">Confidential — For Authorized Recipients Only</div>
+    <div class="cover-footer-right">{{ deal_id }}</div>
+  </div>
+</div>
+
+{# ═══════════════════════════════════════════ #}
+{# TABLE OF CONTENTS                            #}
+{# ═══════════════════════════════════════════ #}
+<div class="toc-page">
+  <div class="toc-title">Table of Contents</div>
+  {% set toc = [
+    ('01','Executive Summary'),
+    ('02','Property Photo Gallery'),
+    ('03','Maps & Geographic Context'),
+    ('04','Property Description'),
+    ('05','Ownership & Title History'),
+    ('06','Zoning & Highest and Best Use'),
+    ('07','Location & Market Overview'),
+    ('08','Neighborhood Trend Analysis'),
+    ('09','Competitive Supply Pipeline'),
+    ('10','Rent Roll & Income Summary'),
+    ('11','Comparable Market Analysis'),
+    ('12','Financial Analysis'),
+    ('13','Debt & Capital Structure'),
+    ('14','Environmental & Climate Risk'),
+    ('15','Legal & Title Status'),
+    ('16','Due Diligence Flags'),
+    ('17','Due Diligence Checklist'),
+    ('18','Project Timeline'),
+    ('19','Investment Recommendation'),
+    ('20','Conclusions & Next Steps'),
+    ('21','Disclaimer & Certification'),
+    ('22','Appendix — Methodology'),
+  ] %}
+  {% for num, title in toc %}
+  <div class="toc-entry">
+    <span class="toc-number">{{ num }}</span>
+    <span class="toc-entry-title">{{ title }}</span>
+    <span class="toc-dots"></span>
+  </div>
+  {% endfor %}
+</div>
+
+{# ═══════════════════════════════════════════ #}
+{# 01 — EXECUTIVE SUMMARY                       #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s01 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 01</div>
+    <div class="section-title">Executive Summary</div>
+  </div>
+
+  {% if kpi_rows %}
+  <div class="kpi-grid">
+    {% for row in kpi_rows %}
+    <div class="kpi-card">
+      <div class="kpi-label">{{ row.label }}</div>
+      <div class="kpi-value">{{ row.value }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if exec_pullquote %}<div class="pullquote">{{ exec_pullquote }}</div>{% endif %}
+
+  {% if exec_overview_p1 %}<div class="narrative">{{ exec_overview_p1 }}</div>{% endif %}
+  {% if exec_overview_p2 %}<div class="narrative">{{ exec_overview_p2 }}</div>{% endif %}
+  {% if exec_overview_p3 %}<div class="narrative">{{ exec_overview_p3 }}</div>{% endif %}
+
+  {% if deal_thesis %}
+  <div class="subsection-title">Deal Thesis</div>
+  <div class="narrative">{{ deal_thesis }}</div>
+  {% endif %}
+
+  {% if opportunity_1 or opportunity_2 or opportunity_3 %}
+  <div class="subsection-title">Key Opportunities</div>
+  {% if opportunity_1 %}<div class="callout">{{ opportunity_1 }}</div>{% endif %}
+  {% if opportunity_2 %}<div class="callout">{{ opportunity_2 }}</div>{% endif %}
+  {% if opportunity_3 %}<div class="callout">{{ opportunity_3 }}</div>{% endif %}
+  {% endif %}
+
+  <div class="source-note">Source: DealDesk Underwriting Model · Freedman Properties</div>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 02 — PHOTO GALLERY                           #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s02 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 02</div>
+    <div class="section-title">Property Photo Gallery</div>
+  </div>
+
+  {% if photo_gallery_intro %}<div class="narrative">{{ photo_gallery_intro }}</div>{% endif %}
+
+  {% if street_view_file %}
+  <div class="photo-grid hero">
+    <div class="photo-cell">
+      <img src="file://{{ street_view_file }}" alt="Street View">
+      <div class="photo-caption">Google Street View — {{ full_address }}</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="callout pending">Street-view photo unavailable. Photography should be obtained during due diligence site visit.</div>
+  {% endif %}
+
+  {% if photo_gallery_note %}<div class="source-note">{{ photo_gallery_note }}</div>{% endif %}
+
+  <div class="callout pending">Offering memorandum photo extraction is available in a subsequent release (Option 2 scope).</div>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 03 — MAPS & GEOGRAPHIC CONTEXT               #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s03 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 03</div>
+    <div class="section-title">Maps &amp; Geographic Context</div>
+  </div>
+
+  {% if maps_intro %}<div class="narrative">{{ maps_intro }}</div>{% endif %}
+
+  {% if aerial_map_file %}
+  <div class="subsection-title">Aerial / Satellite View</div>
+  <div class="map-container"><img src="file://{{ aerial_map_file }}" alt="Aerial Map"></div>
+  {% else %}
+  <div class="callout pending">Aerial map unavailable for this run.</div>
+  {% endif %}
+
+  {% if neighborhood_map_file %}
+  <div class="subsection-title">Neighborhood Context</div>
+  <div class="map-container"><img src="file://{{ neighborhood_map_file }}" alt="Neighborhood Map"></div>
+  {% else %}
+  <div class="callout pending">Neighborhood map unavailable for this run.</div>
+  {% endif %}
+
+  {% if fema_map_file %}
+  <div class="subsection-title">FEMA Flood Zone</div>
+  <div class="map-container"><img src="file://{{ fema_map_file }}" alt="FEMA Map"></div>
+  {% endif %}
+
+  {% if fema_flood_narrative %}<div class="narrative">{{ fema_flood_narrative }}</div>{% endif %}
+
+  <table class="data-table">
+    <tr><th>Risk Factor</th><th>Status</th></tr>
+    <tr><td>FEMA Flood Zone</td><td>{{ fema_flood_zone or "Not Determined" }}</td></tr>
+    <tr><td>FEMA Panel Number</td><td>{{ fema_panel_number or "—" }}</td></tr>
+    <tr><td>Opportunity Zone</td><td>{{ "Yes" if is_opportunity_zone else "No" }}</td></tr>
+  </table>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 04 — PROPERTY DESCRIPTION                    #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s04 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 04</div>
+    <div class="section-title">Property Description</div>
+  </div>
+
+  {% if prop_desc_p1 %}<div class="narrative">{{ prop_desc_p1 }}</div>{% endif %}
+  {% if prop_desc_p2 %}<div class="narrative">{{ prop_desc_p2 }}</div>{% endif %}
+  {% if prop_desc_p3 %}<div class="narrative">{{ prop_desc_p3 }}</div>{% endif %}
+  {% if prop_desc_p4 %}<div class="narrative">{{ prop_desc_p4 }}</div>{% endif %}
+
+  {% if utilities_analysis %}
+  <div class="subsection-title">Utilities &amp; Infrastructure</div>
+  <div class="narrative">{{ utilities_analysis }}</div>
+  {% endif %}
+
+  <div class="subsection-title">Parcel &amp; Improvement Data</div>
+  <table class="data-table">
+    <tr><th>Field</th><th>Value</th></tr>
+    <tr><td>Address</td>         <td>{{ parcel_a_address }}</td></tr>
+    <tr><td>Parcel ID (OPA/APN)</td><td>{{ parcel_a_account }}</td></tr>
+    <tr><td>Owner of Record</td> <td>{{ parcel_a_owner }}</td></tr>
+    <tr><td>Zoning</td>          <td>{{ parcel_a_zoning }}</td></tr>
+    <tr><td>Lot Area</td>        <td>{{ parcel_a_land_area }}</td></tr>
+    <tr><td>Building SF</td>     <td>{{ parcel_a_building_sf }}</td></tr>
+    <tr><td>Year Built</td>      <td>{{ parcel_a_year_built }}</td></tr>
+    <tr><td>Assessed Value</td>  <td>{{ parcel_a_assessed }}</td></tr>
+    <tr><td>Taxable Land</td>    <td>{{ parcel_a_taxable_land }}</td></tr>
+    <tr><td>Taxable Building</td><td>{{ parcel_a_taxable_bldg }}</td></tr>
+    <tr><td>Census Tract</td>    <td>{{ parcel_census_tract }}</td></tr>
+    <tr><td>FIPS Code</td>       <td>{{ parcel_fips }}</td></tr>
+  </table>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 05 — OWNERSHIP & TITLE                       #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s05 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 05</div>
+    <div class="section-title">Ownership &amp; Title History</div>
+  </div>
+
+  {% if ownership_narrative %}<div class="narrative">{{ ownership_narrative }}</div>{% endif %}
+
+  {% if liens_narrative %}
+  <div class="subsection-title">Recorded Liens &amp; Encumbrances</div>
+  <div class="narrative">{{ liens_narrative }}</div>
+  {% endif %}
+
+  <div class="callout pending">Ownership history table (deed transfer records) is available in a subsequent release (Option 2 scope).</div>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 06 — ZONING & HBU                            #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s06 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 06</div>
+    <div class="section-title">Zoning &amp; Highest and Best Use</div>
+  </div>
+
+  {% if zoning_overview %}<div class="narrative">{{ zoning_overview }}</div>{% endif %}
+
+  {% if zoning_standards_rows %}
+  <div class="subsection-title">Zoning Standards</div>
+  <table class="data-table">
+    <tr><th>Parameter</th><th>Standard</th><th>Proposed</th><th>Code Section</th></tr>
+    {% for row in zoning_standards_rows %}
+    <tr>
+      <td>{{ row.parameter }}</td>
+      <td>{{ row.standard }}</td>
+      <td>{{ row.proposed }}</td>
+      <td>{{ row.code_section }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if buildable_capacity or buildable_capacity_narrative %}
+  <div class="subsection-title">Buildable Capacity</div>
+  <div class="narrative">{{ buildable_capacity or buildable_capacity_narrative }}</div>
+  {% endif %}
+
+  {% if highest_best_use or hbu_content or hbu_narrative %}
+  <div class="subsection-title">Highest &amp; Best Use</div>
+  <div class="narrative">{{ highest_best_use or hbu_content or hbu_narrative }}</div>
+  {% if hbu_conclusion %}
+  <div class="callout"><strong>HBU Conclusion:</strong> {{ hbu_conclusion }}</div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 07 — LOCATION & MARKET                       #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s07 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 07</div>
+    <div class="section-title">Location &amp; Market Overview</div>
+  </div>
+
+  {% if location_pullquote %}<div class="pullquote">{{ location_pullquote }}</div>{% endif %}
+  {% if location_overview_p1 %}<div class="narrative">{{ location_overview_p1 }}</div>{% endif %}
+  {% if location_overview_p2 %}<div class="narrative">{{ location_overview_p2 }}</div>{% endif %}
+
+  {% if transportation_analysis %}
+  <div class="subsection-title">Transportation &amp; Access</div>
+  <div class="narrative">{{ transportation_analysis }}</div>
+  {% endif %}
+
+  {% if transit_rows %}
+  <table class="data-table">
+    <tr><th>Mode</th><th>Route</th><th>Distance</th><th>Destination</th></tr>
+    {% for row in transit_rows %}
+    <tr>
+      <td>{{ row.mode }}</td>
+      <td>{{ row.route }}</td>
+      <td>{{ row.distance }}</td>
+      <td>{{ row.destination }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <div class="callout pending">Nearby amenities and 1-mile demographic indicators (population, median HH income, renter occupancy, unemployment) will populate in a subsequent release (Option 2 scope).</div>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 08 — NEIGHBORHOOD TREND                      #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s08 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 08</div>
+    <div class="section-title">Neighborhood Trend Analysis</div>
+  </div>
+  {% if neighborhood_trend_narrative %}
+  <div class="narrative">{{ neighborhood_trend_narrative }}</div>
+  {% else %}
+  <div class="callout pending">Neighborhood trend analysis pending.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 09 — SUPPLY PIPELINE                         #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s09 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 09</div>
+    <div class="section-title">Competitive Supply Pipeline</div>
+  </div>
+
+  {% if supply_pipeline_narrative %}<div class="narrative">{{ supply_pipeline_narrative }}</div>{% endif %}
+
+  {% if supply_pipeline_rows %}
+  <table class="data-table">
+    <tr><th>Project</th><th>Type</th><th>Units / SF</th><th>Status</th><th>Delivery</th></tr>
+    {% for row in supply_pipeline_rows %}
+    <tr>
+      <td>{{ row.name or row.project or "" }}</td>
+      <td>{{ row.type or "" }}</td>
+      <td>{{ row.units_sf or row.units or "" }}</td>
+      <td>{{ row.status or "" }}</td>
+      <td>{{ row.delivery or "" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if supply_pipeline_note %}<div class="source-note">{{ supply_pipeline_note }}</div>{% endif %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 10 — RENT ROLL & INCOME                      #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s10 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 10</div>
+    <div class="section-title">Rent Roll &amp; Income Summary</div>
+  </div>
+
+  {% if rent_roll_intro %}<div class="narrative">{{ rent_roll_intro }}</div>{% endif %}
+
+  <div class="callout pending">Unit mix summary and per-unit rent roll detail are available in the accompanying Excel financial model.</div>
+
+  <div class="subsection-title">Income Summary (Stabilized Year)</div>
+  <table class="data-table">
+    <tr><th>Category</th><th class="right">Annual Amount</th><th class="right">% of GPR</th></tr>
+    <tr>
+      <td>Gross Potential Rent (GPR)</td>
+      <td class="right">{{ income_gpr }}</td>
+      <td class="right">100.0%</td>
+    </tr>
+    <tr>
+      <td>Less: Vacancy &amp; Bad Debt</td>
+      <td class="right">{{ income_vacancy_loss }}</td>
+      <td class="right">{{ income_vacancy_pct }}</td>
+    </tr>
+    <tr>
+      <td>Less: Loss to Lease</td>
+      <td class="right">{{ income_loss_to_lease }}</td>
+      <td class="right">{{ income_ltl_pct }}</td>
+    </tr>
+    <tr>
+      <td>Fee / Other Income</td>
+      <td class="right">{{ income_other }}</td>
+      <td class="right">—</td>
+    </tr>
+    <tr class="total-row">
+      <td>Effective Gross Income (EGI)</td>
+      <td class="right">{{ income_egi }}</td>
+      <td class="right">{{ income_egi_pct }}</td>
+    </tr>
+  </table>
+  {% if rent_roll_note %}<div class="source-note">{{ rent_roll_note }}</div>{% endif %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 11 — COMPARABLES                             #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s11 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 11</div>
+    <div class="section-title">Comparable Market Analysis</div>
+  </div>
+
+  {% if rent_comp_narrative %}
+  <div class="subsection-title">Rent Comparables</div>
+  <div class="narrative">{{ rent_comp_narrative }}</div>
+  {% if rent_comp_rows %}
+  <table class="data-table">
+    <tr><th>Property</th><th>Type</th><th>Beds</th><th class="right">Rent/Mo</th><th class="right">$/SF</th><th>Distance</th><th>Note</th></tr>
+    {% for row in rent_comp_rows %}
+    <tr>
+      <td>{{ row.property }}</td>
+      <td>{{ row.type }}</td>
+      <td>{{ row.beds }}</td>
+      <td class="right">{{ row.rent_mo or row.monthly_rent or "" }}</td>
+      <td class="right">{{ row.rent_sf or row.rent_per_sf or "" }}</td>
+      <td>{{ row.distance }}</td>
+      <td class="label">{{ row.note or "" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% if rent_comps_note %}<div class="source-note">{{ rent_comps_note }}</div>{% endif %}
+  {% endif %}
+
+  {% if commercial_comp_narrative %}
+  <div class="subsection-title">Commercial Rent Comparables</div>
+  <div class="narrative">{{ commercial_comp_narrative }}</div>
+  {% if commercial_comp_rows %}
+  <table class="data-table">
+    <tr><th>Address</th><th>Use Type</th><th class="right">SF</th><th class="right">Rent/SF</th><th>Lease Type</th></tr>
+    {% for row in commercial_comp_rows %}
+    <tr>
+      <td>{{ row.address }}</td>
+      <td>{{ row.use_type }}</td>
+      <td class="right">{{ row.sf }}</td>
+      <td class="right">{{ row.rent_per_sf }}</td>
+      <td>{{ row.lease_type }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% if commercial_comps_note %}<div class="source-note">{{ commercial_comps_note }}</div>{% endif %}
+  {% endif %}
+
+  {% if sale_comp_narrative %}
+  <div class="subsection-title">Sale Comparables</div>
+  <div class="narrative">{{ sale_comp_narrative }}</div>
+  {% if sale_comp_rows %}
+  <table class="data-table">
+    <tr><th>Address</th><th>Date</th><th class="right">Price</th><th class="right">$/SF</th><th class="right">$/Unit</th><th class="right">Cap Rate</th><th>Distance</th></tr>
+    {% for row in sale_comp_rows %}
+    <tr>
+      <td>{{ row.address }}</td>
+      <td>{{ row.sale_date or row.date or "" }}</td>
+      <td class="right">{{ row.price or row.sale_price or "" }}</td>
+      <td class="right">{{ row.price_per_sf }}</td>
+      <td class="right">{{ row.price_per_unit }}</td>
+      <td class="right">{{ row.cap_rate }}</td>
+      <td>{{ row.distance }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% if sale_comps_note %}<div class="source-note">{{ sale_comps_note }}</div>{% endif %}
+  {% endif %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 12 — FINANCIAL ANALYSIS                      #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s12 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 12</div>
+    <div class="section-title">Financial Analysis</div>
+  </div>
+
+  {% if financial_pullquote %}<div class="pullquote">{{ financial_pullquote }}</div>{% endif %}
+
+  {% if sources_uses_narrative %}
+  <div class="subsection-title">Sources &amp; Uses</div>
+  <div class="narrative">{{ sources_uses_narrative }}</div>
+  <table class="data-table">
+    <tr><th>Item</th><th class="right">Amount</th></tr>
+    <tr><td>Total Project Cost</td><td class="right">{{ total_project_cost|currency }}</td></tr>
+    <tr><td>Initial Loan Amount</td><td class="right">{{ initial_loan|currency }}</td></tr>
+    <tr><td>Total Equity Required</td><td class="right">{{ total_equity|currency }}</td></tr>
+    <tr><td>GP Equity ({{ (gp_equity_pct*100)|round(0)|int }}%)</td><td class="right">{{ gp_equity|currency }}</td></tr>
+    <tr><td>LP Equity ({{ (lp_equity_pct*100)|round(0)|int }}%)</td><td class="right">{{ lp_equity|currency }}</td></tr>
+  </table>
+  <div class="callout pending">Itemized sources &amp; uses table is available in the accompanying Excel financial model.</div>
+  {% endif %}
+
+  {% if proforma_pullquote %}<div class="pullquote">{{ proforma_pullquote }}</div>{% endif %}
+
+  {% if proforma_narrative %}
+  <div class="subsection-title">10-Year Pro Forma</div>
+  <div class="narrative">{{ proforma_narrative }}</div>
+  {% endif %}
+
+  {% if pro_forma_years %}
+  <table class="proforma-table">
+    <thead>
+      <tr>
+        <th style="text-align:left;">Line Item</th>
+        {% for yr in pro_forma_years %}<th>Yr {{ yr.year }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Gross Potential Rent</td>
+        {% for yr in pro_forma_years %}<td>{{ yr.gpr|currency }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <td>Effective Gross Income</td>
+        {% for yr in pro_forma_years %}<td>{{ yr.egi|currency }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <td>Operating Expenses</td>
+        {% for yr in pro_forma_years %}<td>{{ yr.opex|currency }}</td>{% endfor %}
+      </tr>
+      <tr class="total-row">
+        <td>Net Operating Income</td>
+        {% for yr in pro_forma_years %}<td>{{ yr.noi|currency }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <td>Debt Service</td>
+        {% for yr in pro_forma_years %}<td>{{ yr.debt_service|currency }}</td>{% endfor %}
+      </tr>
+      <tr class="total-row">
+        <td>Cash Flow Before Tax</td>
+        {% for yr in pro_forma_years %}<td>{{ yr.fcf|currency }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <td>Cash-on-Cash</td>
+        {% for yr in pro_forma_years %}<td>{{ yr.cash_on_cash|percent(1) }}</td>{% endfor %}
+      </tr>
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if sensitivity_narrative %}
+  <div class="subsection-title">Sensitivity Analysis — LP IRR</div>
+  <div class="narrative">{{ sensitivity_narrative }}</div>
+  {% endif %}
+
+  {% if sensitivity_rows and sensitivity_cap_axis %}
+  <table class="sensitivity-table">
+    <thead>
+      <tr>
+        <th>Rent Growth \ Exit Cap</th>
+        {% for cap in sensitivity_cap_axis %}<th>{{ cap }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in sensitivity_rows %}
+      <tr>
+        <th>{{ row.rent_growth }}</th>
+        {# row['values'] — bracket syntax required because Jinja's row.values
+           resolves to Python dict's bound .values() method, not the key. #}
+        {% for val in row['values'] %}<td>{{ val }}</td>{% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="source-note">Green = pass ≥ 12% LP IRR · Amber = watch · Red = fail &lt; 8%</div>
+  {% endif %}
+
+  {% if construction_budget_narrative %}
+  <div class="subsection-title">Construction Budget</div>
+  <div class="narrative">{{ construction_budget_narrative }}</div>
+  <div class="callout pending">Itemized construction budget is available in the accompanying Excel financial model.</div>
+  {% endif %}
+
+  {% if exit_narrative %}
+  <div class="subsection-title">Exit Analysis</div>
+  <div class="narrative">{{ exit_narrative }}</div>
+  <table class="data-table">
+    <tr><th>Metric</th><th class="right">Value</th></tr>
+    <tr><td>Gross Sale Price</td><td class="right">{{ gross_sale_price|currency }}</td></tr>
+    <tr><td>Net Sale Proceeds</td><td class="right">{{ net_sale_proceeds|currency }}</td></tr>
+    <tr><td>Project IRR</td><td class="right">{{ project_irr|percent(2) }}</td></tr>
+    <tr><td>LP IRR</td><td class="right">{{ lp_irr|percent(2) }}</td></tr>
+    <tr><td>LP Equity Multiple</td><td class="right">{{ lp_equity_multiple|multiple }}</td></tr>
+  </table>
+  {% endif %}
+
+  {% if monte_carlo_narrative %}
+  <div class="subsection-title">Monte Carlo Risk-Weighted Return</div>
+  <div class="narrative">{{ monte_carlo_narrative }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 13 — CAPITAL STACK / DEBT                    #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s13 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 13</div>
+    <div class="section-title">Debt &amp; Capital Structure</div>
+  </div>
+
+  {% if capital_structure_pullquote %}<div class="pullquote">{{ capital_structure_pullquote }}</div>{% endif %}
+  {% if capital_stack_narrative %}<div class="narrative">{{ capital_stack_narrative }}</div>{% endif %}
+
+  {% if debt_market_narrative %}
+  <div class="subsection-title">Debt Market Context</div>
+  <div class="narrative">{{ debt_market_narrative }}</div>
+  <table class="data-table">
+    <tr><th>Benchmark</th><th>Value</th></tr>
+    <tr><td>10-Year Treasury (DGS10)</td><td>{{ dgs10_rate }}</td></tr>
+    <tr><td>SOFR</td><td>{{ sofr_rate }}</td></tr>
+    <tr><td>30-Year Mortgage Rate</td><td>{{ mortgage30_rate }}</td></tr>
+    <tr><td>CPI YoY</td><td>{{ cpi_yoy }}</td></tr>
+  </table>
+  {% endif %}
+
+  {% if debt_comparison_narrative %}
+  <div class="subsection-title">Alternative Debt Structures</div>
+  <div class="narrative">{{ debt_comparison_narrative }}</div>
+  {% endif %}
+
+  {% if waterfall_narrative %}
+  <div class="subsection-title">Waterfall Structure</div>
+  <div class="narrative">{{ waterfall_narrative }}</div>
+  {% endif %}
+
+  {% if waterfall_tier_rows %}
+  <table class="data-table">
+    <tr><th>Tier</th><th>Hurdle</th><th class="right">LP Split</th><th class="right">GP Split</th><th class="right">Promote</th></tr>
+    {% for row in waterfall_tier_rows %}
+    <tr>
+      <td>{{ row.tier }}</td>
+      <td>{{ row.hurdle }}</td>
+      <td class="right">{{ row.lp_split }}</td>
+      <td class="right">{{ row.gp_split }}</td>
+      <td class="right">{{ row.promote }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 14 — ENVIRONMENTAL / CLIMATE                 #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s14 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 14</div>
+    <div class="section-title">Environmental &amp; Climate Risk</div>
+  </div>
+
+  {% if environmental_intro %}<div class="narrative">{{ environmental_intro }}</div>{% endif %}
+
+  {% if phase_esa_narrative %}
+  <div class="subsection-title">Phase I / II ESA</div>
+  <div class="narrative">{{ phase_esa_narrative }}</div>
+  {% endif %}
+
+  {% if epa_env_flags %}
+  <div class="subsection-title">EPA Environmental Flags</div>
+  <ul>
+    {% for flag in epa_env_flags %}<li>{{ flag }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if climate_risk_narrative %}
+  <div class="subsection-title">Climate Risk</div>
+  <div class="narrative">{{ climate_risk_narrative }}</div>
+  <div class="callout pending">First Street climate-risk score table is available in a subsequent release (Option 2 scope).</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 15 — LEGAL & TITLE STATUS                    #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s15 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 15</div>
+    <div class="section-title">Legal &amp; Title Status</div>
+  </div>
+
+  {% if legal_status_narrative %}<div class="narrative">{{ legal_status_narrative }}</div>{% endif %}
+
+  {% if violations_narrative %}
+  <div class="subsection-title">Open Violations &amp; Permits</div>
+  <div class="narrative">{{ violations_narrative }}</div>
+  {% endif %}
+
+  {% if regulatory_approvals_narrative %}
+  <div class="subsection-title">Regulatory Approvals</div>
+  <div class="narrative">{{ regulatory_approvals_narrative }}</div>
+  {% endif %}
+
+  <div class="callout pending">Title search, liens, permits, and violation detail tables are available in a subsequent release (Option 2 scope).</div>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 16 — DD FLAGS                                #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s16 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 16</div>
+    <div class="section-title">Due Diligence Flags &amp; Risk Assessment</div>
+  </div>
+
+  {% if due_diligence_overview %}<div class="narrative">{{ due_diligence_overview }}</div>{% endif %}
+
+  {% if dd_flags %}
+  <div class="dd-flags">
+    {% for flag in dd_flags %}
+    {% set color = flag.color|upper %}
+    {% set cls = 'fail' if color == 'RED' else ('watch' if color == 'AMBER' else 'pass') %}
+    <div class="dd-flag {{ cls }}">
+      <div class="dd-flag-badge">{{ color }}</div>
+      <div class="dd-flag-content">
+        <div class="dd-flag-title">{{ flag.title }}{% if flag.category %} <span style="color:#6B6460;font-weight:normal;">— {{ flag.category }}</span>{% endif %}</div>
+        <div class="dd-flag-detail">{{ flag.narrative }}</div>
+        {% if flag.remediation %}<div class="dd-flag-remed"><strong>Remediation:</strong> {{ flag.remediation }}</div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="callout">No due diligence flags generated for this analysis.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 17 — DD CHECKLIST                            #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s17 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 17</div>
+    <div class="section-title">Due Diligence Checklist &amp; Status Tracker</div>
+  </div>
+  {% if dd_checklist_intro %}<div class="narrative">{{ dd_checklist_intro }}</div>{% endif %}
+  <div class="callout pending">DD checklist rollup table is available in a subsequent release (Option 2 scope).</div>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 18 — TIMELINE                                #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s18 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 18</div>
+    <div class="section-title">Project Timeline &amp; Milestones</div>
+  </div>
+  {% if timeline_narrative %}<div class="narrative">{{ timeline_narrative }}</div>{% endif %}
+  <div class="callout pending">Milestone schedule table is available in a subsequent release (Option 2 scope).</div>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 19 — RECOMMENDATION                          #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s19 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 19</div>
+    <div class="section-title">Investment Recommendation</div>
+  </div>
+
+  {% set verdict = (recommendation or "")|upper %}
+  {% set gonogo_cls = 'go' if verdict == 'GO' else ('nogo' if verdict in ('NO-GO','NO GO','NOGO') else 'conditional') %}
+  <div class="gonogo-box {{ gonogo_cls }}">
+    <div class="gonogo-verdict">{{ recommendation or "Pending" }}</div>
+    {% if recommendation_one_line %}<div class="gonogo-rationale">{{ recommendation_one_line }}</div>{% endif %}
+  </div>
+
+  {% if recommendation_pullquote %}<div class="pullquote">{{ recommendation_pullquote }}</div>{% endif %}
+  {% if recommendation_narrative_p1 %}<div class="narrative">{{ recommendation_narrative_p1 }}</div>{% endif %}
+  {% if recommendation_narrative_p2 %}<div class="narrative">{{ recommendation_narrative_p2 }}</div>{% endif %}
+
+  {% if risk_1 or risk_2 or risk_3 %}
+  <div class="subsection-title">Top Risks</div>
+  {% if risk_1 %}<div class="callout warning">{{ risk_1 }}</div>{% endif %}
+  {% if risk_2 %}<div class="callout warning">{{ risk_2 }}</div>{% endif %}
+  {% if risk_3 %}<div class="callout warning">{{ risk_3 }}</div>{% endif %}
+  {% endif %}
+
+  <div class="callout pending">Scenario comparison table (Base vs. Conservative) is available in the accompanying Excel financial model.</div>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 20 — CONCLUSIONS & NEXT STEPS                #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s20 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 20</div>
+    <div class="section-title">Conclusions &amp; Next Steps</div>
+  </div>
+
+  <div class="subsection-title">Conclusions</div>
+  {% if conclusion_1 %}<div class="narrative">{{ conclusion_1 }}</div>{% endif %}
+  {% if conclusion_2 %}<div class="narrative">{{ conclusion_2 }}</div>{% endif %}
+  {% if conclusion_3 %}<div class="narrative">{{ conclusion_3 }}</div>{% endif %}
+  {% if conclusion_4 %}<div class="narrative">{{ conclusion_4 }}</div>{% endif %}
+  {% if conclusion_5 %}<div class="narrative">{{ conclusion_5 }}</div>{% endif %}
+
+  {% if bottom_line %}
+  <div class="pullquote">{{ bottom_line }}</div>
+  {% endif %}
+
+  <div class="subsection-title">Recommended Next Steps</div>
+  {% for step in [next_step_1, next_step_2, next_step_3, next_step_4, next_step_5, next_step_6] %}
+    {% if step %}<div class="callout">→ {{ step }}</div>{% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 21 — DISCLAIMER                              #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s21 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Section 21</div>
+    <div class="section-title">Disclaimer &amp; Certification</div>
+  </div>
+  <div class="narrative">
+    This report has been prepared by {{ sponsor_name }} for internal investment evaluation purposes only.
+    The information contained herein is derived from sources believed to be reliable but is not guaranteed
+    as to accuracy or completeness. Forward-looking statements, financial projections, and market analyses
+    represent estimates and opinions and are subject to change without notice. This report does not
+    constitute an offer to sell or a solicitation of an offer to buy any security or investment interest.
+    Recipients should conduct their own independent due diligence prior to making any investment decision.
+  </div>
+  <div class="narrative" style="margin-top:18pt;">
+    <strong>Prepared by:</strong> {{ sponsor_name }}<br>
+    <strong>Report Date:</strong> {{ report_date }}<br>
+    <strong>Deal ID:</strong> {{ deal_id }}
+  </div>
+</div>
+{% endif %}
+
+{# ═══════════════════════════════════════════ #}
+{# 22 — METHODOLOGY                             #}
+{# ═══════════════════════════════════════════ #}
+{% if show_s22 %}
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">Appendix A</div>
+    <div class="section-title">Data Sources &amp; Methodology</div>
+  </div>
+  {% if methodology_notes %}<div class="narrative">{{ methodology_notes }}</div>{% endif %}
+  <div class="callout pending">Full data-provenance table is available in a subsequent release (Option 2 scope).</div>
+</div>
+{% endif %}
+
+</body>
+</html>
