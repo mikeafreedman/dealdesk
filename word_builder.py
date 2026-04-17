@@ -1441,6 +1441,88 @@ def _build_context(deal: DealData) -> dict:
     ctx["has_sale_comps"] = len(_sale_rows) > 0
     logger.info("SALE COMP ROWS: %d total", len(_sale_rows))
 
+    # ══════════════════════════════════════════════════════════════════════
+    # TEMPLATE VARIABLE FALLBACKS — Jinja2 will raise UndefinedError if any
+    # {{ var }} in the template has no ctx entry. Table placeholders get
+    # populated post-render by _populate_data_tables, so their ctx value is
+    # just an empty placeholder string ("") — the table itself is rebuilt
+    # from scratch with real data after tpl.render() completes.
+    # Non-table scalars (deal_source, report_title, etc.) resolve to real
+    # values from DealData here.
+    # ══════════════════════════════════════════════════════════════════════
+    ctx.setdefault("report_title",             deal.cover_title)
+    ctx.setdefault("deal_type",                deal.deal_type or "")
+    ctx.setdefault("deal_source",              (ext.deal_source or "") if ext else "")
+    ctx.setdefault("insurance_proforma_line_item",
+                   ins.insurance_proforma_line_item or a.insurance or 0)
+
+    _table_placeholders = [
+        "parcel_data_table", "zoning_standards_table", "transportation_table",
+        "amenity_table", "demographics_table", "supply_pipeline_table",
+        "unit_mix_table", "rent_roll_table", "rent_comp_table",
+        "commercial_comp_table", "sale_comp_table", "income_summary_table",
+        "assumptions_table", "sources_uses_table", "construction_budget_table",
+        "proforma_table", "scenario_comparison_table", "go_nogo_table",
+        "exit_table", "waterfall_table", "environmental_table",
+        "climate_risk_table", "title_search_table", "violations_table",
+        "liens_table", "ownership_history_table", "current_ownership_table",
+        "timeline_table", "data_provenance_table", "certification_table",
+    ]
+    for _k in _table_placeholders:
+        ctx.setdefault(_k, "")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # CONTEXT COMPLETENESS AUDIT — logs every critical key's state so any
+    # empty template section can be traced back to the exact missing value.
+    # ══════════════════════════════════════════════════════════════════════
+    _critical_keys = [
+        # KPI / returns
+        "kpi_rows", "purchase_price", "total_project_cost",
+        "lp_irr", "project_irr", "lp_equity_multiple", "noi_yr1",
+        "going_in_cap_rate", "dscr_yr1", "cash_on_cash_yr1",
+        "hold_period", "total_equity_required", "initial_loan_amount",
+        # Parcel A
+        "parcel_a_account", "parcel_a_owner", "parcel_a_zoning",
+        "parcel_a_year_built", "parcel_a_land_area", "parcel_a_assessed",
+        # Zoning
+        "zoning", "zoning_code", "zoning_standards_rows",
+        # HBU
+        "hbu_content", "hbu_narrative", "buildable_capacity_narrative",
+        # Transit / amenities / demographics (market data)
+        "transit_rows", "fmr_2br", "dgs10_rate",
+        # Income / EGI
+        "income_gpr", "income_egi", "income_vacancy_loss",
+        # Comps / scenarios
+        "rent_comp_rows", "sale_comp_rows",
+        # Template placeholder table keys (must exist to avoid UndefinedError)
+        "parcel_data_table", "zoning_standards_table",
+        "transportation_table", "amenity_table", "demographics_table",
+        "income_summary_table", "scenario_comparison_table",
+        "proforma_table", "sources_uses_table", "waterfall_table",
+        # Report scalars
+        "report_title", "deal_type", "deal_source",
+        "insurance_proforma_line_item",
+    ]
+    logger.info("=" * 60)
+    logger.info("WORD BUILDER CONTEXT AUDIT — %d keys in ctx total", len(ctx))
+    for _k in _critical_keys:
+        _v = ctx.get(_k, "<MISSING>")
+        if _v == "<MISSING>":
+            logger.warning("  CTX[%s] = MISSING/NONE \u2190 FIX NEEDED", _k)
+        elif _v is None:
+            logger.warning("  CTX[%s] = None \u2190 FIX NEEDED", _k)
+        elif isinstance(_v, list):
+            logger.info("  CTX[%s] = list(%d items)", _k, len(_v))
+        elif isinstance(_v, dict):
+            logger.info("  CTX[%s] = dict(%d keys)", _k, len(_v))
+        else:
+            try:
+                _repr = str(_v)[:80]
+            except Exception:
+                _repr = f"<{type(_v).__name__}>"
+            logger.info("  CTX[%s] = %s", _k, _repr)
+    logger.info("=" * 60)
+
     return ctx
 
 
