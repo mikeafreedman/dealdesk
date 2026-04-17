@@ -719,7 +719,9 @@ def _build_context(deal: DealData) -> dict:
     ctx["asking_price"] = f"${deal.assumptions.purchase_price:,.0f}" if deal.assumptions.purchase_price else "Not disclosed"
     ctx["purchase_price"] = a.purchase_price
     ctx["num_units"] = a.num_units
-    ctx["building_sf"] = a.gba_sf
+    _bsf = a.gba_sf or 0
+    ctx["building_sf"] = f"{_bsf:,.0f} SF" if _bsf else "Not provided"
+    logger.info("COVER: building_sf=%s (raw gba_sf=%s)", ctx["building_sf"], a.gba_sf)
     ctx["lot_sf"] = a.lot_sf
     ctx["year_built"] = a.year_built
     ctx["hold_period"] = a.hold_period
@@ -1678,15 +1680,19 @@ def _remove_parameter_placeholder_boxes(doc, labels: list) -> int:
     """
     label_set = {s.strip().lower() for s in labels}
     to_remove = []
+    removed_labels = []
     for table in doc.tables:
         if len(table.rows) != 1 or len(table.rows[0].cells) != 1:
             continue
-        cell_text = table.rows[0].cells[0].text.strip().lower()
-        if cell_text in label_set:
+        raw_text = table.rows[0].cells[0].text.strip()
+        if raw_text.lower() in label_set:
             to_remove.append(table)
+            removed_labels.append(raw_text)
     for table in to_remove:
         tbl = table._tbl
         tbl.getparent().remove(tbl)
+    for lbl in removed_labels:
+        logger.info("PLACEHOLDER KPI: removed box '%s'", lbl)
     if to_remove:
         logger.info("PLACEHOLDER: removed %d parameter-label boxes", len(to_remove))
     return len(to_remove)
@@ -1818,18 +1824,27 @@ def remove_placeholder_box(doc, placeholder_text_contains):
     return False
 
 
-def _pop_by_header(doc, header_keyword: str, rows: list, label: str) -> bool:
+def _pop_by_header(doc, header_keyword: str, rows: list, label: str,
+                   num_cols: int | None = None) -> bool:
     """Find a table whose first-cell text EQUALS header_keyword and populate it.
 
     Uses case-insensitive, whitespace-stripped EXACT equality — not substring —
     to avoid collisions like "Type" matching "Asset Type" on the cover table
     (which caused the Violations row to overwrite the cover). Every caller in
     this file passes a keyword that's the full first-cell label.
+
+    If `num_cols` is given, also require the matching table to have exactly
+    that many columns. Use this to disambiguate when several templates share
+    a generic first-cell label (e.g. both the Parcel table and the Owner
+    Entity table start with "Field"; Parcel = 3 cols, Owner = 2 cols).
     """
     for i, t in enumerate(doc.tables):
         try:
             first = t.cell(0, 0).text.strip()
+            col_count = len(t.rows[0].cells)
         except Exception:
+            continue
+        if num_cols is not None and col_count != num_cols:
             continue
         if header_keyword.lower() == first.lower():
             try:
@@ -2186,26 +2201,43 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
             _populate_counter[0] += 1
 
     # ── Table 10 (idx=9): Parcel & Improvement Data ──────────────
-    parcel_rows = []
+    # Template header is "Field / Parcel A / Parcel B" (3 cols). When OPA
+    # parcel_data is present we populate the full schema; when it is missing
+    # (common — Philly OPA scraper gap for range addresses) we fall back to
+    # the fields the pipeline DOES have so the table isn't empty.
     if pd_:
         parcel_rows = [
-            ["Parcel ID (APN/OPA)", pd_.parcel_id or "—", ""],
-            ["Owner", pd_.owner_name or "—", ""],
-            ["Assessed Value", f"${pd_.assessed_value:,.0f}" if pd_.assessed_value else "—", ""],
-            ["Land Value", f"${pd_.land_value:,.0f}" if pd_.land_value else "—", ""],
-            ["Improvement Value", f"${pd_.improvement_value:,.0f}" if pd_.improvement_value else "—", ""],
-            ["Last Sale Date", pd_.last_sale_date or "—", ""],
-            ["Last Sale Price", f"${pd_.last_sale_price:,.0f}" if pd_.last_sale_price else "—", ""],
-            ["Lot Area", f"{pd_.lot_area_sf:,.0f} SF" if pd_.lot_area_sf else "—", ""],
-            ["Building SF", f"{pd_.building_sf:,.0f} SF" if pd_.building_sf else "—", ""],
-            ["Year Built", str(pd_.year_built) if pd_.year_built else "—", ""],
-            ["Zoning", pd_.zoning_code or "—", ""],
+            ["Parcel ID (APN/OPA)", pd_.parcel_id or "—", "—"],
+            ["Owner", pd_.owner_name or "—", "—"],
+            ["Assessed Value", f"${pd_.assessed_value:,.0f}" if pd_.assessed_value else "—", "—"],
+            ["Land Value", f"${pd_.land_value:,.0f}" if pd_.land_value else "—", "—"],
+            ["Improvement Value", f"${pd_.improvement_value:,.0f}" if pd_.improvement_value else "—", "—"],
+            ["Last Sale Date", pd_.last_sale_date or "—", "—"],
+            ["Last Sale Price", f"${pd_.last_sale_price:,.0f}" if pd_.last_sale_price else "—", "—"],
+            ["Lot Area", f"{pd_.lot_area_sf:,.0f} SF" if pd_.lot_area_sf else "—", "—"],
+            ["Building SF", f"{pd_.building_sf:,.0f} SF" if pd_.building_sf else "—", "—"],
+            ["Year Built", str(pd_.year_built) if pd_.year_built else "—", "—"],
+            ["Zoning", pd_.zoning_code or "—", "—"],
         ]
+    else:
+        addr = deal.address
+        parcel_rows = [
+            ["Census Tract", addr.census_tract or "—", "—"],
+            ["FIPS Code",    addr.fips_code    or "—", "—"],
+            ["Asset Type",   deal.asset_type.value,     "—"],
+            ["Zoning",       z.zoning_code or "Pending verification", "—"],
+            ["Units",        str(a.num_units) if a.num_units else "—", "—"],
+            ["Building SF",  f"{a.gba_sf:,.0f} SF" if a.gba_sf else "—", "—"],
+            ["Lot Area",     f"{a.lot_sf:,.0f} SF" if a.lot_sf else "—", "—"],
+            ["Year Built",   str(a.year_built) if a.year_built else "—", "—"],
+        ]
+    logger.info("PARCEL TABLE: writing %d rows (parcel_data=%s)",
+                len(parcel_rows), "present" if pd_ else "fallback")
     logger.info("PARCEL CTX: parcel_id=%s owner=%s zoning=%s",
                 getattr(pd_, 'parcel_id', None) if pd_ else None,
                 getattr(pd_, 'owner_name', None) if pd_ else None,
                 getattr(z, 'zoning_code', None) if z else None)
-    _pop_by_header(doc, "Parcel ID", parcel_rows, "PARCEL")
+    _pop_by_header(doc, "Field", parcel_rows, "PARCEL", num_cols=3)
 
     # ── Ownership History ─────────────────────────────────────────
     _pop_by_header(doc, "Date", [], "OWNERSHIP_HIST")
@@ -2217,7 +2249,7 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
             ["Owner Name", pd_.owner_name or "Not provided"],
             ["Entity Type", pd_.owner_entity or "Not provided"],
         ]
-    _pop_by_header(doc, "Field", owner_rows, "OWNER_ENTITY")
+    _pop_by_header(doc, "Field", owner_rows, "OWNER_ENTITY", num_cols=2)
 
     # ── Liens, Mortgages & Encumbrances ──────────────────────────
     _safe_pop(12, [["—", "No recorded liens on file", "—", "—", "—", "—"]])
@@ -2361,20 +2393,39 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
     logger.info("RENT ROLL TABLE: populate call returned")
 
     # ── Table 24 (idx=23): Income Summary ─────────────────────────
-    gpr = fo.gross_potential_rent if fo.gross_potential_rent is not None else 0
-    egi = fo.effective_gross_income
+    # Use the first STABILIZED year from pro_forma_years (first yr where
+    # gpr > 0). For a value-add deal, Year 1 has gpr=0/egi=0 because the
+    # stabilization factor is 0 during construction — that would show the
+    # Income Summary as all zeroes. Pull the first occupied year instead.
     vac_rate = a.vacancy_rate if a.vacancy_rate is not None else 0.05
     ltl_rate = a.loss_to_lease if a.loss_to_lease is not None else 0.03
-    vacancy = gpr * vac_rate
-    ltl = gpr * ltl_rate
     other_inc = (a.cam_reimbursements or 0) + (a.fee_income or 0)
-    if egi is None and gpr is not None:
-        egi = gpr * (1 - vac_rate) * (1 - ltl_rate) + other_inc
-        logger.info("EGI: fallback computed = $%.0f (gpr=%.0f vac=%.3f ltl=%.3f)",
-                    egi, gpr, vac_rate, ltl_rate)
-    if egi is None:
-        egi = 0
-    logger.info("EGI: $%.0f", egi)
+
+    stab_yr = next(
+        (y for y in (fo.pro_forma_years or []) if (y.get("gpr") or 0) > 0),
+        None,
+    )
+    if stab_yr is not None:
+        gpr = stab_yr.get("gpr") or 0
+        egi = stab_yr.get("egi") or 0
+        vacancy = gpr * vac_rate
+        ltl = gpr * ltl_rate
+        egi_source = f"pro_forma_years[year={stab_yr.get('year')}]"
+    else:
+        gpr = fo.gross_potential_rent or 0
+        vacancy = gpr * vac_rate
+        ltl = gpr * ltl_rate
+        # Compute EGI from GPR when fo.effective_gross_income is 0 or None.
+        # Treat 0 as "not available" here because the Year-1 scalar is 0 for
+        # value-add deals during construction.
+        if not (fo.effective_gross_income or 0):
+            egi = max(gpr - vacancy - ltl + other_inc, 0)
+        else:
+            egi = fo.effective_gross_income
+        egi_source = "computed from scalar gpr"
+    logger.info("EGI: gpr=%s vacancy=%s l2l=%s egi=%s (source=%s)",
+                f"{gpr:,.0f}", f"{vacancy:,.0f}", f"{ltl:,.0f}",
+                f"{egi:,.0f}", egi_source)
 
     income_summary_rows = [
         ["Gross Potential Rent (GPR)",
@@ -2683,6 +2734,14 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
         ["Equity Multiple",     _safe_x(eq_mult),     _c("eq_mult", _safe_x),                  "—"],
     ]
     logger.info("SCENARIO: built %d rows", len(scenario_rows))
+    logger.info(
+        "SCENARIO TABLE: A_lp_irr=%s B_lp_irr=%s A_em=%s B_em=%s "
+        "A_exit=%s B_exit=%s A_net=%s B_net=%s",
+        lp_irr, cons.get("lp_irr"),
+        lp_em, cons.get("lp_em"),
+        exit_px, cons.get("exit_px"),
+        net_exit, cons.get("net_exit"),
+    )
     # Find the Scenario Comparison table specifically (avoid KPI table which also has "Metric")
     _scenario_table = None
     for _st in doc.tables:
@@ -2806,6 +2865,10 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
         "Target LP IRR", "Min LP IRR", "Transfer Tax",
         "Professional & DD", "Construction Hard Costs", "Origination Fee",
         "Senior Debt", "Total Equity Required", "GP Equity", "LP Equity",
+        # KPI boxes on report pages 7–20 (single-label parchment boxes)
+        "Year 1 NOI", "Going-In Cap Rate", "Year 1 DSCR",
+        "Year 1 Cash-on-Cash", "LP IRR", "LP Equity Multiple",
+        "Project IRR",
     ])
 
     # Remove per-year placeholder boxes ("Year 1" … "Year 13")
