@@ -139,21 +139,53 @@ def _build_image_context(deal) -> dict:
 
 _DOCX_OBJ_TYPES = {"InlineImage"}
 
+# Phrases that belong only to the Word template (TOC field instructions,
+# Conditional-block notes) and should never appear in any rendered PDF.
+_SCRUB_PHRASES = (
+    "Right-click the table above",
+    "Update Field",
+    "refresh page numbers",
+    "Conditional block",
+    "renders only when image_type",
+)
+
+
+def _scrub_string(s: str) -> str:
+    """Remove any sentence containing a _SCRUB_PHRASES fragment. Operates per
+    string and is a no-op when none of the phrases are present."""
+    if not s or not any(p in s for p in _SCRUB_PHRASES):
+        return s
+    # Split on sentence terminators, drop dirty sentences, rejoin. Cheap and
+    # safe — at worst we over-trim a narrative that literally named one of
+    # these phrases, which is fine for a report.
+    parts = re.split(r'(?<=[.!?])\s+', s)
+    kept = [p for p in parts if not any(ph in p for ph in _SCRUB_PHRASES)]
+    return " ".join(kept).strip()
+
 
 def _strip_docx_objects(ctx: dict) -> dict:
-    """Remove docx-specific objects (InlineImage) from ctx so they don't end up
-    in str() output in the HTML. word_builder._build_context() itself doesn't
-    produce these, but a future refactor might — cheap insurance.
+    """Remove docx-specific objects (InlineImage) from ctx and scrub any
+    narrative strings that leaked Word-only instruction text.
+    word_builder._build_context() itself doesn't produce InlineImage objects
+    today, but a future refactor might — cheap insurance.
     """
     cleaned = {}
     removed = 0
+    scrubbed = 0
     for k, v in ctx.items():
         if type(v).__name__ in _DOCX_OBJ_TYPES:
             removed += 1
             continue
+        if isinstance(v, str):
+            new_v = _scrub_string(v)
+            if new_v != v:
+                scrubbed += 1
+                v = new_v
         cleaned[k] = v
     if removed:
         logger.info("REPORT: stripped %d docx-specific objects from ctx", removed)
+    if scrubbed:
+        logger.info("REPORT: scrubbed Word-only phrases from %d ctx strings", scrubbed)
     return cleaned
 
 
@@ -221,11 +253,13 @@ def generate_report(deal, pdf_path: str | Path | None = None) -> Path:
     )
 
     # ── Playwright render to PDF ─────────────────────────────────
-    try:
+    # Playwright's sync API refuses to run on a thread that has a live
+    # asyncio event loop (main.py's request handlers are async). Detect
+    # that case and hop to a worker thread.
+    def _do_render() -> None:
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page()
-            # Use data URL so relative references resolve against the doc itself.
             page.set_content(html_content, wait_until="load", timeout=30000)
             page.pdf(
                 path=str(pdf_path),
@@ -235,6 +269,21 @@ def generate_report(deal, pdf_path: str | Path | None = None) -> Path:
                 margin={"top": "0", "bottom": "0", "left": "0", "right": "0"},
             )
             browser.close()
+
+    try:
+        import asyncio
+        import concurrent.futures
+        try:
+            asyncio.get_running_loop()
+            in_async_loop = True
+        except RuntimeError:
+            in_async_loop = False
+
+        if in_async_loop:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                ex.submit(_do_render).result(timeout=120)
+        else:
+            _do_render()
     except Exception as exc:
         logger.error("REPORT: Playwright render failed — %s", exc, exc_info=True)
         raise RuntimeError(f"report_builder: Playwright PDF failed: {exc}") from exc

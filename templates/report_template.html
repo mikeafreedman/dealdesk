@@ -167,7 +167,20 @@
 
   {% if photo_gallery_note %}<div class="source-note">{{ photo_gallery_note }}</div>{% endif %}
 
-  <div class="callout pending">Offering memorandum photo extraction is available in a subsequent release (Option 2 scope).</div>
+  {# Floor plans: only rendered when at least one image is present. No
+     placeholder callout is emitted on the empty case — the section simply
+     omits the block so the PDF doesn't show a dead sage box. #}
+  {% if floor_plan_images and floor_plan_images|length > 0 %}
+  <div class="subsection-title">Floor Plans</div>
+  <div class="photo-grid">
+    {% for fp in floor_plan_images %}
+    <div class="photo-cell">
+      <img src="{{ fp.src if fp.src is defined else fp }}" alt="Floor plan {{ loop.index }}">
+      {% if fp.caption is defined %}<div class="photo-caption">{{ fp.caption }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
 {% endif %}
 

@@ -1455,8 +1455,9 @@ def _build_context(deal: DealData) -> dict:
     ctx.setdefault("report_title",             deal.cover_title)
     ctx.setdefault("deal_type",                deal.deal_type or "")
     ctx.setdefault("deal_source",              (ext.deal_source or "") if ext else "")
+    _ins_val = ins.insurance_proforma_line_item or a.insurance or 0
     ctx.setdefault("insurance_proforma_line_item",
-                   ins.insurance_proforma_line_item or a.insurance or 0)
+                   f"${_ins_val:,.0f}" if _ins_val else "N/A")
 
     _table_placeholders = [
         "parcel_data_table", "zoning_standards_table", "transportation_table",
@@ -2019,6 +2020,10 @@ def _remove_empty_placeholders(doc, deal: DealData) -> None:
     _remove_paragraphs_containing(doc, [
         "Conditional block",
         "renders only when image_type",
+        # Word-only TOC refresh instruction — meaningless in the PDF.
+        "Right-click the table above",
+        "Update Field",
+        "refresh page numbers",
     ])
 
     # Insurance KPI Strip placeholder
