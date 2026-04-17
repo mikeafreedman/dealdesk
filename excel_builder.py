@@ -65,6 +65,20 @@ def populate_excel(deal: DealData) -> Path:
     wb = openpyxl.load_workbook(output_path)
     ws = wb["Assumptions"]
 
+    # Column widths so labels in column B and values in C–H are not truncated.
+    ws.column_dimensions['A'].width = 4
+    ws.column_dimensions['B'].width = 52
+    ws.column_dimensions['C'].width = 20
+    ws.column_dimensions['D'].width = 20
+    ws.column_dimensions['E'].width = 20
+    ws.column_dimensions['F'].width = 12
+    ws.column_dimensions['G'].width = 12
+    ws.column_dimensions['H'].width = 30
+    # Un-hide any row whose height is 0 (template has a couple stashed rows).
+    for row_dim in list(ws.row_dimensions.values()):
+        if row_dim.height == 0:
+            row_dim.height = None
+
     for cell_ref, value in _build_cell_map(deal):
         if value is not None:
             ws[cell_ref] = value
@@ -796,6 +810,32 @@ def _populate_constr_interest_tab(ws, deal: DealData) -> None:
     for col_offset, h in enumerate(headers):
         ws.cell(row=HDR_ROW, column=2 + col_offset, value=h)
 
+    # ── DealDesk styling — dark walnut headers, parchment alternating data ──
+    from openpyxl.styles import Alignment, Border, Side
+    walnut_fill  = PatternFill(start_color="2C1F14", end_color="2C1F14", fill_type="solid")
+    walnut_font  = Font(color="FFFFFF", bold=True, size=11)
+    parch_fill   = PatternFill(start_color="F5EFE4", end_color="F5EFE4", fill_type="solid")
+    dark_font    = Font(color="2C1F14", size=10)
+    thin_side    = Side(border_style="thin", color="2C1F14")
+    thin_border  = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    center_align = Alignment(horizontal="center", vertical="center")
+
+    # Column widths
+    for col_letter, width in [("B", 10), ("C", 18), ("D", 18), ("E", 20), ("F", 18)]:
+        ws.column_dimensions[col_letter].width = width
+
+    # Section title (row 2)
+    ws["B2"].font = Font(color="2C1F14", bold=True, size=14)
+
+    # Header row styling
+    ws.row_dimensions[HDR_ROW].height = 28
+    for col_offset in range(len(headers)):
+        c = ws.cell(row=HDR_ROW, column=2 + col_offset)
+        c.fill = walnut_fill
+        c.font = walnut_font
+        c.alignment = center_align
+        c.border = thin_border
+
     # ── Data rows ────────────────────────────────────────────────────
     if not schedule:
         ws.cell(row=HDR_ROW + 1, column=2,
@@ -808,11 +848,27 @@ def _populate_constr_interest_tab(ws, deal: DealData) -> None:
             ws.cell(row=r, column=4, value=entry.get("cumulative_draw_pct"))
             ws.cell(row=r, column=5, value=entry.get("outstanding_balance"))
             ws.cell(row=r, column=6, value=entry.get("monthly_interest"))
+            # Parchment on alternate rows; white elsewhere. Both get dark text,
+            # centered alignment, thin border.
+            row_fill = parch_fill if i % 2 == 0 else None
+            for col_offset in range(5):
+                c = ws.cell(row=r, column=2 + col_offset)
+                if row_fill is not None:
+                    c.fill = row_fill
+                c.font = dark_font
+                c.alignment = center_align
+                c.border = thin_border
 
         # Totals row
         total_row = HDR_ROW + 1 + len(schedule)
         ws.cell(row=total_row, column=2, value="TOTAL")
         ws.cell(row=total_row, column=6, value=carry)
+        for col_offset in range(5):
+            c = ws.cell(row=total_row, column=2 + col_offset)
+            c.fill = walnut_fill
+            c.font = walnut_font
+            c.alignment = center_align
+            c.border = thin_border
 
     logger.info(
         "CONSTR INTEREST TAB: wrote %d schedule rows, total_carry=%s",

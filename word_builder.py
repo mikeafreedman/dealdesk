@@ -1638,6 +1638,7 @@ def _remove_image_placeholder_boxes(doc) -> None:
         "Conditional block", "renders only when",
         "Prompt 1A image extraction",
         "plan=full width", "market.py output",
+        "FEMA Flood Map", "Flood Map",
     ]
     tables_to_remove = []
     captions_stripped = 0
@@ -1779,6 +1780,19 @@ def _fix_dark_data_rows(doc) -> int:
     return count
 
 
+def _fix_toc_page_break(doc) -> None:
+    """Ensure the TABLE OF CONTENTS paragraph starts on its own page."""
+    from docx.oxml import OxmlElement
+    for para in doc.paragraphs:
+        if "TABLE OF CONTENTS" in (para.text or "").upper():
+            pPr = para._p.get_or_add_pPr()
+            pageBreak = OxmlElement('w:pageBreakBefore')
+            pageBreak.set(qn('w:val'), '1')
+            pPr.append(pageBreak)
+            logger.info("TOC: page break added before paragraph")
+            return
+
+
 def remove_placeholder_box(doc, placeholder_text_contains):
     """Find a SINGLE-CELL placeholder table whose cell contains the given text
     and remove it entirely.
@@ -1805,13 +1819,19 @@ def remove_placeholder_box(doc, placeholder_text_contains):
 
 
 def _pop_by_header(doc, header_keyword: str, rows: list, label: str) -> bool:
-    """Find a table whose first-cell text contains header_keyword and populate it."""
+    """Find a table whose first-cell text EQUALS header_keyword and populate it.
+
+    Uses case-insensitive, whitespace-stripped EXACT equality — not substring —
+    to avoid collisions like "Type" matching "Asset Type" on the cover table
+    (which caused the Violations row to overwrite the cover). Every caller in
+    this file passes a keyword that's the full first-cell label.
+    """
     for i, t in enumerate(doc.tables):
         try:
             first = t.cell(0, 0).text.strip()
         except Exception:
             continue
-        if header_keyword.lower() in first.lower():
+        if header_keyword.lower() == first.lower():
             try:
                 populate_table(t, rows)
                 logger.info("%s: populated %d rows into table[%d] (header='%s')",
@@ -2262,6 +2282,14 @@ def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
             ["Renter Occupancy", "—", "47.8%", "High", "2022 ACS 5-Year"],
             ["Unemployment Rate", "—", "8.6%", "Above MSA avg", "BLS / ACS 2022"],
         ]
+    logger.info(
+        "DEMOGRAPHICS: pop_1mi=%s pop_3mi=%s income_1mi=%s income_3mi=%s "
+        "renter_1mi=%s renter_3mi=%s unemployment=%s",
+        md.population_1mi, md.population_3mi,
+        md.median_hh_income_1mi, md.median_hh_income_3mi,
+        md.pct_renter_occ_1mi, md.pct_renter_occ_3mi,
+        md.unemployment_rate,
+    )
     _pop_by_header(doc, "Indicator", demo_rows, "DEMOGRAPHICS")
 
     # ── Table 21 (idx=20): Pipeline Register ──────────────────────
@@ -2867,6 +2895,10 @@ def _populate_docx(deal: DealData) -> Path:
             except Exception:
                 pass
     _strip_highlight(tpl.docx)
+
+    # Force TOC onto its own page (the v4 template omits a page break
+    # before the "TABLE OF CONTENTS" heading).
+    _fix_toc_page_break(tpl.docx)
 
     # ── Fix 3: remove leaked Jinja conditional-comment paragraphs ────
     _paras_to_remove = []

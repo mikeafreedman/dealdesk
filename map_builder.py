@@ -2,7 +2,7 @@
 map_builder.py — DealDesk Map Image Generator
 ===============================================
 Generates three PNG map images for the PDF report:
-    Figure 3.1 — Aerial Location Map       (OpenStreetMap tiles, zoom 16)
+    Figure 3.1 — Aerial Location Map       (OpenStreetMap tiles, zoom 13)
     Figure 3.2 — Neighborhood Context Map  (Google Maps Static API, zoom 14)
     Figure 3.3 — FEMA Flood Map            (FEMA NFHL WMS overlay)
 
@@ -119,8 +119,8 @@ def build_aerial_map(deal):
     if not _lat_lon_valid(lat, lon):
         logger.info("Aerial map skipped — no geocoordinates")
         return None
-    logger.info("Building aerial map — lat=%.5f lon=%.5f zoom=16", lat, lon)
-    png = _stitch_tiles(lat, lon, zoom=16, tiles_wide=3, tiles_tall=3)
+    logger.info("Building aerial map — lat=%.5f lon=%.5f zoom=13", lat, lon)
+    png = _stitch_tiles(lat, lon, zoom=13, tiles_wide=3, tiles_tall=3)
     if png:
         logger.info("Aerial map built — %d bytes", len(png))
     return png
