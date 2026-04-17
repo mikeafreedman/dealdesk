@@ -1618,7 +1618,18 @@ def populate_table(table, data_rows, style="data"):
 
 
 def _remove_image_placeholder_boxes(doc) -> None:
-    """Remove sage-green single-cell placeholder boxes wrapping image frames that have no actual image."""
+    """Remove sage-green single-cell placeholder boxes wrapping image frames that have no actual image.
+
+    CRITICAL: In the v4 template, each sage-green image box contains BOTH
+    a {{ image_var }} placeholder AND a caption marker like "Hero Shot —
+    primary exterior elevation...".  After tpl.render(), the placeholder
+    is replaced with the InlineImage (a <w:drawing> element), but the
+    caption text remains in cell.text.  If we match only on caption text
+    we'll delete the whole cell — and the image we just rendered with it.
+
+    Fix: skip any cell that now contains a drawing (the image was
+    successfully rendered).  Only truly empty placeholder boxes are removed.
+    """
     PLACEHOLDER_MARKERS = [
         "Hero Shot", "Property Photo Gallery",
         "Floor Plan", "Supply Pipeline",
@@ -1629,15 +1640,30 @@ def _remove_image_placeholder_boxes(doc) -> None:
         "plan=full width", "market.py output",
     ]
     tables_to_remove = []
+    captions_stripped = 0
     for table in doc.tables:
         if len(table.rows) == 1 and len(table.rows[0].cells) == 1:
-            text = table.rows[0].cells[0].text.strip()
-            if any(m.lower() in text.lower() for m in PLACEHOLDER_MARKERS):
-                tables_to_remove.append(table)
+            cell = table.rows[0].cells[0]
+            text = cell.text.strip()
+            if not any(m.lower() in text.lower() for m in PLACEHOLDER_MARKERS):
+                continue
+            # If a real image has rendered into this cell, keep the cell
+            # but strip the caption paragraphs (the text is developer
+            # documentation, not report copy).
+            if cell._tc.findall(f'.//{qn("w:drawing")}'):
+                for p in list(cell.paragraphs):
+                    if p._element.findall(f'.//{qn("w:drawing")}'):
+                        continue
+                    p._element.getparent().remove(p._element)
+                captions_stripped += 1
+                continue
+            tables_to_remove.append(table)
     for table in tables_to_remove:
         tbl = table._tbl
         tbl.getparent().remove(tbl)
-    logger.info("PLACEHOLDER: removed %d image placeholder boxes", len(tables_to_remove))
+    logger.info("PLACEHOLDER: removed %d image placeholder boxes, "
+                "stripped %d captions from rendered image cells",
+                len(tables_to_remove), captions_stripped)
 
 
 def _remove_parameter_placeholder_boxes(doc, labels: list) -> int:
@@ -1754,14 +1780,22 @@ def _fix_dark_data_rows(doc) -> int:
 
 
 def remove_placeholder_box(doc, placeholder_text_contains):
-    """Find a table whose cells contain the given text and remove it entirely.
+    """Find a SINGLE-CELL placeholder table whose cell contains the given text
+    and remove it entirely.
 
     The sage green placeholder boxes are single-cell tables containing
     {{ image_variable }} or descriptive caption text. When the image is
     not available, the table renders as an empty styled box.
+
+    CRITICAL: must only match single-cell tables (1 row × 1 col). Otherwise
+    loose substrings like "Year 1" match populated data tables (the 10-year
+    pro forma starts every row with "Year 1", "Year 2", …) and we delete
+    the whole populated table instead of the placeholder box.
     """
     for table in doc.tables:
-        full_text = ' '.join(cell.text for row in table.rows for cell in row.cells)
+        if len(table.rows) != 1 or len(table.rows[0].cells) != 1:
+            continue
+        full_text = table.rows[0].cells[0].text
         if placeholder_text_contains.lower() in full_text.lower():
             tbl = table._tbl
             tbl.getparent().remove(tbl)

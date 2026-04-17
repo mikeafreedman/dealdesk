@@ -256,8 +256,10 @@ def _compute_sources_uses(deal: DealData) -> dict:
     initial_loan = total_project_cost * a.ltv_pct
     origination_fee = initial_loan * a.origination_fee_pct
     logger.info(
-        "ORIGINATION FEE: pct=%.2f%%, loan=$%,.0f, fee=$%,.0f",
-        a.origination_fee_pct * 100, initial_loan, origination_fee
+        "ORIGINATION FEE: pct=%.2f%%, loan=$%s, fee=$%s",
+        a.origination_fee_pct * 100,
+        f"{initial_loan:,.0f}",
+        f"{origination_fee:,.0f}",
     )
 
     # ── Construction loan interest carry (S-curve draw model) ──────

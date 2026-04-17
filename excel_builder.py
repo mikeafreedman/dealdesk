@@ -402,9 +402,14 @@ def _populate_rent_roll_commercial(ws, units: list, deal: DealData) -> None:
 
 
 def _normalise_status(raw: str | None) -> str:
-    """Map extracted lease status strings to the template's expected values."""
+    """Map extracted lease status strings to the template's expected values.
+
+    When no status is supplied (synthesized rent roll, no rent-roll upload),
+    default to "Occupied" — the UW assumes units are leased unless the user
+    explicitly flags them vacant.
+    """
     if not raw:
-        return "Vacant"
+        return "Occupied"
     lower = raw.lower().strip()
     if lower in ("occupied", "current", "leased"):
         return "Occupied"
