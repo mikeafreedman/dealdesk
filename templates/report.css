@@ -314,6 +314,13 @@ body {
     border-bottom: none;
 }
 
+.data-table .subtotal-row td {
+    background: var(--parchment-dk);
+    font-weight: bold;
+    border-top: 1pt solid var(--earth-light);
+    border-bottom: 1pt solid var(--earth-light);
+}
+
 /* --- Pro Forma Table (wide) --- */
 .proforma-table {
     width: 100%;

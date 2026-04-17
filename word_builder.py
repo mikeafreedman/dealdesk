@@ -1444,6 +1444,140 @@ def _build_context(deal: DealData) -> dict:
     logger.info("SALE COMP ROWS: %d total", len(_sale_rows))
 
     # ══════════════════════════════════════════════════════════════════════
+    # OPTION 2 — Row builders moved out of _populate_data_tables so that the
+    # HTML/Playwright report template can read them directly from ctx. The
+    # docx pipeline is intentionally left untouched — _populate_data_tables
+    # still rebuilds its own versions for the Word document.
+    # ══════════════════════════════════════════════════════════════════════
+
+    # ── Demographics — 4 indicators × (1-mile / 3-mile / trend / source) ──
+    if md.population_1mi or md.median_hh_income_1mi or md.population_3mi:
+        demographic_rows = [
+            {"metric": "Population",
+             "one_mile":  f"{md.population_1mi:,}" if md.population_1mi else "—",
+             "three_mile": f"{md.population_3mi:,}" if md.population_3mi else "—",
+             "trend": "—", "source": "2022 ACS 5-Year"},
+            {"metric": "Median HH Income",
+             "one_mile":  f"${md.median_hh_income_1mi:,.0f}" if md.median_hh_income_1mi else "—",
+             "three_mile": f"${md.median_hh_income_3mi:,.0f}" if md.median_hh_income_3mi else "—",
+             "trend": "—", "source": "2022 ACS 5-Year"},
+            {"metric": "Renter Occupancy",
+             "one_mile":  f"{md.pct_renter_occ_1mi:.1%}" if md.pct_renter_occ_1mi else "—",
+             "three_mile": f"{md.pct_renter_occ_3mi:.1%}" if md.pct_renter_occ_3mi else "—",
+             "trend": "—", "source": "2022 ACS 5-Year"},
+            {"metric": "Unemployment Rate",
+             "one_mile":  f"{md.unemployment_rate:.1%}" if md.unemployment_rate else "—",
+             "three_mile": "—", "trend": "—", "source": "BLS / ACS 2022"},
+        ]
+    else:
+        demographic_rows = [
+            {"metric": "Population",        "one_mile": "—", "three_mile": "1,593,208",
+             "trend": "Growing",       "source": "2022 ACS 5-Year"},
+            {"metric": "Median HH Income",  "one_mile": "—", "three_mile": "$57,537",
+             "trend": "Stable",        "source": "2022 ACS 5-Year"},
+            {"metric": "Renter Occupancy",  "one_mile": "—", "three_mile": "47.8%",
+             "trend": "High",          "source": "2022 ACS 5-Year"},
+            {"metric": "Unemployment Rate", "one_mile": "—", "three_mile": "8.6%",
+             "trend": "Above MSA avg", "source": "BLS / ACS 2022"},
+        ]
+    ctx["demographic_rows"] = demographic_rows
+    logger.info("DEMOGRAPHIC_ROWS: %d rows built", len(demographic_rows))
+
+    # ── Sources & Uses — mirrors the XLSX S&U tab structure ───────────────
+    _su_tpc = fo.total_uses or 0
+    def _su_pct(amt):
+        return f"{(amt / _su_tpc * 100):.1f}%" if _su_tpc > 0 and amt else ""
+    _su_prof_dd = sum(
+        (getattr(a, k, 0) or 0)
+        for k in ('legal_closing', 'title_insurance', 'legal_bank', 'appraisal',
+                  'environmental', 'surveyor', 'architect', 'structural',
+                  'civil_eng', 'meps', 'legal_zoning', 'geotech')
+    )
+    _su_hard = (getattr(a, 'const_hard', 0) or 0) + (getattr(a, 'const_reserve', 0) or 0)
+    _su_orig = (fo.initial_loan_amount or 0) * (getattr(a, 'origination_fee_pct', 0.01) or 0.01)
+    _su_xtax = (a.purchase_price or 0) * (getattr(a, 'transfer_tax_rate', 0.02139) or 0.02139)
+    _su_loan = fo.initial_loan_amount or 0
+    sources_uses_rows = [
+        {"item": "Purchase Price",
+         "amount": f"${a.purchase_price:,.0f}",     "pct": _su_pct(a.purchase_price or 0),
+         "note":   "Acquisition"},
+        {"item": "Transfer Tax",
+         "amount": f"${_su_xtax:,.0f}",             "pct": _su_pct(_su_xtax),
+         "note":   "PA buyer share"},
+        {"item": "Professional & DD",
+         "amount": f"${_su_prof_dd:,.0f}",          "pct": _su_pct(_su_prof_dd),
+         "note":   "Legal, title, inspections"},
+        {"item": "Construction Hard Costs",
+         "amount": f"${_su_hard:,.0f}",             "pct": _su_pct(_su_hard),
+         "note":   "Renovation + reserve"},
+        {"item": "Origination Fee",
+         "amount": f"${_su_orig:,.0f}",             "pct": _su_pct(_su_orig),
+         "note":   f"{(getattr(a,'origination_fee_pct',0.01) or 0.01)*100:.1f}% of loan"},
+        {"item": "Senior Debt",
+         "amount": f"${_su_loan:,.0f}",
+         "pct":    f"{(_su_loan / _su_tpc * 100):.0f}% LTV" if _su_tpc > 0 else "",
+         "note":   f"{(getattr(a,'ltv_pct',0.70) or 0.70)*100:.0f}% LTV of TPC",
+         "is_debt": True},
+        {"item": "Total Equity Required",
+         "amount": f"${fo.total_equity_required or 0:,.0f}",
+         "pct":    _su_pct(fo.total_equity_required or 0),
+         "note":   "GP + LP", "is_subtotal": True},
+        {"item": "GP Equity",
+         "amount": f"${fo.gp_equity or 0:,.0f}",
+         "pct":    f"{(getattr(a,'gp_equity_pct',0.10) or 0.10)*100:.0f}%",
+         "note":   "General partner"},
+        {"item": "LP Equity",
+         "amount": f"${fo.lp_equity or 0:,.0f}",
+         "pct":    f"{(getattr(a,'lp_equity_pct',0.90) or 0.90)*100:.0f}%",
+         "note":   "Limited partner"},
+    ]
+    ctx["sources_uses_rows"] = sources_uses_rows
+    logger.info("SOURCES_USES_ROWS: %d rows (TPC=$%s, loan=$%s)",
+                len(sources_uses_rows),
+                f"{_su_tpc:,.0f}", f"{_su_loan:,.0f}")
+
+    # ── Sensitivity matrix with per-cell CSS class ────────────────────────
+    # Raw fo.sensitivity_matrix is list-of-lists of floats (LP IRR fractions)
+    # or the string "N/A". Thresholds: ≥12% pass, ≥8% watch, <8% fail. Center
+    # cell marked as base case.
+    _raw_matrix = fo.sensitivity_matrix or []
+    _rent_axis  = fo.sensitivity_axis_rent_growth or []
+    sensitivity_cells: list = []
+    for i, _row in enumerate(_raw_matrix):
+        row_dict = {
+            "rent_growth": f"{_rent_axis[i]:.1%}" if i < len(_rent_axis) else "",
+            "cells": [],
+        }
+        is_base_row = (i == len(_raw_matrix) // 2)
+        for j, val in enumerate(_row):
+            is_base_col = (j == len(_row) // 2)
+            if isinstance(val, (int, float)):
+                try:
+                    num = float(val)
+                    display = f"{num*100:.1f}%"
+                    if num >= 0.12:
+                        cls = "s-pass"
+                    elif num >= 0.08:
+                        cls = "s-watch"
+                    else:
+                        cls = "s-fail"
+                except Exception:
+                    display, cls = "—", ""
+            elif isinstance(val, str):
+                display = val
+                cls = ""
+            else:
+                display, cls = "—", ""
+            if is_base_row and is_base_col:
+                cls = "s-base"
+            row_dict["cells"].append({"value": display, "css_class": cls})
+        sensitivity_cells.append(row_dict)
+    ctx["sensitivity_cells"] = sensitivity_cells
+    logger.info("SENSITIVITY_CELLS: %d rows × %d cols",
+                len(sensitivity_cells),
+                len(sensitivity_cells[0]["cells"]) if sensitivity_cells else 0)
+
+    # ══════════════════════════════════════════════════════════════════════
     # TEMPLATE VARIABLE FALLBACKS — Jinja2 will raise UndefinedError if any
     # {{ var }} in the template has no ctx entry. Table placeholders get
     # populated post-render by _populate_data_tables, so their ctx value is

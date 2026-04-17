@@ -361,7 +361,29 @@
   </table>
   {% endif %}
 
-  <div class="callout pending">Nearby amenities and 1-mile demographic indicators (population, median HH income, renter occupancy, unemployment) will populate in a subsequent release (Option 2 scope).</div>
+  {% if demographic_rows %}
+  <div class="subsection-title">Key Demographic Indicators</div>
+  <table class="data-table">
+    <tr>
+      <th>Indicator</th>
+      <th class="right">1-Mile</th>
+      <th class="right">3-Mile</th>
+      <th>Trend</th>
+      <th>Source</th>
+    </tr>
+    {% for row in demographic_rows %}
+    <tr>
+      <td>{{ row.metric }}</td>
+      <td class="right">{{ row.one_mile }}</td>
+      <td class="right">{{ row.three_mile }}</td>
+      <td>{{ row.trend }}</td>
+      <td class="label">{{ row.source }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <div class="callout pending">Nearby-amenities proximity table is available in a subsequent release.</div>
 </div>
 {% endif %}
 
@@ -551,15 +573,31 @@
   {% if sources_uses_narrative %}
   <div class="subsection-title">Sources &amp; Uses</div>
   <div class="narrative">{{ sources_uses_narrative }}</div>
+  {% endif %}
+
+  {% if sources_uses_rows %}
   <table class="data-table">
-    <tr><th>Item</th><th class="right">Amount</th></tr>
-    <tr><td>Total Project Cost</td><td class="right">{{ total_project_cost|currency }}</td></tr>
-    <tr><td>Initial Loan Amount</td><td class="right">{{ initial_loan|currency }}</td></tr>
-    <tr><td>Total Equity Required</td><td class="right">{{ total_equity|currency }}</td></tr>
-    <tr><td>GP Equity ({{ (gp_equity_pct*100)|round(0)|int }}%)</td><td class="right">{{ gp_equity|currency }}</td></tr>
-    <tr><td>LP Equity ({{ (lp_equity_pct*100)|round(0)|int }}%)</td><td class="right">{{ lp_equity|currency }}</td></tr>
+    <tr>
+      <th>Line Item</th>
+      <th class="right">Amount</th>
+      <th class="right">% / LTV</th>
+      <th>Note</th>
+    </tr>
+    {% for row in sources_uses_rows %}
+    <tr class="{{ 'subtotal-row' if row.is_subtotal else '' }}">
+      <td class="{{ 'bold' if row.is_subtotal or row.is_debt else '' }}">{{ row.item }}</td>
+      <td class="right">{{ row.amount }}</td>
+      <td class="right">{{ row.pct }}</td>
+      <td class="label">{{ row.note }}</td>
+    </tr>
+    {% endfor %}
+    <tr class="total-row">
+      <td>Total Project Cost</td>
+      <td class="right">{{ total_project_cost|currency }}</td>
+      <td class="right">100.0%</td>
+      <td>Sources = Uses</td>
+    </tr>
   </table>
-  <div class="callout pending">Itemized sources &amp; uses table is available in the accompanying Excel financial model.</div>
   {% endif %}
 
   {% if proforma_pullquote %}<div class="pullquote">{{ proforma_pullquote }}</div>{% endif %}
@@ -615,7 +653,7 @@
   <div class="narrative">{{ sensitivity_narrative }}</div>
   {% endif %}
 
-  {% if sensitivity_rows and sensitivity_cap_axis %}
+  {% if sensitivity_cells and sensitivity_cap_axis %}
   <table class="sensitivity-table">
     <thead>
       <tr>
@@ -624,17 +662,15 @@
       </tr>
     </thead>
     <tbody>
-      {% for row in sensitivity_rows %}
+      {% for row in sensitivity_cells %}
       <tr>
         <th>{{ row.rent_growth }}</th>
-        {# row['values'] — bracket syntax required because Jinja's row.values
-           resolves to Python dict's bound .values() method, not the key. #}
-        {% for val in row['values'] %}<td>{{ val }}</td>{% endfor %}
+        {% for cell in row.cells %}<td class="{{ cell.css_class }}">{{ cell.value }}</td>{% endfor %}
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  <div class="source-note">Green = pass ≥ 12% LP IRR · Amber = watch · Red = fail &lt; 8%</div>
+  <div class="source-note">Green = pass ≥ 12% LP IRR · Amber = watch 8–12% · Red = fail &lt; 8% · Dark green = base case</div>
   {% endif %}
 
   {% if construction_budget_narrative %}
