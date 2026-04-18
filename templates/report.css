@@ -26,6 +26,12 @@
 
 @page {
   size: Letter;
+  margin: 72pt;   /* 1 inch on all four sides — standard professional margin */
+}
+
+/* Cover page is full-bleed (dark walnut background, no white page border).
+   @page :first zeroes the margin so the cover div fills edge-to-edge. */
+@page :first {
   margin: 0;
 }
 
@@ -37,6 +43,7 @@ body {
   color: var(--dark-walnut);
   font-size: 10pt;
   line-height: 1.55;
+  text-align: justify;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
@@ -103,6 +110,7 @@ body {
   color: var(--parchment);
   line-height: 1.15;
   margin-bottom: 8px;
+  text-align: left;
 }
 .cover-city {
   font-size: 14pt;
@@ -130,6 +138,7 @@ body {
   font-size: 14pt;
   font-weight: 600;
   color: var(--parchment);
+  text-align: left;
 }
 .cover-footer {
   padding: 18px 52px;
@@ -154,7 +163,8 @@ body {
 /* ── TABLE OF CONTENTS ──────────────────────────────────── */
 .toc-page {
   background: var(--white);
-  padding: 52px;
+  /* Same inner padding as .report-page — @page margin provides the 1" gutter */
+  padding: 20px 18px 40px;
   page-break-after: always;
 }
 .toc-header,
@@ -195,7 +205,10 @@ body {
 /* ── REPORT PAGES ───────────────────────────────────────── */
 .report-page {
   background: var(--white);
-  padding: 44px 52px 52px;
+  /* Inner padding is intentionally modest — the @page margin: 72pt (1 inch)
+     provides the outer gutter. Inner padding adds breathing room only,
+     avoiding double-stacking that would produce oversized effective margins. */
+  padding: 20px 18px 40px;
   page-break-after: always;
   /* min-height removed — content determines natural page height so short
      sections (e.g. FEMA with a 3-row table) don't flush-fill a full
@@ -228,8 +241,8 @@ body {
 /* Section title block */
 .section-title-block {
   background: var(--sage-deep);
-  margin: 0 -52px 28px;
-  padding: 16px 52px;
+  margin: 0 -18px 28px;
+  padding: 16px 18px;
 }
 .section-number {
   font-size: 7.5pt;
@@ -244,6 +257,7 @@ body {
   font-weight: 600;
   color: var(--parchment);
   line-height: 1.1;
+  text-align: left;
 }
 
 /* ── PULLQUOTE / CALLOUT ────────────────────────────────── */
@@ -294,6 +308,7 @@ body {
   color: var(--dark-walnut);
   line-height: 1;
   margin-bottom: 4px;
+  text-align: left;
 }
 .kpi-value.pass  { color: var(--sage-deep); }
 .kpi-value.watch { color: var(--watch); }
@@ -334,6 +349,7 @@ td {
   color: var(--dark-walnut);
   vertical-align: middle;    /* was top — centers text across uneven cell heights */
   word-wrap: break-word;     /* prevents overflow with fixed layout */
+  text-align: left;
 }
 td:first-child { font-weight: 400; }   /* was 500 — bold was shifting widths */
 
@@ -452,12 +468,14 @@ p {
   color: var(--dark-walnut);
   line-height: 1.6;
   margin-bottom: 12px;
+  text-align: justify;
 }
 .narrative {
   font-size: 10pt;
   line-height: 1.6;
   color: var(--dark-walnut);
   margin-bottom: 12px;
+  text-align: justify;
 }
 h3 {
   font-size: 11pt;
@@ -480,8 +498,8 @@ h4, .subsection-title {
 .page-footer {
   position: absolute;
   bottom: 22px;
-  left: 52px;
-  right: 52px;
+  left: 18px;
+  right: 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;

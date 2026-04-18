@@ -170,8 +170,6 @@
       <div class="photo-caption">Google Street View — {{ full_address }}</div>
     </div>
   </div>
-  {% else %}
-  <div class="callout pending">Street-view photo unavailable. Photography should be obtained during due diligence site visit.</div>
   {% endif %}
 
   {% if photo_gallery_note %}<div class="source-note">{{ photo_gallery_note }}</div>{% endif %}
@@ -208,15 +206,11 @@
   {% if aerial_map_b64 %}
   <div class="subsection-title">Aerial / Satellite View</div>
   <div class="map-container"><img src="{{ aerial_map_b64 }}" alt="Aerial Map"></div>
-  {% else %}
-  <div class="callout pending">Aerial map unavailable for this run.</div>
   {% endif %}
 
   {% if neighborhood_map_b64 %}
   <div class="subsection-title">Neighborhood Context</div>
   <div class="map-container"><img src="{{ neighborhood_map_b64 }}" alt="Neighborhood Map"></div>
-  {% else %}
-  <div class="callout pending">Neighborhood map unavailable for this run.</div>
   {% endif %}
 
   {% if fema_map_b64 %}
@@ -226,12 +220,14 @@
 
   {% if fema_flood_narrative %}<div class="narrative">{{ fema_flood_narrative }}</div>{% endif %}
 
+  {% if fema_flood_zone or fema_panel_number or is_opportunity_zone is not none %}
   <table class="data-table tbl-2col">
     <tr><th>Risk Factor</th><th>Status</th></tr>
-    <tr><td>FEMA Flood Zone</td><td>{{ fema_flood_zone or "Not Determined" }}</td></tr>
-    <tr><td>FEMA Panel Number</td><td>{{ fema_panel_number or "—" }}</td></tr>
-    <tr><td>Opportunity Zone</td><td>{{ "Yes" if is_opportunity_zone else "No" }}</td></tr>
+    {% if fema_flood_zone %}<tr><td>FEMA Flood Zone</td><td>{{ fema_flood_zone }}</td></tr>{% endif %}
+    {% if fema_panel_number %}<tr><td>FEMA Panel Number</td><td>{{ fema_panel_number }}</td></tr>{% endif %}
+    {% if is_opportunity_zone is not none %}<tr><td>Opportunity Zone</td><td>{{ "Yes" if is_opportunity_zone else "No" }}</td></tr>{% endif %}
   </table>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -255,22 +251,24 @@
   <div class="narrative">{{ utilities_analysis }}</div>
   {% endif %}
 
+  {% if parcel_data %}
   <div class="subsection-title">Parcel &amp; Improvement Data</div>
   <table class="data-table tbl-2col">
     <tr><th>Field</th><th>Value</th></tr>
     <tr><td>Address</td>         <td>{{ parcel_a_address }}</td></tr>
-    <tr><td>Parcel ID (OPA/APN)</td><td>{{ parcel_a_account }}</td></tr>
-    <tr><td>Owner of Record</td> <td>{{ parcel_a_owner }}</td></tr>
-    <tr><td>Zoning</td>          <td>{{ parcel_a_zoning }}</td></tr>
-    <tr><td>Lot Area</td>        <td>{{ parcel_a_land_area }}</td></tr>
-    <tr><td>Building SF</td>     <td>{{ parcel_a_building_sf }}</td></tr>
-    <tr><td>Year Built</td>      <td>{{ parcel_a_year_built }}</td></tr>
-    <tr><td>Assessed Value</td>  <td>{{ parcel_a_assessed }}</td></tr>
-    <tr><td>Taxable Land</td>    <td>{{ parcel_a_taxable_land }}</td></tr>
-    <tr><td>Taxable Building</td><td>{{ parcel_a_taxable_bldg }}</td></tr>
-    <tr><td>Census Tract</td>    <td>{{ parcel_census_tract }}</td></tr>
-    <tr><td>FIPS Code</td>       <td>{{ parcel_fips }}</td></tr>
+    {% if parcel_a_account  and parcel_a_account  != "N/A" %}<tr><td>Parcel ID (OPA/APN)</td><td>{{ parcel_a_account }}</td></tr>{% endif %}
+    {% if parcel_a_owner    and parcel_a_owner    != "N/A" %}<tr><td>Owner of Record</td> <td>{{ parcel_a_owner }}</td></tr>{% endif %}
+    {% if parcel_a_zoning   and parcel_a_zoning   != "N/A" %}<tr><td>Zoning</td>          <td>{{ parcel_a_zoning }}</td></tr>{% endif %}
+    {% if parcel_a_land_area    and parcel_a_land_area    != "N/A" %}<tr><td>Lot Area</td>        <td>{{ parcel_a_land_area }}</td></tr>{% endif %}
+    {% if parcel_a_building_sf  and parcel_a_building_sf  != "N/A" %}<tr><td>Building SF</td>     <td>{{ parcel_a_building_sf }}</td></tr>{% endif %}
+    {% if parcel_a_year_built   and parcel_a_year_built   != "N/A" %}<tr><td>Year Built</td>      <td>{{ parcel_a_year_built }}</td></tr>{% endif %}
+    {% if parcel_a_assessed     and parcel_a_assessed     != "N/A" %}<tr><td>Assessed Value</td>  <td>{{ parcel_a_assessed }}</td></tr>{% endif %}
+    {% if parcel_a_taxable_land and parcel_a_taxable_land != "N/A" %}<tr><td>Taxable Land</td>    <td>{{ parcel_a_taxable_land }}</td></tr>{% endif %}
+    {% if parcel_a_taxable_bldg and parcel_a_taxable_bldg != "N/A" %}<tr><td>Taxable Building</td><td>{{ parcel_a_taxable_bldg }}</td></tr>{% endif %}
+    {% if parcel_census_tract   and parcel_census_tract   != "N/A" %}<tr><td>Census Tract</td>    <td>{{ parcel_census_tract }}</td></tr>{% endif %}
+    {% if parcel_fips           and parcel_fips           != "N/A" %}<tr><td>FIPS Code</td>       <td>{{ parcel_fips }}</td></tr>{% endif %}
   </table>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -286,12 +284,47 @@
 
   {% if ownership_narrative %}<div class="narrative">{{ ownership_narrative }}</div>{% endif %}
 
+  {% if deed_history_rows %}
+  <div class="subsection-title">Recorded Deed Transfers</div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Recording Date</th>
+        <th>Document Type</th>
+        <th>Grantor</th>
+        <th>Grantee</th>
+        <th style="text-align:right">Consideration</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in deed_history_rows %}
+      <tr>
+        <td>{{ row.recording_date }}</td>
+        <td>{{ row.document_type }}</td>
+        <td>{{ row.grantor }}</td>
+        <td>{{ row.grantee }}</td>
+        <td style="text-align:right">{{ row.consideration }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if recorder_portal_url %}
+  <div class="narrative" style="font-size:10.5pt;color:#5a5248;margin-top:10px">
+    {% if deed_history_rows %}
+      Complete chain of title and recorded instruments (mortgages, liens, easements) are available at the
+    {% else %}
+      Automated deed pull is not available for this jurisdiction. Full chain of title can be researched at the
+    {% endif %}
+    <a href="{{ recorder_portal_url }}" style="color:#5a5248;text-decoration:underline">county recorder of deeds portal</a>.
+  </div>
+  {% endif %}
+
   {% if liens_narrative %}
   <div class="subsection-title">Recorded Liens &amp; Encumbrances</div>
   <div class="narrative">{{ liens_narrative }}</div>
   {% endif %}
-
-  <div class="callout pending">Ownership history table (deed transfer records) is available in a subsequent release (Option 2 scope).</div>
 </div>
 {% endif %}
 
@@ -391,8 +424,6 @@
     {% endfor %}
   </table>
   {% endif %}
-
-  <div class="callout pending">Nearby-amenities proximity table is available in a subsequent release.</div>
 </div>
 {% endif %}
 
@@ -407,8 +438,6 @@
   </div>
   {% if neighborhood_trend_narrative %}
   <div class="narrative">{{ neighborhood_trend_narrative }}</div>
-  {% else %}
-  <div class="callout pending">Neighborhood trend analysis pending.</div>
   {% endif %}
 </div>
 {% endif %}
@@ -455,8 +484,6 @@
   </div>
 
   {% if rent_roll_intro %}<div class="narrative">{{ rent_roll_intro }}</div>{% endif %}
-
-  <div class="callout pending">Unit mix summary and per-unit rent roll detail are available in the accompanying Excel financial model.</div>
 
   <div class="subsection-title">Income Summary (Stabilized Year)</div>
   <table class="data-table">
@@ -685,7 +712,6 @@
   {% if construction_budget_narrative %}
   <div class="subsection-title">Construction Budget</div>
   <div class="narrative">{{ construction_budget_narrative }}</div>
-  <div class="callout pending">Itemized construction budget is available in the accompanying Excel financial model.</div>
   {% endif %}
 
   {% if exit_narrative %}
@@ -795,7 +821,6 @@
   {% if climate_risk_narrative %}
   <div class="subsection-title">Climate Risk</div>
   <div class="narrative">{{ climate_risk_narrative }}</div>
-  <div class="callout pending">First Street climate-risk score table is available in a subsequent release (Option 2 scope).</div>
   {% endif %}
 </div>
 {% endif %}
@@ -821,8 +846,6 @@
   <div class="subsection-title">Regulatory Approvals</div>
   <div class="narrative">{{ regulatory_approvals_narrative }}</div>
   {% endif %}
-
-  <div class="callout pending">Title search, liens, permits, and violation detail tables are available in a subsequent release (Option 2 scope).</div>
 </div>
 {% endif %}
 
@@ -869,7 +892,6 @@
     <div class="section-title">Due Diligence Checklist &amp; Status Tracker</div>
   </div>
   {% if dd_checklist_intro %}<div class="narrative">{{ dd_checklist_intro }}</div>{% endif %}
-  <div class="callout pending">DD checklist rollup table is available in a subsequent release (Option 2 scope).</div>
 </div>
 {% endif %}
 
@@ -883,7 +905,6 @@
     <div class="section-title">Project Timeline &amp; Milestones</div>
   </div>
   {% if timeline_narrative %}<div class="narrative">{{ timeline_narrative }}</div>{% endif %}
-  <div class="callout pending">Milestone schedule table is available in a subsequent release (Option 2 scope).</div>
 </div>
 {% endif %}
 
@@ -914,8 +935,6 @@
   {% if risk_2 %}<div class="callout warning">{{ risk_2 }}</div>{% endif %}
   {% if risk_3 %}<div class="callout warning">{{ risk_3 }}</div>{% endif %}
   {% endif %}
-
-  <div class="callout pending">Scenario comparison table (Base vs. Conservative) is available in the accompanying Excel financial model.</div>
 </div>
 {% endif %}
 
@@ -982,7 +1001,6 @@
     <div class="section-title">Data Sources &amp; Methodology</div>
   </div>
   {% if methodology_notes %}<div class="narrative">{{ methodology_notes }}</div>{% endif %}
-  <div class="callout pending">Full data-provenance table is available in a subsequent release (Option 2 scope).</div>
 </div>
 {% endif %}
 
