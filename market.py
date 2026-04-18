@@ -1544,7 +1544,31 @@ def _apply_3b(data: dict, deal: DealData) -> None:
     z = deal.zoning
     z.max_buildable_units = data.get("max_units_by_right") or z.max_buildable_units
     z.max_buildable_sf    = data.get("max_buildable_sf") or z.max_buildable_sf
-    z.buildable_capacity_narrative = data.get("calculation_notes") or z.buildable_capacity_narrative
+    # calculation_notes is supposed to be a prose string but Sonnet occasionally
+    # returns a nested dict (step_1_*, step_2_*, …). Flatten structured output
+    # into readable bullet prose so the PDF doesn't show a raw repr.
+    cn = data.get("calculation_notes")
+    if isinstance(cn, dict):
+        lines = []
+        for k, v in cn.items():
+            label = k.replace("_", " ").title()
+            if isinstance(v, dict):
+                # Pull the most descriptive scalar fields, then the rest.
+                parts = []
+                for pk in ("formula", "inputs", "result_sf", "note"):
+                    if pk in v and v[pk] is not None:
+                        parts.append(f"{pk.replace('_', ' ')}: {v[pk]}")
+                for pk, pv in v.items():
+                    if pk in ("formula", "inputs", "result_sf", "note"):
+                        continue
+                    parts.append(f"{pk.replace('_', ' ')}: {pv}")
+                lines.append(f"{label} — {'; '.join(str(p) for p in parts)}")
+            else:
+                lines.append(f"{label}: {v}")
+        cn = "\n".join(lines)
+    elif cn is not None and not isinstance(cn, str):
+        cn = str(cn)
+    z.buildable_capacity_narrative = cn or z.buildable_capacity_narrative
 
 
 # ═══════════════════════════════════════════════════════════════════════════

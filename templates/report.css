@@ -342,6 +342,26 @@ table.tbl-2col td:first-child,
 table.tbl-2col th:first-child { width: 45%; }
 table.tbl-2col td:last-child,
 table.tbl-2col th:last-child  { width: 55%; }
+
+/* Pro-forma: 11 columns on Letter. Override generic table-layout:fixed so
+   narrow year columns can shrink to content; shrink font to fit. */
+table.proforma-table {
+    table-layout: auto;
+    font-size: 6.5pt;
+    letter-spacing: -0.01em;
+}
+table.proforma-table th,
+table.proforma-table td {
+    padding: 4pt 5pt;
+    white-space: nowrap;
+    text-align: right;
+}
+table.proforma-table th:first-child,
+table.proforma-table td:first-child {
+    text-align: left;
+    white-space: normal;
+    font-weight: 400;
+}
 tfoot td {
   background: var(--sage-light);
   font-weight: 700;

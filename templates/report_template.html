@@ -14,7 +14,7 @@
 <div class="cover-page">
   <div class="cover-top-bar">
     <div>
-      <div class="cover-logo-text">Freedman Properties</div>
+      <div class="cover-logo-text">DealDesk</div>
       <div class="cover-logo-sub">CRE Underwriting</div>
     </div>
     <div class="cover-badge">Confidential</div>
@@ -22,7 +22,7 @@
 
   <div class="cover-body">
     <div class="cover-strategy-tag">{{ asset_type }} · {{ investment_strategy|replace("_", " ")|title }}</div>
-    <div class="cover-address">{{ full_address or property_name or "Subject Property" }}</div>
+    <div class="cover-address">{{ cover_street_address or full_address or property_name or "Subject Property" }}</div>
     <div class="cover-city">{{ city }}{% if city and state %}, {% endif %}{{ state }} {{ zip_code }}</div>
 
     <div class="cover-meta-grid">
@@ -147,7 +147,7 @@
   {% if opportunity_3 %}<div class="callout">{{ opportunity_3 }}</div>{% endif %}
   {% endif %}
 
-  <div class="source-note">Source: DealDesk Underwriting Model · Freedman Properties</div>
+  <div class="source-note">Source: DealDesk Underwriting Model</div>
 </div>
 {% endif %}
 

@@ -1001,19 +1001,63 @@ async def api_delete_deal(deal_id: str, request: Request):
     return {"removed": before - len(data["deals"])}
 
 
+def _resolve_output_file(deal_id: str, suffix_candidates: list[str]) -> Path | None:
+    """Find a generated output file for `deal_id`. First checks the in-process
+    caches (fast path during the same server lifetime), then falls back to the
+    filesystem pattern `outputs/{deal_id}{suffix}` so archived deals still
+    download after a server restart. Returns the resolved Path or None.
+    """
+    # In-process fast path (populated at generation time)
+    if suffix_candidates and suffix_candidates[0].endswith(".xlsx"):
+        cached = _excel_cache.get(deal_id)
+        if cached and Path(cached).exists():
+            return Path(cached)
+    # Filesystem fallback — try each known suffix for the deal_id
+    outputs_dir = Path("outputs")
+    for suffix in suffix_candidates:
+        candidate = outputs_dir / f"{deal_id}{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
 @app.get("/download/excel/{deal_id}")
 async def download_excel(deal_id: str, request: Request):
     """Return a previously generated Excel file by deal_id."""
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    xlsx_path = _excel_cache.get(deal_id)
-    if not xlsx_path or not Path(xlsx_path).exists():
+    xlsx_path = _resolve_output_file(deal_id, ["_financial_model.xlsx"])
+    if not xlsx_path:
         raise HTTPException(status_code=404, detail=f"Excel file not found for deal {deal_id}")
     return FileResponse(
-        path=xlsx_path,
+        path=str(xlsx_path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=Path(xlsx_path).name,
+        filename=xlsx_path.name,
+    )
+
+
+@app.get("/download/pdf/{deal_id}")
+async def download_pdf(deal_id: str, request: Request):
+    """Return a previously generated PDF report by deal_id. Prefers the
+    Playwright PDF; falls back to the docx-derived PDF when the Playwright
+    build was skipped.
+    """
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    pdf_path = _resolve_output_file(
+        deal_id,
+        ["_report_playwright.pdf", "_report.pdf"],
+    )
+    if not pdf_path:
+        raise HTTPException(status_code=404, detail=f"PDF report not found for deal {deal_id}")
+    # Strip the "_playwright" disambiguator from the user-visible filename.
+    display_name = pdf_path.name.replace("_report_playwright.pdf", "_report.pdf")
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        filename=display_name,
     )
 
 

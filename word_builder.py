@@ -742,6 +742,17 @@ def _build_context(deal: DealData) -> dict:
     # regardless of whether upstream delivered the address all-lowercase.
     _raw_full_addr = deal.address.full_address or ""
     _tc_full_addr = _title_case_address(_raw_full_addr)
+    # Street-only form for the cover — strip the ", City, State, Zip" tail
+    # so the .cover-address line doesn't duplicate what .cover-city renders.
+    # Uses deal.address.street when available; else splits full_address on
+    # the first comma. Falls back to the full string if neither works.
+    _street_only = _title_case_address(
+        (deal.address.street or "").strip()
+    )
+    if not _street_only and "," in _tc_full_addr:
+        _street_only = _tc_full_addr.split(",", 1)[0].strip()
+    if not _street_only:
+        _street_only = _tc_full_addr
     _cover_prefix = ("Investment Summary" if deal.investor_mode
                      else "Investment Underwriting Report")
     ctx["cover_title"] = f"{_cover_prefix} — {_tc_full_addr}" if _tc_full_addr else _cover_prefix
@@ -754,6 +765,7 @@ def _build_context(deal: DealData) -> dict:
     # Property basics — title-case the address for display
     ctx["property_name"] = ext.property_name or _tc_full_addr
     ctx["full_address"] = _tc_full_addr
+    ctx["cover_street_address"] = _street_only
     ctx["city"] = deal.address.city
     ctx["state"] = deal.address.state
     ctx["zip_code"] = deal.address.zip_code
@@ -1218,7 +1230,13 @@ def _build_context(deal: DealData) -> dict:
         try:
             if val is None:
                 return fallback
-            return fmt.format(float(val))
+            n = float(val)
+            # For the default currency format, render negatives as
+            # "($12,345)" instead of "$-12,345" to match the convention
+            # used everywhere else in the report (Jinja |currency filter).
+            if fmt == "${:,.0f}" and n < 0:
+                return f"(${abs(n):,.0f})"
+            return fmt.format(n)
         except (TypeError, ValueError):
             return fallback
 
@@ -1295,7 +1313,7 @@ def _build_context(deal: DealData) -> dict:
         except (TypeError, ValueError):
             return fallback
 
-    ctx["parcel_a_address"]      = deal.address.full_address or "N/A"
+    ctx["parcel_a_address"]      = _title_case_address(deal.address.full_address or "") or "N/A"
     ctx["parcel_a_account"]      = _p_str(pd_.parcel_id        if pd_ else None)
     ctx["parcel_a_owner"]        = _p_str(pd_.owner_name       if pd_ else None)
     ctx["parcel_a_zoning"]       = _p_str(

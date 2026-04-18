@@ -172,33 +172,18 @@ def populate_excel(deal: DealData) -> Path:
         wb["Cash Waterfall"]["D30"] = "N/A — non-convergent due to mid-hold equity injection"
         logger.info("WATERFALL D30: Project IRR annotated — non-convergent")
 
-    # ── Cash Waterfall refi proceeds rows (24=Refi1, 25=Refi2, 26=Refi3) ──
-    # Template uses per-year IF formulas that read Assumptions cells. When
-    # the refi fires under Python's logic, we overwrite the specific
-    # (row, year-column) cell with the authoritative refi_proceeds value
-    # from pro_forma_years so the Total Distributable CF row (R28) picks
-    # it up. Years 1..10 map to columns G..P.
-    if "Cash Waterfall" in wb.sheetnames and fo.pro_forma_years:
-        ws_wf = wb["Cash Waterfall"]
-        a = deal.assumptions
-        year_cols = "GHIJKLMNOP"   # Year 1 → G, Year 10 → P
-        refi_rows = {0: 24, 1: 25, 2: 26}  # refi_events[i] → waterfall row
-        for pf_yr in fo.pro_forma_years:
-            y = int(pf_yr.get("year", 0) or 0)
-            proceeds = float(pf_yr.get("refi_proceeds", 0) or 0)
-            if y < 1 or y > len(year_cols) or proceeds <= 0:
-                continue
-            col = year_cols[y - 1]
-            # Find which refi fired this year (its .year == y AND .active=True)
-            for i, refi in enumerate(a.refi_events[:3]):
-                if refi.active and refi.year == y:
-                    cell = f"{col}{refi_rows[i]}"
-                    ws_wf[cell] = round(proceeds, 2)
-                    logger.info(
-                        "WATERFALL Refi%d: wrote proceeds $%s to %s (Year %d)",
-                        i + 1, f"{proceeds:,.0f}", cell, y,
-                    )
-                    break
+    # Cash Waterfall Refi proceeds rows (24/25/26) are intentionally left
+    # as template formulas so the workbook stays fully dynamic: changing a
+    # Refi N year, active flag, LTV, or appraised value on Assumptions
+    # flows through Refi Analysis (rows 4-22) into these cells automatically.
+    # The earlier static-write path has been removed — see commit history.
+    # Each template formula pattern:
+    #   {col}{24|25|26} =IF(AND(Assumptions!$C$95=1, year_idx=Assumptions!$C$96),
+    #                         'Refi Analysis'!B22, 0)
+    # where 'Refi Analysis'!B22 = IF(active, new_loan - existing_balance - costs, 0).
+    # Python still drives the correct EXISTING BALANCE value into
+    # 'Refi Analysis'!B17 via _populate_refi_balances(), so the formula
+    # produces the authoritative amortized balance at refi timing.
 
     wb.save(output_path)
     wb.close()

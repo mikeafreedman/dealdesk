@@ -215,15 +215,26 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
 
 /* ARCHIVE */
 .deal-list{display:flex;flex-direction:column;gap:10px}
-.deal-row{background:var(--white);border:1px solid var(--rule);border-radius:6px;padding:14px 18px;display:flex;align-items:center;gap:16px;cursor:pointer;transition:border-color .15s}
+.deal-row{background:var(--white);border:1px solid var(--rule);border-radius:6px;padding:14px 18px;display:flex;align-items:center;gap:16px;transition:border-color .15s}
 .deal-row:hover{border-color:var(--sage-mid)}
 .deal-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .deal-dot.complete{background:var(--green)}.deal-dot.progress{background:var(--amber)}
+.deal-main{flex:1;min-width:0}
 .deal-name{font-size:13px;font-weight:600;color:var(--near-black)}
 .deal-meta{font-size:11px;color:var(--muted);margin-top:2px}
-.deal-irr{font-family:var(--font-display);font-size:18px;font-weight:600;color:var(--near-black);margin-left:auto}
+.deal-irr{font-family:var(--font-display);font-size:18px;font-weight:600;color:var(--near-black);flex-shrink:0}
 .deal-status{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:3px;flex-shrink:0}
 .deal-status.complete{background:var(--green-lt);color:var(--green)}.deal-status.progress{background:var(--amber-lt);color:var(--amber)}
+.deal-actions{display:flex;gap:6px;flex-shrink:0}
+.deal-btn{font-size:11px;font-weight:600;letter-spacing:.02em;padding:6px 10px;border:1px solid var(--rule-dk);border-radius:4px;background:var(--parch-dk);color:var(--body);cursor:pointer;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.deal-btn:hover{border-color:var(--sage);color:var(--sage);background:var(--sage-lt)}
+.deal-btn.danger:hover{border-color:var(--red);color:var(--red);background:var(--red-lt)}
+.archive-filters{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
+.archive-filters input,.archive-filters select{font-family:inherit;font-size:12px;padding:7px 10px;border:1px solid var(--rule-dk);border-radius:4px;background:var(--white);color:var(--near-black);transition:border-color .15s}
+.archive-filters input:focus,.archive-filters select:focus{outline:none;border-color:var(--sage)}
+.archive-filters input{flex:1;min-width:200px}
+.archive-filters select{min-width:130px}
+.archive-count{font-size:11px;color:var(--muted);margin-left:auto}
 
 /* DOWNLOADS */
 .dl-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -1611,6 +1622,72 @@ function _strategyLabel(s) {
   })[s] || s || '';
 }
 
+// Kept in module scope so filter dropdown can re-render without re-fetch.
+let _archiveDeals = [];
+
+function _dealMatchesFilter(d, q, assetType, strategy) {
+  if (assetType && (d.asset_type || '') !== assetType) return false;
+  if (strategy && (d.strategy || '') !== strategy) return false;
+  if (!q) return true;
+  const hay = [d.deal_name, d.address, d.asset_type, d.strategy]
+    .filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(q.toLowerCase());
+}
+
+function _renderDealRows(deals) {
+  if (!deals.length) {
+    return `<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px">
+      No deals match the current filter.
+    </div>`;
+  }
+  return deals.map(d => {
+    const irr = (typeof d.lp_irr === 'number')
+      ? (d.lp_irr * 100).toFixed(1) + '% IRR' : '—';
+    let dateLbl = '';
+    if (d.analyzed_date) {
+      const dt = new Date(d.analyzed_date);
+      if (!isNaN(dt)) dateLbl = dt.toLocaleDateString('en-US',
+        {year:'numeric', month:'long', day:'numeric'});
+    }
+    const statusKey = d.status === 'complete' ? 'complete' : 'progress';
+    const statusLbl = statusKey === 'complete' ? 'Complete' : 'In Progress';
+    const meta = [d.asset_type, _strategyLabel(d.strategy),
+                  dateLbl ? 'Analyzed ' + dateLbl : '']
+                 .filter(Boolean).join(' · ');
+    const id = _escapeHtml(d.deal_id || '');
+    return `<div class="deal-row" data-deal-id="${id}">
+      <div class="deal-dot ${statusKey}"></div>
+      <div class="deal-main">
+        <div class="deal-name">${_escapeHtml(d.deal_name || d.address || 'Untitled')}</div>
+        <div class="deal-meta">${_escapeHtml(meta)}</div>
+      </div>
+      <div class="deal-irr">${_escapeHtml(irr)}</div>
+      <div class="deal-status ${statusKey}">${statusLbl}</div>
+      <div class="deal-actions">
+        <button type="button" class="deal-btn" onclick="downloadDealFile('${id}','pdf')">PDF</button>
+        <button type="button" class="deal-btn" onclick="downloadDealFile('${id}','excel')">Excel</button>
+        <button type="button" class="deal-btn danger" onclick="deleteDeal('${id}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function _uniqueValues(arr, key) {
+  return [...new Set(arr.map(d => d[key]).filter(Boolean))].sort();
+}
+
+function applyArchiveFilter() {
+  const q = (document.getElementById('archive-q')?.value || '').trim();
+  const at = document.getElementById('archive-asset')?.value || '';
+  const st = document.getElementById('archive-strategy')?.value || '';
+  const filtered = _archiveDeals.filter(d => _dealMatchesFilter(d, q, at, st));
+  const rows = document.getElementById('deal-list-rows');
+  const count = document.getElementById('archive-count');
+  if (rows) rows.innerHTML = _renderDealRows(filtered);
+  if (count) count.textContent =
+    `${filtered.length} of ${_archiveDeals.length} deal${_archiveDeals.length === 1 ? '' : 's'}`;
+}
+
 async function renderArchive() {
   const c = document.getElementById('deal-list-container');
   if (!c) return;
@@ -1618,41 +1695,81 @@ async function renderArchive() {
     const resp = await fetch('/api/deals', {credentials: 'include'});
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const deals = await resp.json();
-    if (!Array.isArray(deals) || deals.length === 0) {
+    _archiveDeals = Array.isArray(deals) ? deals : [];
+    if (_archiveDeals.length === 0) {
       c.innerHTML = `<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px">
         No deals yet. Run an underwriting analysis from the New Underwrite screen — completed deals will appear here.
       </div>`;
       return;
     }
-    c.innerHTML = deals.map(d => {
-      const irr = (typeof d.lp_irr === 'number')
-        ? (d.lp_irr * 100).toFixed(1) + '% IRR'
-        : '—';
-      let dateLbl = '';
-      if (d.analyzed_date) {
-        const dt = new Date(d.analyzed_date);
-        if (!isNaN(dt)) dateLbl = dt.toLocaleDateString('en-US',
-          {year:'numeric', month:'long', day:'numeric'});
-      }
-      const statusKey = d.status === 'complete' ? 'complete' : 'progress';
-      const statusLbl = statusKey === 'complete' ? 'Complete' : 'In Progress';
-      const meta = [d.asset_type, _strategyLabel(d.strategy),
-                    dateLbl ? 'Analyzed ' + dateLbl : '']
-                   .filter(Boolean).join(' · ');
-      return `<div class="deal-row">
-        <div class="deal-dot ${statusKey}"></div>
-        <div>
-          <div class="deal-name">${_escapeHtml(d.deal_name || d.address || 'Untitled')}</div>
-          <div class="deal-meta">${_escapeHtml(meta)}</div>
-        </div>
-        <div class="deal-irr">${_escapeHtml(irr)}</div>
-        <div class="deal-status ${statusKey}">${statusLbl}</div>
-      </div>`;
-    }).join('');
+    const assetOpts = _uniqueValues(_archiveDeals, 'asset_type')
+      .map(v => `<option value="${_escapeHtml(v)}">${_escapeHtml(v)}</option>`).join('');
+    const stratOpts = _uniqueValues(_archiveDeals, 'strategy')
+      .map(v => `<option value="${_escapeHtml(v)}">${_escapeHtml(_strategyLabel(v))}</option>`).join('');
+    c.innerHTML = `
+      <div class="archive-filters">
+        <input type="text" id="archive-q" placeholder="Search by name or address…" oninput="applyArchiveFilter()">
+        <select id="archive-asset" onchange="applyArchiveFilter()">
+          <option value="">All asset types</option>${assetOpts}
+        </select>
+        <select id="archive-strategy" onchange="applyArchiveFilter()">
+          <option value="">All strategies</option>${stratOpts}
+        </select>
+        <span class="archive-count" id="archive-count"></span>
+      </div>
+      <div id="deal-list-rows"></div>
+    `;
+    applyArchiveFilter();
   } catch (err) {
     c.innerHTML = `<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px">
       Unable to load deal archive. Please refresh the page.
     </div>`;
+  }
+}
+
+async function downloadDealFile(dealId, kind) {
+  if (!dealId) return;
+  const url = kind === 'excel' ? `/download/excel/${dealId}` : `/download/pdf/${dealId}`;
+  try {
+    const resp = await fetch(url, {credentials: 'include'});
+    if (!resp.ok) {
+      alert(`File not available (HTTP ${resp.status}). The output may have been cleared from outputs/ or was not generated for this run.`);
+      return;
+    }
+    const blob = await resp.blob();
+    const disp = resp.headers.get('content-disposition') || '';
+    const m = /filename="?([^";]+)"?/i.exec(disp);
+    const filename = m ? m[1] : (kind === 'excel'
+      ? `${dealId}_financial_model.xlsx`
+      : `${dealId}_report.pdf`);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  } catch (err) {
+    alert('Download failed: ' + (err.message || err));
+  }
+}
+
+async function deleteDeal(dealId) {
+  if (!dealId) return;
+  const deal = _archiveDeals.find(d => d.deal_id === dealId);
+  const label = deal ? (deal.deal_name || deal.address || dealId) : dealId;
+  if (!confirm(`Remove "${label}" from the archive? This clears the archive record only — the generated files on disk are preserved.`)) return;
+  try {
+    const resp = await fetch(`/api/deals/${dealId}`, {
+      method: 'DELETE', credentials: 'include',
+    });
+    if (!resp.ok) {
+      alert(`Delete failed (HTTP ${resp.status}).`);
+      return;
+    }
+    _archiveDeals = _archiveDeals.filter(d => d.deal_id !== dealId);
+    applyArchiveFilter();
+  } catch (err) {
+    alert('Delete failed: ' + (err.message || err));
   }
 }
 
