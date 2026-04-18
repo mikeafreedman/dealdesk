@@ -94,9 +94,9 @@ def _file_to_data_uri(path: str | Path) -> Optional[str]:
 
 def _build_image_context(deal) -> dict:
     """Generate all images for the report. Every step is defensively wrapped —
-    a single failed image never aborts the PDF. Returns ctx keys:
-        aerial_map_file, neighborhood_map_file, fema_map_file (as data URIs)
-        street_view_file (as data URI)
+    a single failed image never aborts the PDF. Returns ctx keys as base64
+    data URIs (data:image/...;base64,...) that embed directly in <img src>:
+        aerial_map_b64, neighborhood_map_b64, fema_map_b64, street_view_b64
     """
     img_ctx: dict = {}
 
@@ -105,14 +105,14 @@ def _build_image_context(deal) -> dict:
         from map_builder import build_all_maps
         maps = build_all_maps(deal)
         if getattr(maps, "aerial", None):
-            img_ctx["aerial_map_file"] = _bytes_to_data_uri(maps.aerial)
+            img_ctx["aerial_map_b64"] = _bytes_to_data_uri(maps.aerial)
             logger.info("REPORT_IMG: aerial map OK (%d bytes)", len(maps.aerial))
         if getattr(maps, "neighborhood", None):
-            img_ctx["neighborhood_map_file"] = _bytes_to_data_uri(maps.neighborhood)
+            img_ctx["neighborhood_map_b64"] = _bytes_to_data_uri(maps.neighborhood)
             logger.info("REPORT_IMG: neighborhood map OK (%d bytes)",
                         len(maps.neighborhood))
         if getattr(maps, "fema", None):
-            img_ctx["fema_map_file"] = _bytes_to_data_uri(maps.fema)
+            img_ctx["fema_map_b64"] = _bytes_to_data_uri(maps.fema)
             logger.info("REPORT_IMG: FEMA map OK (%d bytes)", len(maps.fema))
     except Exception as exc:
         logger.warning("REPORT_IMG: map generation failed — %s", exc)
@@ -127,7 +127,7 @@ def _build_image_context(deal) -> dict:
         if sv_path:
             uri = _file_to_data_uri(sv_path)
             if uri:
-                img_ctx["street_view_file"] = uri
+                img_ctx["street_view_b64"] = uri
                 logger.info("REPORT_IMG: street view OK (%s)", sv_path)
     except Exception as exc:
         logger.warning("REPORT_IMG: street view failed — %s", exc)

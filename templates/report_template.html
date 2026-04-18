@@ -154,10 +154,10 @@
 
   {% if photo_gallery_intro %}<div class="narrative">{{ photo_gallery_intro }}</div>{% endif %}
 
-  {% if street_view_file %}
+  {% if street_view_b64 %}
   <div class="photo-grid hero">
     <div class="photo-cell">
-      <img src="file://{{ street_view_file }}" alt="Street View">
+      <img src="{{ street_view_b64 }}" alt="Street View">
       <div class="photo-caption">Google Street View — {{ full_address }}</div>
     </div>
   </div>
@@ -196,23 +196,23 @@
 
   {% if maps_intro %}<div class="narrative">{{ maps_intro }}</div>{% endif %}
 
-  {% if aerial_map_file %}
+  {% if aerial_map_b64 %}
   <div class="subsection-title">Aerial / Satellite View</div>
-  <div class="map-container"><img src="file://{{ aerial_map_file }}" alt="Aerial Map"></div>
+  <div class="map-container"><img src="{{ aerial_map_b64 }}" alt="Aerial Map"></div>
   {% else %}
   <div class="callout pending">Aerial map unavailable for this run.</div>
   {% endif %}
 
-  {% if neighborhood_map_file %}
+  {% if neighborhood_map_b64 %}
   <div class="subsection-title">Neighborhood Context</div>
-  <div class="map-container"><img src="file://{{ neighborhood_map_file }}" alt="Neighborhood Map"></div>
+  <div class="map-container"><img src="{{ neighborhood_map_b64 }}" alt="Neighborhood Map"></div>
   {% else %}
   <div class="callout pending">Neighborhood map unavailable for this run.</div>
   {% endif %}
 
-  {% if fema_map_file %}
+  {% if fema_map_b64 %}
   <div class="subsection-title">FEMA Flood Zone</div>
-  <div class="map-container"><img src="file://{{ fema_map_file }}" alt="FEMA Map"></div>
+  <div class="map-container"><img src="{{ fema_map_b64 }}" alt="FEMA Map"></div>
   {% endif %}
 
   {% if fema_flood_narrative %}<div class="narrative">{{ fema_flood_narrative }}</div>{% endif %}

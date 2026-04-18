@@ -349,9 +349,18 @@ _SYSTEM_4MASTER = (
     "proforma_narrative (100-130 words): 10-yr revenue trajectory, expense management, NOI growth.\n"
     "proforma_pullquote (15-25 words): Pro forma pull-quote (NOI growth or cash-on-cash).\n"
     "sensitivity_narrative (70-90 words): Sensitivity matrix — what passes/fails threshold.\n"
-    "  IMPORTANT: If sensitivity_matrix is empty or all zeros, write exactly:\n"
-    "  'Sensitivity analysis requires stabilized revenue data. Matrix will be populated\n"
-    "  following lease-up and rent roll stabilization.' Do not report zeros as results.\n"
+    "  IMPORTANT matrix-state handling:\n"
+    "  - If the matrix is TRULY empty (no cells contain any numeric value at\n"
+    "    all, including no N/A strings), write exactly: 'Sensitivity analysis\n"
+    "    requires stabilized revenue data. Matrix will be populated following\n"
+    "    lease-up and rent roll stabilization.'\n"
+    "  - If cells are mostly 'N/A' with a few numeric values: state that most\n"
+    "    scenarios produce cash flows too negative for IRR convergence, name\n"
+    "    the favorable corner(s) where returns do compute, and describe those\n"
+    "    numeric results against the 12% threshold.\n"
+    "  - If cells are all numeric: normal sensitivity commentary — identify\n"
+    "    pass/watch/fail regions and the base-case outcome.\n"
+    "  Never describe 'N/A' cells as zero or failure — they mean non-convergent.\n"
     "exit_narrative (70-90 words): Exit cap assumption, terminal value, net proceeds.\n"
     "capital_stack_narrative (80-100 words): LTV, debt terms, equity split, structure rationale.\n"
     "capital_structure_pullquote (15-25 words): Capital structure pull-quote.\n"
@@ -1233,9 +1242,15 @@ def _build_context(deal: DealData) -> dict:
         (pd_.zoning_code if pd_ else None) or deal.zoning.zoning_code,
         "Pending verification",
     )
-    ctx["parcel_a_land_area"]    = _p_area(pd_.lot_area_sf     if pd_ else None)
-    ctx["parcel_a_building_sf"]  = _p_area(pd_.building_sf     if pd_ else None)
-    ctx["parcel_a_year_built"]   = _p_str(pd_.year_built       if pd_ else None)
+    # Prefer ParcelData (OPA scrape) values; fall back to FinancialAssumptions
+    # (user-entered or OM-extracted) when the parcel row is missing the field.
+    # Correct assumption attribute names: gba_sf, year_built, lot_sf.
+    _pa_land_area = (pd_.lot_area_sf if pd_ else None) or a.lot_sf
+    _pa_bldg_sf   = (pd_.building_sf if pd_ else None) or a.gba_sf
+    _pa_yr_built  = (pd_.year_built  if pd_ else None) or a.year_built
+    ctx["parcel_a_land_area"]    = _p_area(_pa_land_area)
+    ctx["parcel_a_building_sf"]  = _p_area(_pa_bldg_sf)
+    ctx["parcel_a_year_built"]   = _p_str(_pa_yr_built)
     ctx["parcel_a_assessed"]     = _p_money(pd_.assessed_value if pd_ else None)
     ctx["parcel_a_taxable_land"] = _p_money(pd_.land_value     if pd_ else None)
     ctx["parcel_a_taxable_bldg"] = _p_money(pd_.improvement_value if pd_ else None)
@@ -1576,6 +1591,55 @@ def _build_context(deal: DealData) -> dict:
     logger.info("SENSITIVITY_CELLS: %d rows × %d cols",
                 len(sensitivity_cells),
                 len(sensitivity_cells[0]["cells"]) if sensitivity_cells else 0)
+
+    # ── Sensitivity narrative override ────────────────────────────
+    # The Sonnet prompt can mis-fire and emit the "pending stabilization"
+    # boilerplate when the matrix actually contains data but most cells
+    # are "N/A" due to non-convergent IRR (negative cash flows). Replace
+    # that text with a deterministic description of actual matrix state.
+    _numeric = 0
+    _na      = 0
+    for _r in sensitivity_cells:
+        for _c in _r["cells"]:
+            v = (_c.get("value") or "").strip()
+            if v and v != "—" and v.upper() != "N/A":
+                _numeric += 1
+            elif v.upper() == "N/A":
+                _na += 1
+    _boilerplate_markers = (
+        "Sensitivity analysis requires stabilized revenue data",
+        "Matrix will be populated",
+    )
+    _existing = (ctx.get("sensitivity_narrative") or "").strip()
+    _is_boilerplate = any(m in _existing for m in _boilerplate_markers)
+
+    if sensitivity_cells and (_numeric > 0 or _na > 0):
+        # Matrix has data. If the narrative is the misleading boilerplate
+        # OR no narrative was produced at all, replace it.
+        if _is_boilerplate or not _existing:
+            if _numeric == 0:
+                override = (
+                    f"All {_na} tested cap-rate × rent-growth combinations "
+                    "produce cash flows too negative for IRR convergence; no "
+                    "scenario clears the 12% LP IRR threshold under the "
+                    "current underwriting."
+                )
+            elif _na > 0:
+                override = (
+                    f"Most scenarios produce returns too negative to calculate "
+                    f"a meaningful IRR. Only {_numeric} of {_numeric + _na} "
+                    "tested cells contain computable values, concentrated in "
+                    "the most favorable cap-rate × rent-growth corners; the "
+                    "remainder represent non-convergent cash-flow paths."
+                )
+            else:
+                override = None  # all-numeric: keep whatever the AI wrote
+            if override:
+                ctx["sensitivity_narrative"] = override
+                logger.info(
+                    "SENSITIVITY NARRATIVE: overrode boilerplate (numeric=%d, N/A=%d)",
+                    _numeric, _na,
+                )
 
     # ══════════════════════════════════════════════════════════════════════
     # TEMPLATE VARIABLE FALLBACKS — Jinja2 will raise UndefinedError if any

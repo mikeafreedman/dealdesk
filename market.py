@@ -178,130 +178,12 @@ def _match_acs(mname: str, mtype: str, state: str,
 # STEP 1 — MUNICIPAL REGISTRY LOOKUP
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _lookup_municipal_registry(deal: DealData) -> Optional[pd.Series]:
-    """
-    Load municipal_registry.csv and match by:
-      primary key:  fips_county
-      fallback key: municipality_name + state (case-insensitive exact match)
-
-    Returns the matched row as a pandas Series, or None.
-    """
-    try:
-        df = pd.read_csv(MUNICIPAL_REGISTRY_CSV, dtype=str)
-    except Exception as exc:
-        logger.warning("Failed to load municipal registry: %s", exc)
-        return None
-
-    fips_county = deal.address.fips_code
-    city = deal.address.city
-    state = deal.address.state
-
-    # Primary key: fips_county
-    if fips_county:
-        fips_match = df[df["fips_county"].str.strip() == fips_county.strip()]
-        if len(fips_match) > 0:
-            logger.info("Municipal registry: matched by fips_county=%s", fips_county)
-            return fips_match.iloc[0]
-
-    # Fallback: municipality_name + state — try progressively looser matches
-    if city and state:
-        city_lower = city.strip().lower()
-        state_upper = state.strip().upper()
-        state_mask = df["state"].str.strip().str.upper() == state_upper
-        state_df = df[state_mask]
-
-        if len(state_df) == 0:
-            logger.warning("Municipal registry: no entries for state=%s", state)
-        else:
-            names_lower = state_df["municipality_name"].str.strip().str.lower()
-
-            # Match 1: exact
-            m = state_df[names_lower == city_lower]
-            if len(m) == 0:
-                # Match 2: registry name contains city
-                m = state_df[names_lower.str.contains(city_lower, regex=False, na=False)]
-            if len(m) == 0:
-                # Match 3: city contains registry name (e.g. "washington" in "washington, d.c.")
-                m = state_df[names_lower.apply(
-                    lambda n: n.split(",")[0].strip() in city_lower
-                    or city_lower in n.split(",")[0].strip()
-                )]
-            if len(m) == 0:
-                # Match 4: normalize both sides
-                def _norm_city(n):
-                    for strip in ["city of ", "town of ", "village of ",
-                                  "township of ", "borough of "]:
-                        if n.startswith(strip):
-                            n = n[len(strip):]
-                    for strip in [" city", " town", " village", " township",
-                                  " borough", ", d.c.", ", dc"]:
-                        if n.endswith(strip):
-                            n = n[:-len(strip)]
-                    return n.strip()
-                city_norm = _norm_city(city_lower)
-                m = state_df[names_lower.apply(lambda n: _norm_city(n) == city_norm)]
-
-            if len(m) > 0:
-                logger.info(
-                    "Municipal registry: matched '%s' → '%s', %s",
-                    city, m.iloc[0]["municipality_name"], state)
-                return m.iloc[0]
-
-    logger.warning("Municipal registry: no match for fips=%s, city=%s, state=%s",
-                    fips_county, city, state)
-    return None
-
-
-def _apply_registry(row: pd.Series, deal: DealData) -> None:
-    """Write matched registry fields to DealData."""
-
-    def _get(field: str) -> Optional[str]:
-        val = row.get(field)
-        if pd.isna(val) or str(val).strip() == "":
-            return None
-        return str(val).strip()
-
-    # Zoning URLs
-    deal.zoning.municipal_code_url = _get("zoning_chapter_url") or _get("code_base_url")
-    deal.zoning.zoning_code_chapter = _get("zoning_chapter_ref")
-
-    # Store additional registry fields in provenance for downstream use
-    prov = deal.provenance.field_sources
-    for field in ["code_platform", "code_base_url", "zoning_chapter_url",
-                  "assessor_url", "gis_parcel_url", "recorder_of_deeds_url",
-                  "tax_collector_url"]:
-        val = _get(field)
-        if val:
-            prov[field] = val
-
-    # Population (write to market_data if available)
-    pop = _safe_int(_get("population"))
-    if pop:
-        deal.market_data.population_3mi = pop
-        prov["population_source"] = "municipal_registry"
-
-    # Median household income
-    income = _safe_float(_get("median_household_income"))
-    if income:
-        deal.market_data.median_hh_income_3mi = income
-        prov["median_hh_income_source"] = "municipal_registry"
-
-    # Median gross rent — store in provenance (no direct model field)
-    rent = _safe_float(_get("median_gross_rent"))
-    if rent:
-        prov["median_gross_rent"] = str(rent)
-
-    # School district
-    sd = _get("school_district")
-    if sd:
-        prov["school_district"] = sd
-
-    # FIPS place
-    fp = _get("fips_place")
-    if fp:
-        prov["fips_place"] = fp
-
-    prov["municipal_registry"] = "matched"
+# ── Municipal registry — delegated to registry.py so parcel_fetcher.py can
+# share the same lookup without an import cycle. Shims preserve the original
+# names so existing call sites (_lookup_municipal_registry, _apply_registry)
+# continue to work unchanged.
+from registry import lookup as _lookup_municipal_registry
+from registry import apply as _apply_registry
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1351,328 +1233,22 @@ def _fetch_transit_and_amenities(deal: DealData) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 7B — PROPERTY RECORDS (Philadelphia OPA / DC DCGIS)
+# STEP 7B — PROPERTY RECORDS (delegated to parcel_fetcher.py)
 # ═══════════════════════════════════════════════════════════════════════════
 
-_PHL_CARTO_SQL = "https://phl.carto.com/api/v2/sql"
-_DC_PROPERTY_URL = (
-    "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/"
-    "Property_and_Land_WebMercator/MapServer/56/query"
+# The full source cascade (Philly OPA → DC DCGIS → ArcGIS → OSM) now lives in
+# parcel_fetcher.py. The shim below preserves the original private name so all
+# existing call sites in this module keep working.
+from parcel_fetcher import (
+    fetch_parcel as _fetch_property_records,
+    _fetch_phl_opa,          # re-exported in case any external code imported it
+    _fetch_dc_dcgis,
+    _fetch_arcgis_parcel,
+    _fetch_osm_parcel,
+    _split_street,
+    _PHL_CARTO_SQL,
+    _DC_PROPERTY_URL,
 )
-
-
-def _split_street(street: str) -> tuple:
-    """Split '2-8 S 46th Street' → ('2', 'S 46th Street'). First token is number."""
-    s = (street or "").strip()
-    if not s:
-        return ("", "")
-    parts = s.split(None, 1)
-    if len(parts) < 2:
-        return (parts[0], "")
-    number = re.match(r'^(\d+)', parts[0])
-    return (number.group(1) if number else parts[0], parts[1])
-
-
-def _fetch_property_records(deal: DealData) -> None:
-    """Step 7B: Fetch parcel/owner/zoning from city/county property records.
-
-    Source cascade:
-    1. Philadelphia OPA API (Philly only)
-    2. DC DCGIS REST API (DC only)
-    3. County/municipal GIS ArcGIS REST endpoint (from registry gis_parcel_url)
-    4. Census TIGER parcel lookup (last resort — address only, no ownership)
-    """
-    addr = deal.address
-    state = (addr.state or "").strip().upper()
-    city = (addr.city or "").strip()
-
-    if deal.parcel_data is None:
-        deal.parcel_data = ParcelData()
-    pd_obj = deal.parcel_data  # avoid shadowing builtin 'pd'
-
-    # ── SOURCE 1: Philadelphia OPA ────────────────────────────────────
-    if state == "PA" and city.lower() == "philadelphia":
-        _fetch_phl_opa(deal, pd_obj, addr)
-        return
-
-    # ── SOURCE 2: DC DCGIS ───────────────────────────────────────────
-    if state == "DC":
-        _fetch_dc_dcgis(deal, pd_obj, addr)
-        return
-
-    # ── SOURCE 3: County GIS ArcGIS REST endpoint ─────────────────────
-    # Many counties expose their parcel layer at a standard ArcGIS REST URL.
-    # We first check deal.provenance for a gis_parcel_url from the registry.
-    # Format: {base_url}/query?where=ADDR LIKE '%{number}%{street}%'&outFields=*&f=json
-    gis_url = deal.provenance.field_sources.get("gis_parcel_url")
-    if gis_url:
-        _fetch_arcgis_parcel(deal, pd_obj, addr, gis_url)
-        if pd_obj.parcel_id:  # success — stop here
-            return
-
-    # ── SOURCE 4: Nominatim / OSM building footprint lookup ──────────
-    # Last resort: get at minimum the address confirmation from OSM
-    _fetch_osm_parcel(deal, pd_obj, addr)
-
-
-def _fetch_phl_opa(deal: DealData, pd_obj: ParcelData, addr) -> None:
-    """Philadelphia Office of Property Assessment via Carto SQL API."""
-    street_number, street_name = _split_street(addr.street)
-    if not street_number or not street_name:
-        logger.warning("PROPERTY RECORDS (PHL): no street number/name — skipping")
-        return
-    # OPA's `location` field is uppercase, abbreviated, no apartment numbers
-    # e.g. "2-08 S 46TH ST". Pick the most distinctive token (skip directionals).
-    name_tokens = street_name.upper().split() if street_name else []
-    DIRECTIONALS = {"N", "S", "E", "W", "NE", "NW", "SE", "SW"}
-    name_token = next((t for t in name_tokens if t not in DIRECTIONALS), "")
-    patterns = [
-        f"{street_number} %{name_token}%",        # "2 %46TH%"
-        f"{street_number}-%{name_token}%",        # "2-%46TH%" (range form, e.g. 2-08)
-        f"%{street_number}%{name_token}%",        # very loose
-    ]
-    rows = []
-    matched_pattern = None
-    last_status = None
-    for pat in patterns:
-        query = (
-            "SELECT parcel_number, owner_1, owner_2, "
-            "category_code_description, total_area, total_livable_area, "
-            "number_stories, year_built, market_value, "
-            "taxable_land, taxable_building, "
-            "sale_date, sale_price, zoning, location "
-            "FROM opa_properties_public "
-            f"WHERE location ILIKE '{pat}' LIMIT 5"
-        )
-        logger.info("OPA QUERY: pattern='%s' sql=%s", pat, query)
-        try:
-            resp = requests.get(
-                "https://phl.carto.com/api/v2/sql",
-                params={"q": query}, timeout=_REQUEST_TIMEOUT
-            )
-            last_status = resp.status_code
-            resp.raise_for_status()
-            rows = resp.json().get("rows", [])
-            logger.info("OPA RESPONSE: status=%d rows=%d pattern='%s'",
-                        resp.status_code, len(rows), pat)
-            if rows:
-                matched_pattern = pat
-                break
-        except Exception as exc:
-            logger.warning("PROPERTY RECORDS (PHL) failed (pattern '%s'): %s", pat, exc)
-            continue
-    if not rows:
-        logger.warning("OPA: no parcel found for '%s %s' (last_status=%s)",
-                       street_number, street_name, last_status)
-        return
-    logger.info("OPA: matched pattern '%s' (%d rows)", matched_pattern, len(rows))
-    row = rows[0]
-    parcel_number = row.get("parcel_number") or ""
-    owner = " ".join(filter(None, [row.get("owner_1"), row.get("owner_2")])).strip()
-    zoning = row.get("zoning") or ""
-    market_value = _safe_float(row.get("market_value"))
-    taxable_land = _safe_float(row.get("taxable_land"))
-    taxable_bldg = _safe_float(row.get("taxable_building"))
-    pd_obj.parcel_id = parcel_number or pd_obj.parcel_id
-    pd_obj.owner_name = owner or pd_obj.owner_name
-    pd_obj.zoning_code = zoning or pd_obj.zoning_code
-    pd_obj.assessed_value = market_value if market_value is not None else pd_obj.assessed_value
-    if taxable_land is not None:
-        pd_obj.land_value = taxable_land
-    if taxable_bldg is not None:
-        pd_obj.improvement_value = taxable_bldg
-    pd_obj.last_sale_date = row.get("sale_date") or pd_obj.last_sale_date
-    pd_obj.last_sale_price = _safe_float(row.get("sale_price")) or pd_obj.last_sale_price
-    pd_obj.lot_area_sf = _safe_float(row.get("total_area")) or pd_obj.lot_area_sf
-    pd_obj.building_sf = _safe_float(row.get("total_livable_area")) or pd_obj.building_sf
-    year_built = row.get("year_built")
-    if year_built:
-        try:
-            pd_obj.year_built = int(year_built)
-        except (TypeError, ValueError):
-            pass
-    if zoning and not deal.zoning.zoning_code:
-        deal.zoning.zoning_code = zoning
-    deal.provenance.field_sources["property_records"] = "phl_opa"
-    logger.info(
-        "PROPERTY RECORDS: found parcel %s, owner=%s, zoning=%s, assessed=$%s",
-        parcel_number, owner, zoning,
-        f"{market_value:,.0f}" if market_value is not None else "n/a",
-    )
-
-
-def _fetch_dc_dcgis(deal: DealData, pd_obj: ParcelData, addr) -> None:
-    """DC Office of Tax & Revenue via DCGIS REST API."""
-    street_number, street_name = _split_street(addr.street)
-    parcel_search = f"{street_number}%" if street_number else "%"
-    params = {
-        "where": f"SSL LIKE '{parcel_search}'",
-        "outFields": "*",
-        "f": "json",
-    }
-    dc_url = (
-        "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/"
-        "Property_and_Land_WebMercator/MapServer/56/query"
-    )
-    try:
-        resp = requests.get(dc_url, params=params, timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        features = resp.json().get("features", [])
-    except Exception as exc:
-        logger.warning("PROPERTY RECORDS (DC) failed: %s", exc)
-        return
-    if not features:
-        logger.info("PROPERTY RECORDS (DC): no match for '%s'", parcel_search)
-        return
-    attrs = features[0].get("attributes", {}) or {}
-    parcel_number = attrs.get("SSL") or ""
-    owner = attrs.get("OWNERNAME") or ""
-    zoning = attrs.get("ZONING") or ""
-    market_value = _safe_float(attrs.get("ASSESSMENT") or attrs.get("TOTVAL"))
-    pd_obj.parcel_id = parcel_number or pd_obj.parcel_id
-    pd_obj.owner_name = owner or pd_obj.owner_name
-    pd_obj.zoning_code = zoning or pd_obj.zoning_code
-    pd_obj.assessed_value = market_value if market_value is not None else pd_obj.assessed_value
-    if zoning and not deal.zoning.zoning_code:
-        deal.zoning.zoning_code = zoning
-    deal.provenance.field_sources["property_records"] = "dc_dcgis"
-    logger.info(
-        "PROPERTY RECORDS: found parcel %s, owner=%s, zoning=%s, assessed=$%s",
-        parcel_number, owner, zoning,
-        f"{market_value:,.0f}" if market_value is not None else "n/a",
-    )
-
-
-def _fetch_arcgis_parcel(deal: DealData, pd_obj: ParcelData, addr, gis_url: str) -> None:
-    """Generic ArcGIS REST parcel query for any county that has a GIS parcel URL
-    in the municipal registry. Covers hundreds of counties nationwide.
-
-    Most county GIS parcel layers expose fields like:
-    OWNER, ADDRESS, PARCEL_ID, ZONING, ASSESSED_VALUE, SALE_DATE, SALE_PRICE
-    with slight naming variations. We try common field name variants.
-    """
-    street_number, street_name = _split_street(addr.street)
-    if not street_number:
-        logger.warning("PROPERTY RECORDS (ArcGIS): no street number — skipping")
-        return
-
-    # Normalize the GIS URL: strip trailing slashes, ensure /query suffix
-    base = gis_url.rstrip("/")
-    if not base.endswith("/query"):
-        base = base + "/query"
-
-    # Try multiple common address field names used by counties
-    address_fields = ["SITEADDRESS", "SITE_ADDRESS", "ADDRESS", "FULL_ADDRESS",
-                      "PROP_ADDRESS", "LOCATION", "ADDR", "SITUS_ADDRESS"]
-
-    # Build address search term (number + first token of street name)
-    name_token = street_name.split()[0] if street_name else ""
-    search_term = f"{street_number}%{name_token}%"
-
-    for field in address_fields:
-        try:
-            params = {
-                "where": f"UPPER({field}) LIKE UPPER('{search_term}')",
-                "outFields": "*",
-                "returnGeometry": "false",
-                "f": "json",
-            }
-            resp = requests.get(base, params=params, timeout=_REQUEST_TIMEOUT)
-            if resp.status_code != 200:
-                continue
-            data = resp.json()
-            if "error" in data:
-                continue
-            features = data.get("features", [])
-            if not features:
-                continue
-
-            attrs = features[0].get("attributes", {}) or {}
-
-            # Extract fields with fallbacks for common naming variants
-            def _get_field(*names):
-                for n in names:
-                    v = attrs.get(n) or attrs.get(n.upper()) or attrs.get(n.lower())
-                    if v and str(v).strip() not in ("", "None", "null", "0"):
-                        return str(v).strip()
-                return None
-
-            parcel_id = _get_field("PARCEL_ID", "PARCELID", "APN", "PIN",
-                                   "PARCEL_NUM", "OBJECTID")
-            owner = _get_field("OWNER", "OWNERNAME", "OWNER_NAME", "OWNER1",
-                               "TAXPAYER_NAME", "OWNER_FULL")
-            zoning = _get_field("ZONING", "ZONE_CODE", "ZONING_CODE",
-                                "CURRENT_ZONING", "ZONE")
-            assessed_raw = _get_field("ASSESSED_VALUE", "TOTAL_VALUE", "TOTVAL",
-                                      "MARKET_VALUE", "APPR_VALUE", "TOTAL_ASSESSED")
-            sale_date = _get_field("SALE_DATE", "LAST_SALE_DATE", "DEED_DATE",
-                                   "TRANSFER_DATE")
-            sale_price_raw = _get_field("SALE_PRICE", "LAST_SALE_PRICE",
-                                        "TRANSFER_VALUE", "DEED_PRICE")
-            year_built_raw = _get_field("YEAR_BUILT", "YR_BUILT", "BUILT_YEAR",
-                                        "CONSTRUCTION_YEAR")
-
-            assessed = _safe_float(assessed_raw)
-            sale_price = _safe_float(sale_price_raw)
-
-            if parcel_id:
-                pd_obj.parcel_id = parcel_id
-            if owner:
-                pd_obj.owner_name = owner
-            if zoning:
-                pd_obj.zoning_code = zoning
-                if not deal.zoning.zoning_code:
-                    deal.zoning.zoning_code = zoning
-            if assessed is not None:
-                pd_obj.assessed_value = assessed
-            if sale_date:
-                pd_obj.last_sale_date = sale_date
-            if sale_price is not None:
-                pd_obj.last_sale_price = sale_price
-            if year_built_raw:
-                try:
-                    pd_obj.year_built = int(year_built_raw)
-                except (TypeError, ValueError):
-                    pass
-
-            deal.provenance.field_sources["property_records"] = f"arcgis_gis:{gis_url[:60]}"
-            logger.info(
-                "PROPERTY RECORDS (ArcGIS): parcel=%s, owner=%s, zoning=%s, assessed=$%s",
-                parcel_id, owner, zoning,
-                f"{assessed:,.0f}" if assessed else "n/a",
-            )
-            return  # success — stop trying field names
-
-        except Exception as exc:
-            logger.warning("PROPERTY RECORDS (ArcGIS field=%s): %s", field, exc)
-            continue
-
-    logger.info("PROPERTY RECORDS (ArcGIS): no match at %s", gis_url[:80])
-
-
-def _fetch_osm_parcel(deal: DealData, pd_obj: ParcelData, addr) -> None:
-    """Last-resort: query Nominatim for address confirmation + basic info."""
-    lat = addr.latitude
-    lon = addr.longitude
-    if not lat or lat == 0.0:
-        return
-    try:
-        resp = requests.get(
-            "https://nominatim.openstreetmap.org/reverse",
-            params={"lat": lat, "lon": lon, "format": "json"},
-            headers={"User-Agent": "DealDesk-CRE/1.0"},
-            timeout=10,
-        )
-        data = resp.json()
-        address_data = data.get("address", {})
-        # OSM doesn't provide ownership/assessed value, but confirms
-        # the address and may give a postcode/suburb
-        suburb = address_data.get("suburb") or address_data.get("neighbourhood")
-        if suburb and not deal.provenance.field_sources.get("neighborhood"):
-            deal.provenance.field_sources["neighborhood"] = suburb
-            logger.info("OSM reverse geocode: neighborhood=%s", suburb)
-    except Exception as exc:
-        logger.warning("OSM reverse geocode failed: %s", exc)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1706,31 +1282,24 @@ def _fetch_epa_flags(zip_code: str) -> List[str]:
 # ZONING CODE SCRAPER
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _scrape_zoning_code(url: str) -> Optional[str]:
-    """Fetch zoning code page and extract text. Handles ecode360/Municode."""
-    if not url:
-        return None
-    try:
-        headers = {
-            "User-Agent": "DealDesk-CRE-Underwriting/1.0 (research; municipal code lookup)",
-        }
-        resp = requests.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        html = resp.text
+def _scrape_zoning_code(url: str, deal: Optional[DealData] = None) -> Optional[str]:
+    """Scrape zoning-chapter text via parcel_fetcher's platform-aware scrapers.
 
-        text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
+    The platform (ecode360 / amlegal / municode) is read from the registry-
+    populated provenance key `code_platform`. Platform-specific scrapers strip
+    nav/sidebar noise so Prompt 3A sees cleaner text and extracts zoning
+    parameters more reliably. Unknown platforms fall back to a generic
+    HTML-strip pass.
 
-        if len(text) < 200:
-            logger.warning("Zoning code scrape returned too little text (%d chars)", len(text))
-            return None
-
-        return text[:12000]
-    except Exception as exc:
-        logger.warning("Zoning code scrape failed (%s): %s", url, exc)
-        return None
+    Signature compatibility: the legacy call site passes only `url`. The new
+    `deal` arg is optional — if omitted or the provenance key is missing, the
+    generic scraper runs (same behavior as before).
+    """
+    from parcel_fetcher import fetch_zoning_text
+    code_platform = None
+    if deal is not None:
+        code_platform = deal.provenance.field_sources.get("code_platform")
+    return fetch_zoning_text(url, code_platform)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2533,7 +2102,7 @@ def enrich_market_data(deal: DealData) -> DealData:
     scrape_url = deal.zoning.municipal_code_url
     if scrape_url:
         logger.info("Scraping zoning code from %s...", scrape_url)
-        zoning_code_text = _scrape_zoning_code(scrape_url)
+        zoning_code_text = _scrape_zoning_code(scrape_url, deal)
         if zoning_code_text:
             deal.provenance.field_sources["zoning_scrape"] = scrape_url
     else:
