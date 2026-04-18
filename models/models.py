@@ -808,11 +808,11 @@ class DealData(BaseModel):
     address: PropertyAddress = Field(default_factory=PropertyAddress)
 
     # Sponsor — referenced by Prompts 5E, 5F
-    sponsor_name: str = "Freedman Properties"
+    sponsor_name: str = "DealDesk"
     sponsor_description: str = (
-        "Freedman Properties is a boutique value-add real estate investment firm "
-        "based in Narberth, PA, focused on multifamily, mixed-use, and commercial "
-        "acquisitions in the Philadelphia metro market ($500K–$5M range)."
+        "DealDesk is a CRE underwriting platform that automates institutional-"
+        "grade investment analysis across multifamily, mixed-use, and commercial "
+        "acquisitions."
     )
 
     # Deal description (required on New Underwrite screen)

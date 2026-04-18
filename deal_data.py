@@ -658,8 +658,13 @@ def assemble_deal(deal: DealData, user_inputs: Dict[str, Any]) -> DealData:
     _merge_address(deal.address, user_inputs, extracted, provenance)
 
     # ── 4. Sponsor ────────────────────────────────────────────────
-    if user_inputs.get("sponsor_name"):
-        deal.sponsor_name = user_inputs["sponsor_name"]
+    # Default to "DealDesk" when no sponsor name is submitted — removes
+    # the previous hardcoded firm attribution.
+    deal.sponsor_name = (
+        user_inputs.get("sponsor_name")
+        or getattr(deal, "sponsor_name", None)
+        or "DealDesk"
+    )
     if user_inputs.get("sponsor_description"):
         deal.sponsor_description = user_inputs["sponsor_description"]
 

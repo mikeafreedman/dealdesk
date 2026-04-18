@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>{{ full_address }} — Investment Underwriting Report</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="report.css">
 </head>
 <body>
@@ -11,53 +12,62 @@
 {# COVER                                        #}
 {# ═══════════════════════════════════════════ #}
 <div class="cover-page">
-  <div class="cover-badge">{{ asset_type }} · {{ investment_strategy|replace("_", " ")|title }}</div>
-  <div class="cover-address">{{ full_address or property_name or "Subject Property" }}</div>
-  <div class="cover-subaddress">{{ city }}{% if city and state %}, {% endif %}{{ state }} {{ zip_code }}</div>
-  <div class="cover-divider"></div>
+  <div class="cover-top-bar">
+    <div>
+      <div class="cover-logo-text">Freedman Properties</div>
+      <div class="cover-logo-sub">CRE Underwriting</div>
+    </div>
+    <div class="cover-badge">Confidential</div>
+  </div>
 
-  <div class="cover-meta-grid">
-    <div class="cover-meta-cell">
-      <div class="cover-meta-label">Asking Price</div>
-      <div class="cover-meta-value">{{ asking_price or "Not Disclosed" }}</div>
-    </div>
-    <div class="cover-meta-cell">
-      <div class="cover-meta-label">Asset Type</div>
-      <div class="cover-meta-value">{{ asset_type }}</div>
-    </div>
-    <div class="cover-meta-cell">
-      <div class="cover-meta-label">Units / Building SF</div>
-      <div class="cover-meta-value">{{ num_units or "—" }} units<br>{{ building_sf }}</div>
-    </div>
-    <div class="cover-meta-cell">
-      <div class="cover-meta-label">Strategy</div>
-      <div class="cover-meta-value">{{ investment_strategy|replace("_", " ")|title }}</div>
-    </div>
-    <div class="cover-meta-cell">
-      <div class="cover-meta-label">Hold Period</div>
-      <div class="cover-meta-value">{{ hold_period }} years</div>
-    </div>
-    <div class="cover-meta-cell">
-      <div class="cover-meta-label">Report Date</div>
-      <div class="cover-meta-value">{{ report_date }}</div>
-    </div>
-    <div class="cover-meta-cell">
-      <div class="cover-meta-label">Prepared By</div>
-      <div class="cover-meta-value">{{ sponsor_name }}</div>
-    </div>
-    <div class="cover-meta-cell">
-      <div class="cover-meta-label">Deal ID</div>
-      <div class="cover-meta-value">{{ deal_id[:8] if deal_id else "—" }}</div>
-    </div>
-    <div class="cover-meta-cell">
-      <div class="cover-meta-label">Zoning</div>
-      <div class="cover-meta-value">{{ zoning or zoning_code or "Pending" }}</div>
+  <div class="cover-body">
+    <div class="cover-strategy-tag">{{ asset_type }} · {{ investment_strategy|replace("_", " ")|title }}</div>
+    <div class="cover-address">{{ full_address or property_name or "Subject Property" }}</div>
+    <div class="cover-city">{{ city }}{% if city and state %}, {% endif %}{{ state }} {{ zip_code }}</div>
+
+    <div class="cover-meta-grid">
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Asking Price</div>
+        <div class="cover-meta-value">{{ asking_price or "Not Disclosed" }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Asset Type</div>
+        <div class="cover-meta-value">{{ asset_type }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Units / Bldg SF</div>
+        <div class="cover-meta-value">{{ num_units or "—" }} units / {{ building_sf }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Strategy</div>
+        <div class="cover-meta-value">{{ investment_strategy|replace("_", " ")|title }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Hold Period</div>
+        <div class="cover-meta-value">{{ hold_period }} years</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Report Date</div>
+        <div class="cover-meta-value">{{ report_date }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Prepared By</div>
+        <div class="cover-meta-value">{{ sponsor_name }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Deal ID</div>
+        <div class="cover-meta-value">{{ deal_id[:8] if deal_id else "—" }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Zoning</div>
+        <div class="cover-meta-value">{{ zoning or zoning_code or "Pending" }}</div>
+      </div>
     </div>
   </div>
 
   <div class="cover-footer">
-    <div class="cover-footer-left">Confidential — For Authorized Recipients Only</div>
-    <div class="cover-footer-right">{{ deal_id }}</div>
+    <div class="cover-confidential">Confidential — For Authorized Recipients Only</div>
+    <div class="cover-deal-id">{{ deal_id }}</div>
   </div>
 </div>
 
@@ -65,7 +75,7 @@
 {# TABLE OF CONTENTS                            #}
 {# ═══════════════════════════════════════════ #}
 <div class="toc-page">
-  <div class="toc-title">Table of Contents</div>
+  <div class="toc-header">Table of Contents</div>
   {% set toc = [
     ('01','Executive Summary'),
     ('02','Property Photo Gallery'),
@@ -92,9 +102,8 @@
   ] %}
   {% for num, title in toc %}
   <div class="toc-entry">
-    <span class="toc-number">{{ num }}</span>
-    <span class="toc-entry-title">{{ title }}</span>
-    <span class="toc-dots"></span>
+    <span class="toc-num">{{ num }}</span>
+    <span class="toc-title">{{ title }}</span>
   </div>
   {% endfor %}
 </div>
@@ -103,8 +112,8 @@
 {# 01 — EXECUTIVE SUMMARY                       #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s01 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 01</div>
     <div class="section-title">Executive Summary</div>
   </div>
@@ -146,8 +155,8 @@
 {# 02 — PHOTO GALLERY                           #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s02 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 02</div>
     <div class="section-title">Property Photo Gallery</div>
   </div>
@@ -188,8 +197,8 @@
 {# 03 — MAPS & GEOGRAPHIC CONTEXT               #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s03 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 03</div>
     <div class="section-title">Maps &amp; Geographic Context</div>
   </div>
@@ -217,7 +226,7 @@
 
   {% if fema_flood_narrative %}<div class="narrative">{{ fema_flood_narrative }}</div>{% endif %}
 
-  <table class="data-table">
+  <table class="data-table tbl-2col">
     <tr><th>Risk Factor</th><th>Status</th></tr>
     <tr><td>FEMA Flood Zone</td><td>{{ fema_flood_zone or "Not Determined" }}</td></tr>
     <tr><td>FEMA Panel Number</td><td>{{ fema_panel_number or "—" }}</td></tr>
@@ -230,8 +239,8 @@
 {# 04 — PROPERTY DESCRIPTION                    #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s04 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 04</div>
     <div class="section-title">Property Description</div>
   </div>
@@ -247,7 +256,7 @@
   {% endif %}
 
   <div class="subsection-title">Parcel &amp; Improvement Data</div>
-  <table class="data-table">
+  <table class="data-table tbl-2col">
     <tr><th>Field</th><th>Value</th></tr>
     <tr><td>Address</td>         <td>{{ parcel_a_address }}</td></tr>
     <tr><td>Parcel ID (OPA/APN)</td><td>{{ parcel_a_account }}</td></tr>
@@ -269,8 +278,8 @@
 {# 05 — OWNERSHIP & TITLE                       #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s05 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 05</div>
     <div class="section-title">Ownership &amp; Title History</div>
   </div>
@@ -290,8 +299,8 @@
 {# 06 — ZONING & HBU                            #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s06 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 06</div>
     <div class="section-title">Zoning &amp; Highest and Best Use</div>
   </div>
@@ -332,8 +341,8 @@
 {# 07 — LOCATION & MARKET                       #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s07 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 07</div>
     <div class="section-title">Location &amp; Market Overview</div>
   </div>
@@ -391,8 +400,8 @@
 {# 08 — NEIGHBORHOOD TREND                      #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s08 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 08</div>
     <div class="section-title">Neighborhood Trend Analysis</div>
   </div>
@@ -408,8 +417,8 @@
 {# 09 — SUPPLY PIPELINE                         #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s09 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 09</div>
     <div class="section-title">Competitive Supply Pipeline</div>
   </div>
@@ -439,8 +448,8 @@
 {# 10 — RENT ROLL & INCOME                      #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s10 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 10</div>
     <div class="section-title">Rent Roll &amp; Income Summary</div>
   </div>
@@ -486,8 +495,8 @@
 {# 11 — COMPARABLES                             #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s11 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 11</div>
     <div class="section-title">Comparable Market Analysis</div>
   </div>
@@ -562,8 +571,8 @@
 {# 12 — FINANCIAL ANALYSIS                      #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s12 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 12</div>
     <div class="section-title">Financial Analysis</div>
   </div>
@@ -703,14 +712,22 @@
 {# 13 — CAPITAL STACK / DEBT                    #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s13 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 13</div>
     <div class="section-title">Debt &amp; Capital Structure</div>
   </div>
 
   {% if capital_structure_pullquote %}<div class="pullquote">{{ capital_structure_pullquote }}</div>{% endif %}
   {% if capital_stack_narrative %}<div class="narrative">{{ capital_stack_narrative }}</div>{% endif %}
+
+  {# Material equity-injection disclosure when a refi's new loan does not
+     cover the existing balance — surfaced by financials.py. #}
+  {% if refi_equity_warnings %}
+  <div class="callout alert">
+    {{ refi_equity_warnings|replace("\n\n", "<br><br>")|safe }}
+  </div>
+  {% endif %}
 
   {% if debt_market_narrative %}
   <div class="subsection-title">Debt Market Context</div>
@@ -755,8 +772,8 @@
 {# 14 — ENVIRONMENTAL / CLIMATE                 #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s14 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 14</div>
     <div class="section-title">Environmental &amp; Climate Risk</div>
   </div>
@@ -787,8 +804,8 @@
 {# 15 — LEGAL & TITLE STATUS                    #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s15 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 15</div>
     <div class="section-title">Legal &amp; Title Status</div>
   </div>
@@ -813,8 +830,8 @@
 {# 16 — DD FLAGS                                #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s16 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 16</div>
     <div class="section-title">Due Diligence Flags &amp; Risk Assessment</div>
   </div>
@@ -846,8 +863,8 @@
 {# 17 — DD CHECKLIST                            #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s17 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 17</div>
     <div class="section-title">Due Diligence Checklist &amp; Status Tracker</div>
   </div>
@@ -860,8 +877,8 @@
 {# 18 — TIMELINE                                #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s18 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 18</div>
     <div class="section-title">Project Timeline &amp; Milestones</div>
   </div>
@@ -874,8 +891,8 @@
 {# 19 — RECOMMENDATION                          #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s19 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 19</div>
     <div class="section-title">Investment Recommendation</div>
   </div>
@@ -906,8 +923,8 @@
 {# 20 — CONCLUSIONS & NEXT STEPS                #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s20 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 20</div>
     <div class="section-title">Conclusions &amp; Next Steps</div>
   </div>
@@ -934,8 +951,8 @@
 {# 21 — DISCLAIMER                              #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s21 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Section 21</div>
     <div class="section-title">Disclaimer &amp; Certification</div>
   </div>
@@ -959,8 +976,8 @@
 {# 22 — METHODOLOGY                             #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s22 %}
-<div class="section">
-  <div class="section-header">
+<div class="report-page">
+  <div class="section-title-block">
     <div class="section-number">Appendix A</div>
     <div class="section-title">Data Sources &amp; Methodology</div>
   </div>

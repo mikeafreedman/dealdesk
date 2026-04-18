@@ -479,8 +479,16 @@ def fetch_zoning_text(url: str, code_platform: Optional[str] = None,
     if not url:
         return None
     try:
+        # Browser-like UA: amlegal / municode / ecode360 all tend to 403 the
+        # identifying bot UA. Full Accept headers reduce the 403 rate further.
         headers = {
-            "User-Agent": "DealDesk-CRE-Underwriting/1.0 (research; municipal code lookup)",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
         }
         resp = requests.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
         resp.raise_for_status()

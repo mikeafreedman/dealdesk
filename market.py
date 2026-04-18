@@ -647,6 +647,101 @@ def _apply_acs(deal: DealData, acs: dict) -> None:
     prov["census_demographics"] = "census_acs_2022"
 
 
+def _fetch_acs_tract_demographics(deal: DealData) -> None:
+    """Subject-tract ACS fetch as a 1-mile-radius proxy.
+
+    Census has no native radius query. The subject property's census tract
+    (geocoded in STEP 2) is a reasonable approximation of a 1-mile ring in
+    urban markets. We query B01003_001E (pop), B19013_001E (median HH
+    income), B25003_002E/_003E (owner/renter tenure), B23025_005E/_003E
+    (unemployed / labor force), and write results to the *_1mi fields on
+    market_data.
+
+    Best-effort: silent on failure, keeps 1-mile fields None.
+    """
+    md = deal.market_data
+    state = (deal.address.state or "").strip().upper()
+    state_fips = STATE_FIPS.get(state)
+    county_fips = deal.provenance.field_sources.get("county_fips")
+    if not county_fips:
+        # deal.address.fips_code is state+county concatenated; try to split.
+        fips = (deal.address.fips_code or "").strip()
+        if len(fips) >= 5:
+            county_fips = fips[-3:]
+    tract = (deal.address.census_tract or "").strip()
+    if tract and len(tract) >= 6:
+        # If the tract string has 11 digits it's the full GEOID; take last 6.
+        tract_only = tract[-6:]
+    else:
+        tract_only = tract
+
+    if not (state_fips and county_fips and tract_only):
+        logger.info(
+            "ACS TRACT 1MI: missing state/county/tract (state_fips=%s, "
+            "county_fips=%s, tract=%s) — skipping",
+            state_fips, county_fips, tract_only,
+        )
+        return
+
+    logger.info(
+        "ACS TRACT 1MI: fetching for state=%s county=%s tract=%s",
+        state_fips, county_fips, tract_only,
+    )
+    try:
+        resp = requests.get(_ACS_BASE, params={
+            "get": _ACS_VARS,
+            "for": f"tract:{tract_only}",
+            "in":  f"state:{state_fips} county:{county_fips}",
+        }, timeout=_REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("ACS TRACT 1MI: fetch failed — %s", exc)
+        return
+
+    if not isinstance(data, list) or len(data) < 2:
+        logger.warning("ACS TRACT 1MI: empty response — %s", str(data)[:200])
+        return
+
+    # Header row at data[0]; values row at data[1].
+    row = data[1]
+    # _ACS_VARS order: NAME, B01003, B19013, B25064, B25003_002, B25003_003,
+    #                  B23025_005, B23025_003
+    try:
+        population   = _safe_int(row[1])
+        hh_income    = _safe_float(row[2])
+        owner_occ    = _safe_int(row[4])
+        renter_occ   = _safe_int(row[5])
+        unemployed   = _safe_int(row[6])
+        labor_force  = _safe_int(row[7])
+    except (IndexError, TypeError) as exc:
+        logger.warning("ACS TRACT 1MI: parse failed — %s", exc)
+        return
+
+    # Write 1-mile proxy fields; keep existing non-None values from other
+    # sources (place-level / registry) to avoid overwriting better data.
+    if population and not md.population_1mi:
+        md.population_1mi = population
+    if hh_income and not md.median_hh_income_1mi:
+        md.median_hh_income_1mi = hh_income
+    if owner_occ is not None and renter_occ is not None:
+        total_hh = (owner_occ or 0) + (renter_occ or 0)
+        if total_hh > 0 and not md.pct_renter_occ_1mi:
+            md.pct_renter_occ_1mi = round((renter_occ or 0) / total_hh, 4)
+    if unemployed is not None and labor_force:
+        if labor_force > 0 and not md.unemployment_rate:
+            md.unemployment_rate = round((unemployed or 0) / labor_force, 4)
+
+    deal.provenance.field_sources["acs_tract_1mi"] = "census_acs_2022_tract"
+    logger.info(
+        "ACS TRACT 1MI: pop=%s income=%s renter%%=%s unemp=%s",
+        md.population_1mi,
+        md.median_hh_income_1mi,
+        md.pct_renter_occ_1mi,
+        md.unemployment_rate,
+    )
+
+
 def _fetch_acs_demographics(deal: DealData) -> None:
     """
     Step 3: Fetch Census ACS demographics for the deal's municipality.
@@ -1970,6 +2065,9 @@ def enrich_market_data(deal: DealData) -> DealData:
     # ── STEP 3: Census ACS API (demographics) ────────────────────
     logger.info("Step 3: Census ACS demographics...")
     _fetch_acs_demographics(deal)
+    # Subject-tract 1-mile proxy (runs after the place-level fetch so it
+    # only fills in 1-mile fields the place-level fetch didn't populate).
+    _fetch_acs_tract_demographics(deal)
 
     # ── STEP 4: FRED API (interest rates) ─────────────────────────
     logger.info("Step 4: FRED macro rates...")
@@ -2129,6 +2227,50 @@ def enrich_market_data(deal: DealData) -> DealData:
             logger.warning("Prompt 3A failed — continuing with existing zoning data")
     else:
         logger.info("Skipping Prompt 3A — no zoning code text available")
+
+    # Zoning fallback: scrape failed (e.g. amlegal 403) but the parcel
+    # adapter populated deal.zoning.zoning_code (e.g. "RM1" from Philly OPA).
+    # Ask the LLM to return standards from its training knowledge using the
+    # district code as the authoritative input. Strictly gated on having a
+    # real district code AND no scraped text already applied.
+    if not zoning_code_text and deal.zoning.zoning_code:
+        zcode = deal.zoning.zoning_code
+        zcity = addr.city or "unknown"
+        zstate = addr.state or "unknown"
+        logger.info(
+            "Zoning fallback: running Prompt 3A from LLM training knowledge "
+            "for %s, %s district %s", zcity, zstate, zcode,
+        )
+        _fallback_system = (
+            "You are a zoning code analyst with comprehensive knowledge of US\n"
+            "municipal zoning codes. Extract dimensional standards and permitted\n"
+            "uses for the specified zoning district from your training knowledge.\n\n"
+            "RULES:\n"
+            "- Return null for fields you are not confident about.\n"
+            "- Dimensions in feet. FAR as decimal. Percentages as decimals.\n"
+            "- Set source_mismatch=false and source_notes='LLM training knowledge\n"
+            "  fallback — municipal code scrape unavailable'.\n"
+            "Output ONLY valid JSON."
+        )
+        # Reuse the _USER_3A JSON schema by passing an empty code-text block.
+        _fallback_user = (
+            f"Property: {addr.full_address}\n"
+            f"Municipality: {zcity}, {zstate}\n"
+            f"Zoning district code: {zcode}\n\n"
+            "No scraped municipal code text is available. Return what you\n"
+            "know about this district from your training data, using the same\n"
+            "JSON schema as Prompt 3A:\n"
+            + _USER_3A.split("Return JSON:")[1].strip()
+        )
+        _fallback = _call_llm(MODEL_HAIKU, _fallback_system, _fallback_user)
+        if _fallback:
+            _apply_3a(_fallback, deal)
+            logger.info(
+                "Zoning fallback Prompt 3A complete — %s %s standards extracted",
+                zcity, zcode,
+            )
+        else:
+            logger.warning("Zoning fallback Prompt 3A failed — no structured zoning data")
 
     # Prompt 3B — Buildable Capacity Analysis (Sonnet)
     logger.info("Running Prompt 3B — Buildable Capacity Analysis...")

@@ -159,6 +159,47 @@ def populate_excel(deal: DealData) -> Path:
         else:
             ws_exit["B7"] = gross_sale
 
+    # ── Cover tab — remove firm name from prepared-by line ───────
+    if "Cover" in wb.sheetnames:
+        wb["Cover"]["B27"] = "Prepared by DealDesk."
+        logger.info("COVER: B27 overwritten → 'Prepared by DealDesk.'")
+
+    # ── Cash Waterfall D30: contextual N/A note on IRR non-convergence ──
+    # Template cell D30 is =IFERROR(IRR(F28:P28),"N/A"). When Python has
+    # also computed fo.project_irr as None (non-convergent cash flows),
+    # replace with an explanatory note instead of a bare "N/A".
+    if "Cash Waterfall" in wb.sheetnames and fo.project_irr is None:
+        wb["Cash Waterfall"]["D30"] = "N/A — non-convergent due to mid-hold equity injection"
+        logger.info("WATERFALL D30: Project IRR annotated — non-convergent")
+
+    # ── Cash Waterfall refi proceeds rows (24=Refi1, 25=Refi2, 26=Refi3) ──
+    # Template uses per-year IF formulas that read Assumptions cells. When
+    # the refi fires under Python's logic, we overwrite the specific
+    # (row, year-column) cell with the authoritative refi_proceeds value
+    # from pro_forma_years so the Total Distributable CF row (R28) picks
+    # it up. Years 1..10 map to columns G..P.
+    if "Cash Waterfall" in wb.sheetnames and fo.pro_forma_years:
+        ws_wf = wb["Cash Waterfall"]
+        a = deal.assumptions
+        year_cols = "GHIJKLMNOP"   # Year 1 → G, Year 10 → P
+        refi_rows = {0: 24, 1: 25, 2: 26}  # refi_events[i] → waterfall row
+        for pf_yr in fo.pro_forma_years:
+            y = int(pf_yr.get("year", 0) or 0)
+            proceeds = float(pf_yr.get("refi_proceeds", 0) or 0)
+            if y < 1 or y > len(year_cols) or proceeds <= 0:
+                continue
+            col = year_cols[y - 1]
+            # Find which refi fired this year (its .year == y AND .active=True)
+            for i, refi in enumerate(a.refi_events[:3]):
+                if refi.active and refi.year == y:
+                    cell = f"{col}{refi_rows[i]}"
+                    ws_wf[cell] = round(proceeds, 2)
+                    logger.info(
+                        "WATERFALL Refi%d: wrote proceeds $%s to %s (Year %d)",
+                        i + 1, f"{proceeds:,.0f}", cell, y,
+                    )
+                    break
+
     wb.save(output_path)
     wb.close()
 
@@ -294,9 +335,17 @@ def _populate_rent_roll_residential(ws, units: list, deal: DealData | None = Non
             u = units[i]
             ws[f"B{row}"] = u.get("unit_id") or f"{i+1:03d}"
             ws[f"C{row}"] = u.get("unit_type")
-            ws[f"D{row}"] = u.get("sf")
+            # Display "N/A" instead of 0 when unit SF was not provided.
+            # Overwriting F (the template Rent/SF/Mo formula) is necessary
+            # because =E/D would produce 0 or #DIV/0! on a missing SF.
+            _unit_sf = u.get("sf")
+            if _unit_sf:
+                ws[f"D{row}"] = _unit_sf
+            else:
+                ws[f"D{row}"] = "N/A"
+                ws[f"F{row}"] = "N/A"
             ws[f"E{row}"] = u.get("monthly_rent")
-            # F (Rent/SF/Mo) and G (Annual Rent) are formulas — leave intact
+            # G (Annual Rent) is a formula; left intact
             ws[f"H{row}"] = _normalise_status(u.get("status"))
             ws[f"I{row}"] = u.get("lease_end")
             ws[f"J{row}"] = u.get("market_rent")
@@ -761,6 +810,28 @@ def _populate_refi_balances(ws, deal: DealData) -> None:
             logger.info("Refi Analysis %s: wrote amortized balance $%s "
                         "(overriding original loan amount formula)", cell, f"{bal:,.0f}")
 
+        # Equity-injection disclosure: when financials flagged that the new
+        # loan does not cover the existing balance, surface it as a visible
+        # warning in the Refi Analysis sheet.
+        prov = deal.provenance.field_sources
+        inject_flag = prov.get(f"refi{i+1}_equity_injection_required") == "True"
+        if inject_flag:
+            from openpyxl.styles import Font
+            inject_amt = float(prov.get(f"refi{i+1}_equity_injection_amount", 0) or 0)
+            warn_row = 24 + i   # 24 for refi1, 25 for refi2, 26 for refi3
+            ws[f"A{warn_row}"] = f"\u26A0 EQUITY INJECTION REQUIRED (Refi {i+1})"
+            ws[f"{col}{warn_row}"] = inject_amt
+            try:
+                ws[f"A{warn_row}"].font = Font(color="FF0000", bold=True)
+                ws[f"{col}{warn_row}"].font = Font(color="FF0000", bold=True)
+            except Exception:
+                pass
+            logger.info(
+                "Refi Analysis: wrote equity-injection warning row %d for "
+                "Refi %d (amount=$%s)",
+                warn_row, i + 1, f"{inject_amt:,.0f}",
+            )
+
 
 def _populate_constr_interest_tab(ws, deal: DealData) -> None:
     """
@@ -939,17 +1010,22 @@ def _populate_pro_forma_gpr(ws, deal: DealData) -> None:
         [f"Y{i+1}={v:.2f}" for i, v in enumerate(stab_factors[:num_years])]
     )
 
-    # ── GPR row 6 ────────────────────────────────────────────────
-    gpr_yr1 = fo.gross_potential_rent if fo else None
-    if gpr_yr1 and gpr_yr1 > 0:
-        rent_growth = deal.assumptions.annual_rent_growth or 0.03
-        for n in range(num_years):
-            value = gpr_yr1 * (1 + rent_growth) ** n
-            ws[f"{cols[n]}6"] = round(value, 2)
-        logger.info(
-            "EXCEL Pro Forma: wrote GPR row — gpr_yr1=%s, rent_growth=%s, years=%s",
-            gpr_yr1, rent_growth, num_years,
-        )
+    # ── GPR row 6 — formula-driven from Rent Roll ────────────────
+    # B6 reads the live Rent Roll total (E45). C6–K6 compound from B6
+    # using the rent-growth rate stored in Assumptions!C135. This
+    # preserves the workbook's chain of calculation: any Rent Roll
+    # edit or rent-growth change flows through automatically.
+    # Do NOT apply stab factors to GPR here — EGI row 17 already
+    # does that via =(B14+B15)*B4 where B4 is the stabilization factor.
+    ws["B6"] = "='Rent Roll'!E45"
+    rent_growth_ref = "Assumptions!$C$135"
+    for n in range(1, num_years):      # n=1 → col C (Year 2) … n=9 → col K (Year 10)
+        col = cols[n]
+        ws[f"{col}6"] = f"=B6*(1+{rent_growth_ref})^{n}"
+    logger.info(
+        "EXCEL Pro Forma: GPR row 6 written as live formulas "
+        "(B6='Rent Roll'!E45, C6:K6 compound from B6)"
+    )
 
     proforma = fo.pro_forma_years if fo else None
 

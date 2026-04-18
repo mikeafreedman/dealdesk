@@ -696,6 +696,34 @@ def _reconcile_total_uses(deal: DealData) -> float:
         return excel_total
 
 
+_US_STATE_CODES = {
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+    "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+    "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+    "VA","WA","WV","WI","WY","DC",
+}
+
+
+def _title_case_address(raw: str) -> str:
+    """Title-case an address string while preserving US state codes ("PA")
+    and ordinal suffixes ("46th", "1st"). Python's str.title() alone turns
+    "PA" into "Pa" and "46th" into "46Th" — this fixes both.
+    """
+    if not raw:
+        return ""
+    import re as _re
+    s = raw.title()
+    # Ordinals: "46Th" → "46th", "21St" → "21st", etc.
+    s = _re.sub(r"(\d)(St|Nd|Rd|Th)\b",
+                lambda m: m.group(1) + m.group(2).lower(), s)
+    # 2-letter state codes back to uppercase when they correspond to real states.
+    def _fix_state(m):
+        w = m.group(0)
+        return w.upper() if w.upper() in _US_STATE_CODES else w
+    s = _re.sub(r"\b[A-Z][a-z]\b", _fix_state, s)
+    return s
+
+
 def _build_context(deal: DealData) -> dict:
     """Build the full template context dict from DealData for docxtpl."""
     narr = deal.narratives
@@ -709,17 +737,23 @@ def _build_context(deal: DealData) -> dict:
 
     ctx = {}
 
-    # Cover page
-    ctx["cover_title"] = deal.cover_title
+    # Cover page — title-case the address portion so the header reads
+    # "Investment Underwriting Report — 2-8 S. 46th Street, Philadelphia, PA, 19139"
+    # regardless of whether upstream delivered the address all-lowercase.
+    _raw_full_addr = deal.address.full_address or ""
+    _tc_full_addr = _title_case_address(_raw_full_addr)
+    _cover_prefix = ("Investment Summary" if deal.investor_mode
+                     else "Investment Underwriting Report")
+    ctx["cover_title"] = f"{_cover_prefix} — {_tc_full_addr}" if _tc_full_addr else _cover_prefix
     ctx["report_date"] = deal.report_date or ""
     ctx["deal_id"] = deal.deal_id or ""
     ctx["deal_code"] = deal.deal_code or ""
-    ctx["sponsor_name"] = deal.sponsor_name
+    ctx["sponsor_name"] = deal.sponsor_name or "DealDesk"
     ctx["sponsor_description"] = deal.sponsor_description
 
-    # Property basics
-    ctx["property_name"] = ext.property_name or ""
-    ctx["full_address"] = deal.address.full_address
+    # Property basics — title-case the address for display
+    ctx["property_name"] = ext.property_name or _tc_full_addr
+    ctx["full_address"] = _tc_full_addr
     ctx["city"] = deal.address.city
     ctx["state"] = deal.address.state
     ctx["zip_code"] = deal.address.zip_code
@@ -1150,6 +1184,32 @@ def _build_context(deal: DealData) -> dict:
     except Exception as e:
         logger.warning("NARRATIVE CTX: failed to refresh context — %s", e)
 
+    # ── Refi equity-injection disclosure (material LP-facing risk) ────
+    # financials.py sets provenance keys refi{1,2,3}_equity_injection_required
+    # when the new loan at refi does not cover the existing balance. Surface
+    # that as a ctx string so Section 13 can render it alongside the refi
+    # narrative.
+    prov = deal.provenance.field_sources
+    _equity_warnings = []
+    for _i in (1, 2, 3):
+        if prov.get(f"refi{_i}_equity_injection_required") == "True":
+            _inject = float(prov.get(f"refi{_i}_equity_injection_amount", 0) or 0)
+            _new_loan = float(prov.get(f"refi{_i}_new_loan", 0) or 0)
+            _bal = float(prov.get(f"refi{_i}_existing_balance", 0) or 0)
+            _equity_warnings.append(
+                f"WARNING: The Refi {_i} at the assumed cap rate and LTV "
+                f"produces a new loan of ${_new_loan:,.0f}, which does not "
+                f"cover the existing loan balance of ${_bal:,.0f}. A borrower "
+                f"equity injection of ${_inject:,.0f} is required to execute "
+                f"this refinance. This represents a material mid-hold capital "
+                f"call risk that must be disclosed to LP investors."
+            )
+    ctx["refi1_equity_warning"] = _equity_warnings[0] if _equity_warnings else ""
+    ctx["refi_equity_warnings"] = "\n\n".join(_equity_warnings)
+    if _equity_warnings:
+        logger.warning("REFI EQUITY INJECTION: %d refi(s) flagged for disclosure",
+                       len(_equity_warnings))
+
     # ═══════════════════════════════════════════════════════════════════
     # EXPLICIT TEMPLATE CONTEXT KEYS — kpi_rows, parcel_a_*, transit_rows,
     # hbu_content, income_* — built from the real model attribute paths.
@@ -1286,28 +1346,60 @@ def _build_context(deal: DealData) -> dict:
     ]
     logger.info("TRANSIT ROWS: %d rows", len(ctx["transit_rows"]))
 
-    # ── Fix 8: Income Summary from in-place rent roll ────────────────
-    # fo.gross_potential_rent is $0 during construction; fall back to rent roll.
-    _units = (ext.unit_mix or [])
-    _rr_monthly_total = 0.0
-    for u in _units:
-        try:
-            monthly_raw = u.get("monthly_rent", 0) or u.get("current_rent", 0) or 0
-            monthly = float(monthly_raw)
-            count_raw = u.get("count")
-            count = float(count_raw) if count_raw not in (None, "") else 1.0
-            _rr_monthly_total += monthly * count
-        except (TypeError, ValueError):
-            continue
-    _rr_gpr = _rr_monthly_total * 12.0
-    _fo_gpr = float(fo.gross_potential_rent or 0)
-    _gpr_val = _fo_gpr if _fo_gpr > 0 else _rr_gpr
-    _vac_rate = float(a.vacancy_rate or 0.0)
-    _ltl_rate = float(a.loss_to_lease or 0.0)
-    _other = float((a.cam_reimbursements or 0) + (a.fee_income or 0))
-    _vacancy_loss = _gpr_val * _vac_rate
-    _ltl_loss     = _gpr_val * _ltl_rate
-    _egi_val      = _gpr_val - _vacancy_loss - _ltl_loss + _other
+    # ── Income Summary: use FIRST STABILIZED YEAR from pro forma ────
+    # For stabilized assets stab_factor is 1.0 in Year 1.
+    # For value_add, Year 1 is construction; first stab year is Year 2+.
+    # We pull GPR, vacancy, LTL, EGI directly from pro_forma_years so
+    # the income summary matches the pro forma exactly.
+    _fo = deal.financial_outputs
+    _pro_years = getattr(_fo, 'pro_forma_years', None) or []
+    _a = deal.assumptions
+
+    # Find first year where stabilization_factor >= 1.0
+    _stab_yr = None
+    for _py in _pro_years:
+        _sf = float(_py.get('stabilization_factor', 1.0)
+                    if isinstance(_py, dict)
+                    else getattr(_py, 'stabilization_factor', 1.0))
+        if _sf >= 1.0:
+            _stab_yr = _py
+            break
+
+    if _stab_yr and isinstance(_stab_yr, dict):
+        # Prefer pro forma dict values — they are already stabilized
+        _gpr_val  = float(_stab_yr.get('gpr', 0) or 0)
+        _egi_val  = float(_stab_yr.get('egi', 0) or 0)
+        _opex_val = float(_stab_yr.get('opex', 0) or 0)
+        _vac_rate = float(_a.vacancy_rate or 0.05)
+        _ltl_rate = float(_a.loss_to_lease or 0.03)
+        _vacancy_loss = _gpr_val * _vac_rate
+        _ltl_loss     = _gpr_val * _ltl_rate
+        _other        = float((_a.cam_reimbursements or 0)
+                               + (_a.fee_income or 0))
+        _src = "pro_forma_stab_yr"
+        logger.info(
+            "GPR DISPLAY: first stab year GPR=$%s (Year %s)",
+            f"{_gpr_val:,.0f}",
+            _stab_yr.get('year', '?')
+        )
+    else:
+        # Fallback: use fo.gross_potential_rent (stabilized asset,
+        # no construction period)
+        _vac_rate     = float(_a.vacancy_rate or 0.05)
+        _ltl_rate     = float(_a.loss_to_lease or 0.03)
+        _gpr_val      = float(_fo.gross_potential_rent or 0)
+        _vacancy_loss = _gpr_val * _vac_rate
+        _ltl_loss     = _gpr_val * _ltl_rate
+        _other        = float((_a.cam_reimbursements or 0)
+                               + (_a.fee_income or 0))
+        _egi_val      = _gpr_val - _vacancy_loss - _ltl_loss + _other
+        _src = "fo.gross_potential_rent"
+        logger.info(
+            "GPR DISPLAY: no stab year in pro_forma — using "
+            "fo.gross_potential_rent=$%s",
+            f"{_gpr_val:,.0f}"
+        )
+
     ctx["income_gpr"]           = f"${_gpr_val:,.0f}"
     ctx["income_vacancy_loss"]  = f"(${_vacancy_loss:,.0f})"
     ctx["income_vacancy_pct"]   = f"({_vac_rate * 100:.1f}%)"
@@ -1315,14 +1407,24 @@ def _build_context(deal: DealData) -> dict:
     ctx["income_ltl_pct"]       = f"({_ltl_rate * 100:.1f}%)"
     ctx["income_other"]         = f"${_other:,.0f}"
     ctx["income_egi"]           = f"${_egi_val:,.0f}"
-    ctx["income_egi_pct"]       = (f"{(_egi_val / _gpr_val * 100):.1f}%"
-                                    if _gpr_val > 0 else "N/A")
-    logger.info("EGI CALC: GPR=%s vacancy=%s ltl=%s EGI=%s (source=%s)",
-                ctx["income_gpr"],
-                ctx["income_vacancy_loss"],
-                ctx["income_loss_to_lease"],
-                ctx["income_egi"],
-                "model" if _fo_gpr > 0 else "rent_roll")
+    ctx["income_egi_pct"]       = (
+        f"{(_egi_val / _gpr_val * 100):.1f}%"
+        if _gpr_val > 0 else "N/A"
+    )
+    logger.info(
+        "EGI CALC: GPR=%s vacancy=%s ltl=%s EGI=%s (source=%s)",
+        ctx["income_gpr"],
+        ctx["income_vacancy_loss"],
+        ctx["income_loss_to_lease"],
+        ctx["income_egi"],
+        _src,
+    )
+    logger.info(
+        "INCOME SUMMARY CTX: gpr=%s egi=%s (stab_yr_found=%s)",
+        ctx.get('income_gpr'),
+        ctx.get('income_egi'),
+        _stab_yr is not None,
+    )
 
     # ═══════════════════════════════════════════════════════════════════
     # RENT + SALE COMP CONTEXT (Section 11.1 benchmarks + 11.3 sale comps)
@@ -1650,7 +1752,7 @@ def _build_context(deal: DealData) -> dict:
     # Non-table scalars (deal_source, report_title, etc.) resolve to real
     # values from DealData here.
     # ══════════════════════════════════════════════════════════════════════
-    ctx.setdefault("report_title",             deal.cover_title)
+    ctx.setdefault("report_title",             ctx.get("cover_title", deal.cover_title))
     ctx.setdefault("deal_type",                deal.deal_type or "")
     ctx.setdefault("deal_source",              (ext.deal_source or "") if ext else "")
     _ins_val = ins.insurance_proforma_line_item or a.insurance or 0

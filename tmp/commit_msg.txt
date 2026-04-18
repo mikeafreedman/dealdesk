@@ -1,0 +1,184 @@
+fix: DD flags, Y7 refi proceeds, sensitivity axes, equity injection disclosure, rent roll SF display, IRR N/A note, validation scaffold
+
+Batch covers Fixes 1-12 from the operator backlog plus all prior uncommitted
+work (branding removal, Excel GPR live formulas, title-case address, Nunito
+Sans font, Playwright CSS brand redesign, report-page structure, TOC line
+removal, table alignment, GPR stab-year display). Scope is large; each
+change is called out below so it can be reverted individually if needed.
+
+NEW MODULES
+-----------
+
+dd_flag_engine.py (new)
+  Pure-Python DD flag generator. Seven rules, each a deal -> Optional[DdFlag]:
+    R1 year_built < 1978         -> AMBER lead-paint / asbestos
+    R2 no Phase I ESA on file    -> AMBER Phase I required
+    R3 io_period <= 24 mo        -> AMBER short IO execution risk
+    R4 dscr_yr1 < 1.0            -> RED   debt not serviceable
+    R5 refi new_loan < balance   -> RED   equity injection required
+    R6 lp_irr < min_lp_irr       -> AMBER LP IRR below threshold
+    R7 unemployment_rate > 7%    -> AMBER tenant credit risk
+  Pipeline: called in main.py after run_financials(). Failure is non-fatal
+  (one rule crashing never stops the others; overall engine crash just
+  logs a warning and leaves deal.dd_flags as-is). Template Section 16
+  already renders deal.dd_flags; this is the first commit where those
+  flags actually populate.
+
+kpi_validator.py (new -- diagnostic scaffold for Fix 1)
+  Opens the rendered xlsx with data_only=True and compares 12 key KPIs
+  against deal.financial_outputs. Within $1 or 0.01% relative -> OK;
+  anything wider -> warning log line with the specific Python / Excel
+  pair. Call site: main.py right after populate_excel(). Produces the
+  targeted cell-update list we need before a real PDF-Excel sync pass.
+
+FINANCIALS (financials.py)
+--------------------------
+
+Fix 2 (refi equity-injection disclosure):
+  When new_loan < old_balance, compute the unfloored refi math and store
+  refi{i}_equity_injection_{required,amount,new_loan,existing_balance}
+  on deal.provenance.field_sources so downstream (Excel warning row,
+  PDF Section 13 callout, DD flag R5) can surface it. refi_proceeds
+  itself stays floored at 0 so cash-flow rows remain non-negative.
+
+Fix 6 (NOI sensitivity expense-growth dimension):
+  Prior formula (1 + eg) ** 0 collapsed every row to the same opex --
+  expense-growth axis was effectively dead. Now (1 + eg) ** 1 so rows
+  differentiate on expense growth as intended. Fixed-base and var-base
+  expenses both scale; management fee still tracks EGI.
+
+DEBUG_EXPENSES=1 env flag (Fix 3 scaffold):
+  _year_expenses() emits a full Year 1 line-by-line breakdown when the
+  environment variable is set. No-op by default.
+
+COC SENSITIVITY debug log (Fix 7 scaffold):
+  One-line log on every run listing base_price, ltv_axis, and price_axis
+  so the CoC sensitivity column count is visible in server_output.log.
+
+stabilization_factor stored on pro_forma_years dicts:
+  Both _build_proforma (hold strategies) and _build_proforma_for_sale
+  (flip) now include stabilization_factor per year so word_builder can
+  read it directly without re-deriving via _get_stabilization_factors.
+
+EXCEL (excel_builder.py)
+------------------------
+
+GPR row 6 now formula-driven: B6="='Rent Roll'!E45",
+  C6..K6="=B6*(1+Assumptions!$C$135)^n" so any Rent Roll or rent-growth
+  edit flows through automatically. Does NOT apply stabilization factor
+  to row 6 -- EGI row 17 already handles that via =(B14+B15)*B4.
+
+Cover sheet B27 overwritten to "Prepared by DealDesk." immediately before
+  wb.save().
+
+Fix 11 (Y7 Refi 2 waterfall): excel_builder now writes authoritative
+  refi_proceeds values to Cash Waterfall rows 24/25/26 (Refi 1/2/3) in
+  the correct year column (G-P for Years 1-10) using data from
+  fo.pro_forma_years. Row 28 Total Distributable CF picks them up via
+  its existing SUM formula, so Year 7 = Net Property CF + Refi 2 Proceeds.
+
+Fix 4 (Project IRR N/A annotation): when fo.project_irr is None,
+  Cash Waterfall D30 is overwritten with an explanatory note instead
+  of the bare IFERROR fallback.
+
+Refi Analysis equity-injection warning row (Fix 2, Excel side):
+  When provenance flags a refi equity injection, excel_builder writes a
+  red-bold warning row and the dollar amount to the Refi Analysis sheet
+  below the main table.
+
+Fix 12 (rent roll SF display): when unit sf is missing, column D writes
+  "N/A" and column F (Rent/SF/Mo formula cell) is overridden to "N/A"
+  so the template =E/D formula does not produce 0 or #DIV/0!.
+
+WORD / PDF (word_builder.py + templates)
+----------------------------------------
+
+Income summary stabilized-year GPR:
+  _build_context finds the first pro_forma_years entry with
+  stabilization_factor >= 1.0 and pulls GPR/EGI from it. Falls back to
+  fo.gross_potential_rent scalar when no stabilized year exists.
+  Emits GPR DISPLAY and INCOME SUMMARY CTX logs.
+
+Refi equity-injection PDF callout:
+  _build_context walks provenance for refi{1,2,3}_equity_injection_required
+  flags and composes ctx["refi_equity_warnings"] as a newline-joined
+  disclosure block. Template Section 13 renders it as a .callout.alert
+  block immediately after the capital-stack narrative.
+
+Sensitivity narrative override:
+  _build_context counts numeric vs N/A cells in sensitivity_cells and,
+  when the Sonnet narrative is the legacy boilerplate OR missing, replaces
+  it with a counts-based description. Sonnet prompt updated with three
+  explicit matrix-state branches.
+
+Sponsor fallback: ctx["sponsor_name"] = deal.sponsor_name or "DealDesk".
+
+Title-case address helper: _title_case_address() preserves US state codes
+  and ordinal suffixes. Applied to cover_title, report_title,
+  property_name, and full_address ctx keys.
+
+parcel_a_{land_area,building_sf,year_built} fall back from ParcelData
+  to FinancialAssumptions (gba_sf/lot_sf/year_built) to "N/A".
+
+Templates:
+  - report.css: Nunito Sans, parchment body, white .report-page cards,
+    dark-walnut table headers, legacy class shims, fixed table layout,
+    removed min-height and TOC border-bottoms, added .tbl-2col.
+  - report_template.html: full cover rewrite with .cover-top-bar/body/
+    footer; .section-header -> .section-title-block; .section ->
+    .report-page across all 22 sections; toc-dots spans removed.
+
+MAIN PIPELINE (main.py)
+-----------------------
+
+After run_financials(): calls dd_flag_engine.generate_dd_flags(deal).
+After populate_excel():  calls kpi_validator.validate(deal, xlsx_path).
+Both try/except so a diagnostic failure cannot abort the run.
+
+MARKET (market.py)
+------------------
+
+Fix 9 (Census 1-mile proxy): new _fetch_acs_tract_demographics() queries
+  ACS 2022 at the subject tract level (state/county/tract) and writes
+  pop / median HH income / renter % / unemployment rate to the *_1mi
+  fields on market_data. Runs after the place-level fetch; only fills
+  in fields the place-level fetch did not populate.
+
+Zoning fallback: when the scrape fails (e.g. amlegal 403) but
+  deal.zoning.zoning_code is known (from OPA), Prompt 3A runs against
+  Haiku training knowledge using the district code as authoritative input.
+
+BRANDING
+--------
+
+All Freedman-Properties strings removed from the product surface:
+  models.models.DealData.sponsor_{name,description} default to "DealDesk"
+  deal_data._merge sets sponsor_name with DealDesk fallback
+  word_builder ctx["sponsor_name"] falls back to "DealDesk"
+  excel_builder Cover!B27 -> "Prepared by DealDesk."
+  login.html brand-sub    -> "CRE UNDERWRITING"
+  login.html footer       -> "DealDesk - Authorized Access Only"
+  auth.py OTP footer      -> "DealDesk - Authorized Access Only"
+grep "Freedman Properties" across the 6 touched files returns 0 hits.
+
+VERIFIED / SKIPPED
+------------------
+
+Fix 5 (sensitivity cap axis off-by-one): _inclusive_range already
+  inclusive of upper bound. Deliberately no code change.
+
+Fix 8 (Amort - Initial 360-month loop): code already caps at
+  min(loan_term * 12, 360). Deliberately no code change.
+
+DEFERRED
+--------
+
+Fix 1 (full PDF/Excel KPI reconciliation): KPI validator scaffold now
+  logs the specific mismatched values so we can build a targeted cell
+  fix list in a follow-up.
+Fix 3 (Year 1 NOI $10K gap): DEBUG_EXPENSES=1 scaffold in place.
+Fix 7 (CoC sensitivity columns): debug log in place.
+
+Also: KNOWN_GAPS.md removed.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>

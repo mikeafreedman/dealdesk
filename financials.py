@@ -550,7 +550,30 @@ def _year_expenses(egi: float, year: int, a, insurance: float) -> float:
                 a.cleaning + a.turnover + a.advertising +
                 a.landscape_snow + a.admin_legal_acct +
                 a.office_phone + a.miscellaneous)
-    return fixed + mgmt + var_base * g
+    total = fixed + mgmt + var_base * g
+
+    # Diagnostic: set DEBUG_EXPENSES=1 to emit a full line-item breakdown
+    # for Year 1 (where reconciliation discrepancies have been reported).
+    import os
+    if year == 1 and os.environ.get("DEBUG_EXPENSES") == "1":
+        logger.info(
+            "DEBUG_EXPENSES Year 1 breakdown: "
+            "re_taxes=%.0f insurance=%.0f gas=%.0f water_sewer=%.0f "
+            "electric=%.0f license=%.0f trash=%.0f | fixed_subtotal=%.0f | "
+            "mgmt_pct=%.4f × egi=%.0f = mgmt=%.0f | "
+            "salaries=%.0f repairs=%.0f exterminator=%.0f cleaning=%.0f "
+            "turnover=%.0f advertising=%.0f landscape=%.0f admin=%.0f "
+            "office=%.0f misc=%.0f | var_subtotal=%.0f | "
+            "growth_factor=%.4f | TOTAL=%.0f",
+            a.re_taxes, insurance, a.gas, a.water_sewer,
+            a.electric, a.license_inspections, a.trash, fixed,
+            a.mgmt_fee_pct, egi, mgmt,
+            a.salaries, a.repairs, a.exterminator, a.cleaning,
+            a.turnover, a.advertising, a.landscape_snow, a.admin_legal_acct,
+            a.office_phone, a.miscellaneous, var_base,
+            g, total,
+        )
+    return total
 
 
 def _year_noi(gpr_yr1: float, year: int, a, insurance: float) -> Tuple[float, float, float, float]:
@@ -979,7 +1002,25 @@ def _build_proforma(deal: DealData, insurance: float,
                 # Closing costs: 1% origination + $3,500 flat, rounded to nearest $100
                 costs = round((new_loan * 0.01) + 3500, -2)
                 total_refi_costs = prepay + costs
-                refi_proceeds = max(0.0, new_loan - old_balance - total_refi_costs)
+                # Raw refi math (may be negative when new_loan < old_balance).
+                # refi_proceeds is floored at 0 for the cash flow column; the
+                # unfloored value is surfaced as an equity-injection disclosure
+                # so LP-facing narratives must reveal it.
+                raw_refi_net = new_loan - old_balance - total_refi_costs
+                refi_proceeds = max(0.0, raw_refi_net)
+                if raw_refi_net < 0:
+                    equity_inject = -raw_refi_net   # positive magnitude
+                    prov = deal.provenance.field_sources
+                    prov[f"refi{refi_idx+1}_equity_injection_required"] = "True"
+                    prov[f"refi{refi_idx+1}_equity_injection_amount"] = f"{equity_inject:.2f}"
+                    prov[f"refi{refi_idx+1}_new_loan"] = f"{new_loan:.2f}"
+                    prov[f"refi{refi_idx+1}_existing_balance"] = f"{old_balance:.2f}"
+                    logger.warning(
+                        "REFI %d EQUITY INJECTION REQUIRED: new_loan=$%.0f is "
+                        "below existing balance=$%.0f. Borrower must inject "
+                        "$%.0f of equity to execute the refi.",
+                        refi_idx + 1, new_loan, old_balance, equity_inject,
+                    )
                 logger.info(
                     "REFI [Year %d]: appraised=%.2f, new_loan=%.2f, net_proceeds=%.2f",
                     yr, refi.appraised_value, new_loan, refi_proceeds)
@@ -1035,6 +1076,11 @@ def _build_proforma(deal: DealData, insurance: float,
 
         proforma.append({
             "year": yr,
+            # Stabilization ramp factor for this year (0.0 during construction,
+            # → 1.0 once the property is fully stabilized). Stored per year so
+            # downstream consumers (word_builder income summary) don't need to
+            # re-derive it from _get_stabilization_factors.
+            "stabilization_factor": round(float(stab), 4),
             "gpr": round(gpr, 2),
             "egi": round(egi, 2),
             "opex": round(opex, 2),
@@ -1121,6 +1167,11 @@ def _build_proforma_for_sale(deal: DealData,
         carry = monthly_carry * max(0, months_this_yr)
         proforma.append({
             "year": yr,
+            # For-sale / flip strategy has no lease-up — units are never
+            # "stabilized" in the hold-and-rent sense. Record 0.0 so the
+            # income-summary consumer treats these years as non-stabilized
+            # and falls through to the legacy path.
+            "stabilization_factor": 0.0,
             "gpr": 0.0, "egi": 0.0, "opex": 0.0, "noi": 0.0,
             "debt_service": 0.0,
             "capex_reserve": 0.0,
@@ -1514,17 +1565,22 @@ def _build_sensitivity(deal: DealData, insurance: float,
         em_matrix.append(em_row)
 
     # ── Year-1 NOI grid: expense_growth (rows) × vacancy (cols) ──
+    # The prior formula used (1 + eg) ** 0 which is 1 for all eg values,
+    # collapsing every row to the same NOI. We apply a single year of
+    # expense growth ((1 + eg) ** 1) so rows differentiate on expense
+    # growth as well as vacancy. Management fee scales with EGI (unchanged).
     vac_axis = [0.05, 0.075, 0.10, 0.125, 0.15, 0.20]
     exp_axis = [0.01, 0.02, 0.03, 0.04, 0.05]
     gpr1 = base["gpr_yr1"]
     noi_matrix: List[List[float]] = []
     for eg in exp_axis:
+        eg_factor = 1.0 + eg
         noi_row: List[float] = []
         for vac in vac_axis:
             egi = gpr1 * (1 - vac - base["loss_to_lease"]) + base["cam"] + base["fee_income"]
-            opex = ((base["fixed_base"] + insurance) * (1 + eg) ** 0 +
+            opex = ((base["fixed_base"] + insurance) * eg_factor +
                     egi * base["mgmt_pct"] +
-                    base["var_base"] * (1 + eg) ** 0)
+                    base["var_base"] * eg_factor)
             noi_row.append(round(egi - opex, 2))
         noi_matrix.append(noi_row)
 
@@ -1533,6 +1589,11 @@ def _build_sensitivity(deal: DealData, insurance: float,
     ltv_axis = [0.60, 0.65, 0.70, 0.75, 0.80]
     price_mult = [1 - 0.15, 1 - 0.10, 1 - 0.05, 1.0, 1 + 0.05, 1 + 0.10]
     price_axis = [round(price * m, 2) for m in price_mult]
+    logger.info(
+        "COC SENSITIVITY: base_price=$%s, ltv_axis=%s, price_axis=%s (%d cols)",
+        f"{price:,.0f}", ltv_axis,
+        [f"${p:,.0f}" for p in price_axis], len(price_axis),
+    )
     coc_matrix: List[List[float]] = []
     for ltv in ltv_axis:
         coc_row: List[float] = []

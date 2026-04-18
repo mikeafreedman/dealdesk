@@ -878,6 +878,13 @@ async def underwrite(req: UnderwriteRequest, request: Request):
                                 getattr(_fo, 'noi_yr1', 'MISSING'))
                 except Exception as _fe:
                     logger.error("FINANCIALS COMPLETE log failed: %s", _fe)
+                # DD flag evaluation runs after financials so the engine can
+                # see NOI, DSCR, IRR, and refi outcomes. Failure is non-fatal.
+                try:
+                    from dd_flag_engine import generate_dd_flags
+                    generate_dd_flags(deal)
+                except Exception as _de:
+                    logger.warning("DD FLAG engine failed (non-fatal): %s", _de)
 
             elif stage_name == "excel_builder":
                 logger.info("PIPELINE: Starting excel_builder")
@@ -888,6 +895,13 @@ async def underwrite(req: UnderwriteRequest, request: Request):
                 logger.info(f"[DIAG] assumptions.monthly_rent = {getattr(getattr(deal, 'assumptions', None), 'monthly_rent', 'MISSING')}")
                 xlsx_path: Path = populate_excel(deal)
                 deal.output_xlsx_path = str(xlsx_path)
+                # Diagnostic scaffold: diff 12 KPIs between Python and Excel.
+                # Non-fatal; outputs a KPI DIFF / KPI OK log line per metric.
+                try:
+                    from kpi_validator import validate as _kpi_validate
+                    _kpi_validate(deal, xlsx_path)
+                except Exception as _ke:
+                    logger.warning("KPI VALIDATOR (non-fatal): %s", _ke)
 
             elif stage_name == "word_builder":
                 deal = generate_report(deal)

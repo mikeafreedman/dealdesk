@@ -123,8 +123,7 @@ def send_otp_email(email: str, code: str) -> bool:
                     <td style="padding:20px 40px;
                                 border-top:1px solid #3d2e1e;">
                       <p style="margin:0;font-size:11px;color:#5C3D26;">
-                        Freedman Properties &bull; Narberth, PA
-                        &bull; Confidential
+                        DealDesk &bull; Authorized Access Only
                       </p>
                     </td>
                   </tr>
