@@ -71,6 +71,57 @@ _NYC_COUNTY_TO_BOROUGH = {
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
+_ENTITY_TYPE_PATTERNS = [
+    (r"\bLLC\b|\bL\.L\.C\.",          "LLC"),
+    (r"\bLLP\b|\bL\.L\.P\.",          "LLP"),
+    (r"\bLP\b|\bL\.P\.",              "LP"),
+    (r"\bINC\b|\bINCORPORATED\b",     "Corporation"),
+    (r"\bCORP\b|\bCORPORATION\b",     "Corporation"),
+    (r"\bCO\b|\bCOMPANY\b",           "Company"),
+    (r"\bTRUST\b|\bTR\b",             "Trust"),
+    (r"\bASSOCIATION\b|\bASSN\b",     "Association"),
+    (r"\bPARTNERSHIP\b",              "Partnership"),
+    (r"\bESTATE OF\b",                "Estate"),
+    (r"\bREIT\b",                     "REIT"),
+    (r"\bCHURCH\b|\bTEMPLE\b|\bPARISH\b", "Religious"),
+    (r"\bCITY OF\b|\bCOUNTY OF\b|\bSTATE OF\b|\bHOUSING AUTHORITY\b|\bREDEVELOPMENT AUTHORITY\b",
+                                      "Government"),
+    (r"\bHOA\b|\bHOMEOWNERS\b",       "HOA"),
+]
+
+
+def _classify_owner_entity(owner_name: str) -> str:
+    """Infer ownership entity type from the raw owner name string."""
+    if not owner_name:
+        return "Unknown"
+    upper = owner_name.upper()
+    for pattern, label in _ENTITY_TYPE_PATTERNS:
+        if re.search(pattern, upper):
+            return label
+    # No entity markers detected → likely individual (but could be a single-
+    # name trust / DBA — low confidence).
+    return "Individual"
+
+
+def _derive_owner_metadata(pd_obj) -> None:
+    """Compute derived owner fields from what's already on pd_obj:
+    - ownership_entity_type (from name pattern matching)
+    - years_owned (from last_sale_date)
+    Safe to call repeatedly; only sets fields if currently empty."""
+    from datetime import datetime
+    if pd_obj.owner_name and not pd_obj.ownership_entity_type:
+        pd_obj.ownership_entity_type = _classify_owner_entity(pd_obj.owner_name)
+    if pd_obj.last_sale_date and not pd_obj.years_owned:
+        raw = str(pd_obj.last_sale_date)[:10]
+        try:
+            sale_dt = datetime.strptime(raw, "%Y-%m-%d")
+            delta_years = (datetime.now() - sale_dt).days / 365.25
+            if delta_years >= 0:
+                pd_obj.years_owned = round(delta_years, 1)
+        except (ValueError, TypeError):
+            pass
+
+
 def _safe_float(val) -> Optional[float]:
     if val is None or val == "." or val == "":
         return None
@@ -155,8 +206,14 @@ def _fetch_phl_opa(deal: DealData, pd_obj: ParcelData, addr) -> None:
     for pat in patterns:
         query = (
             "SELECT parcel_number, owner_1, owner_2, "
-            "category_code_description, total_area, total_livable_area, "
-            "number_stories, year_built, market_value, "
+            "mailing_address_1, mailing_address_2, mailing_street, "
+            "mailing_city_state, mailing_zip, "
+            "homestead_exemption, exempt_land, exempt_building, "
+            "category_code, category_code_description, "
+            "total_area, total_livable_area, "
+            "number_stories, number_of_rooms, number_of_bedrooms, "
+            "number_of_bathrooms, "
+            "year_built, market_value, "
             "taxable_land, taxable_building, "
             "sale_date, sale_price, zoning, location "
             "FROM opa_properties_public "
@@ -209,6 +266,46 @@ def _fetch_phl_opa(deal: DealData, pd_obj: ParcelData, addr) -> None:
             pd_obj.year_built = int(year_built)
         except (TypeError, ValueError):
             pass
+
+    # Extended owner / taxpayer fields
+    mailing_parts = [
+        row.get("mailing_street") or row.get("mailing_address_1") or "",
+        row.get("mailing_address_2") or "",
+        row.get("mailing_city_state") or "",
+        row.get("mailing_zip") or "",
+    ]
+    mailing = ", ".join(p.strip() for p in mailing_parts if p and p.strip())
+    if mailing:
+        pd_obj.taxpayer_mailing_address = mailing
+        # Owner-occupied heuristic: mailing street matches site street
+        try:
+            site_street = (deal.address.street or "").lower()
+            if site_street and site_street.split()[0] in mailing.lower():
+                pd_obj.owner_occupied = True
+            else:
+                pd_obj.owner_occupied = False
+        except Exception:
+            pass
+
+    homestead = row.get("homestead_exemption")
+    if homestead is not None:
+        try:
+            he_val = float(homestead)
+            pd_obj.homestead_status = "active" if he_val > 0 else "none"
+            if he_val > 0:
+                pd_obj.exemptions.append(f"Homestead (${he_val:,.0f})")
+        except (TypeError, ValueError):
+            pass
+    cat_code = row.get("category_code_description") or row.get("category_code")
+    if cat_code:
+        pd_obj.property_use_class = str(cat_code)
+    ns = row.get("number_stories")
+    if ns:
+        try:
+            pd_obj.number_of_stories = int(float(ns))
+        except (TypeError, ValueError):
+            pass
+    _derive_owner_metadata(pd_obj)
     if zoning and not deal.zoning.zoning_code:
         deal.zoning.zoning_code = zoning
     deal.provenance.field_sources["property_records"] = "phl_opa"
@@ -221,6 +318,57 @@ def _fetch_phl_opa(deal: DealData, pd_obj: ParcelData, addr) -> None:
     # Follow-on: pull deed/title transfer history for this parcel.
     if parcel_number:
         _fetch_phl_deed_history(pd_obj, parcel_number)
+
+    # Portfolio search: other parcels owned by the same name in OPA
+    if owner:
+        _fetch_phl_owner_portfolio(pd_obj, owner, exclude_parcel=parcel_number)
+
+
+def _fetch_phl_owner_portfolio(pd_obj: ParcelData, owner_name: str,
+                                exclude_parcel: str = "",
+                                limit: int = 25) -> None:
+    """Search Philly OPA for other parcels owned by the same name. Populates
+    pd_obj.other_parcels_owned with a list of {parcel_id, location, market_value}.
+    Uses a sanitized LIKE search (OPA stores names as 'LAST FIRST' or
+    'ENTITY NAME LLC'). Limited to 25 results to avoid runaway portfolios.
+    """
+    name_q = owner_name.strip().upper().replace("'", "''")
+    if len(name_q) < 6:
+        return   # too short — would match too broadly
+    query = (
+        "SELECT parcel_number, location, market_value "
+        "FROM opa_properties_public "
+        f"WHERE owner_1 ILIKE '%{name_q}%' "
+    )
+    if exclude_parcel:
+        query += f"AND parcel_number != '{exclude_parcel}' "
+    query += f"LIMIT {limit}"
+    try:
+        resp = requests.get(_PHL_CARTO_SQL, params={"q": query},
+                            timeout=_REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        rows = resp.json().get("rows", []) or []
+    except Exception as exc:
+        logger.warning("OWNER PORTFOLIO (PHL) failed for '%s': %s", owner_name, exc)
+        return
+    if not rows:
+        logger.info("OWNER PORTFOLIO (PHL): no other parcels for '%s'", owner_name)
+        return
+    portfolio = []
+    total_value = 0.0
+    for r in rows[:limit]:
+        mv = _safe_float(r.get("market_value"))
+        portfolio.append({
+            "parcel_id":    r.get("parcel_number") or "",
+            "address":      r.get("location") or "",
+            "market_value": mv or 0,
+        })
+        if mv:
+            total_value += mv
+    pd_obj.other_parcels_owned = portfolio
+    logger.info("OWNER PORTFOLIO (PHL): owner '%s' holds %d other parcels "
+                "(combined market value $%s)",
+                owner_name, len(portfolio), f"{total_value:,.0f}")
 
 
 def _fetch_phl_deed_history(pd_obj: ParcelData, parcel_number: str,
@@ -308,6 +456,8 @@ def _fetch_dc_dcgis(deal: DealData, pd_obj: ParcelData, addr) -> None:
     # Reuse the ArcGIS multi-sale scanner — DCGIS attribute dicts follow the
     # same Esri schema, so SALEDATE1/2/3 columns (if present) get picked up.
     _extract_arcgis_multi_sale_deeds(attrs, pd_obj)
+    # Derive ownership_entity_type + years_owned
+    _derive_owner_metadata(pd_obj)
     deal.provenance.field_sources["property_records"] = "dc_dcgis"
     logger.info(
         "PROPERTY RECORDS: found parcel %s, owner=%s, zoning=%s, assessed=$%s, deeds=%d",
@@ -670,6 +820,9 @@ def _fetch_arcgis_parcel(deal: DealData, pd_obj: ParcelData, addr, gis_url: str)
             # Deed history from multi-sale attribute patterns on the same
             # feature (SALE_DATE_1/2/3, SALEDATE1/2, etc.) — no extra API call.
             _extract_arcgis_multi_sale_deeds(attrs, pd_obj)
+
+            # Derive ownership_entity_type + years_owned from what we captured
+            _derive_owner_metadata(pd_obj)
 
             deal.provenance.field_sources["property_records"] = f"arcgis_gis:{gis_url[:60]}"
             logger.info(

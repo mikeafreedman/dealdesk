@@ -1508,17 +1508,141 @@ def build_context(deal: DealData) -> dict:
 
     _last_sale_price = (pd_.last_sale_price if pd_ else None)
     _last_sale_date = (pd_.last_sale_date if pd_ else None)
+    _years_owned = (pd_.years_owned if pd_ else None)
     _current_ownership_rows = [
         ("Current Owner",         _or_na(pd_.owner_name if pd_ else None)),
-        ("Owner Entity Type",     _or_na(pd_.owner_entity if pd_ else None)),
+        ("Owner Entity Type",
+         _or_na((pd_.ownership_entity_type if pd_ else None)
+                 or (pd_.owner_entity if pd_ else None))),
+        ("Years Owned",
+         f"{_years_owned:.1f} years" if _years_owned else "N/A"),
+        ("Owner-Occupied",
+         ("Yes" if (pd_ and pd_.owner_occupied) else
+          ("No" if (pd_ and pd_.owner_occupied is False) else "Unknown"))),
+        ("Taxpayer Mailing Address",
+         _or_na(pd_.taxpayer_mailing_address if pd_ else None)),
         ("Parcel / Account ID",   _or_na(pd_.parcel_id if pd_ else None)),
         ("Deed Book / Page",      _or_na(pd_.deed_book_page if pd_ else None)),
         ("Last Sale Date",        _or_na(_last_sale_date)),
         ("Last Sale Price",
          f"${_last_sale_price:,.0f}" if _last_sale_price else "N/A"),
+        ("Property Use Class",    _or_na(pd_.property_use_class if pd_ else None)),
+        ("Homestead Status",      _or_na(pd_.homestead_status if pd_ else None)),
+        ("Exemptions",
+         ", ".join(pd_.exemptions) if (pd_ and pd_.exemptions) else "None"),
         ("Census Tract",          _or_na(deal.address.census_tract)),
         ("FIPS Code",             _or_na(deal.address.fips_code)),
     ]
+
+    # Owner portfolio (other parcels held by same name)
+    _portfolio = (pd_.other_parcels_owned if pd_ else []) or []
+    _portfolio_rows = [
+        {
+            "address":      p.get("address") or p.get("parcel_id") or "",
+            "parcel_id":    p.get("parcel_id") or "",
+            "market_value": (f"${float(p['market_value']):,.0f}"
+                             if p.get("market_value") else "—"),
+        }
+        for p in _portfolio[:25]
+    ]
+    ctx["owner_portfolio_rows"] = _portfolio_rows
+    ctx["owner_portfolio_total"] = sum(
+        float(p.get("market_value") or 0) for p in _portfolio
+    )
+    if _portfolio_rows:
+        logger.info("OWNER PORTFOLIO CTX: %d other parcels totaling $%s",
+                    len(_portfolio_rows),
+                    f"{ctx['owner_portfolio_total']:,.0f}")
+
+    # ── 1E/1F/1G extractor outputs ──────────────────────────────────
+    ctx["lease_abstract_rows"] = [
+        {
+            "unit":         la.unit_id or "—",
+            "tenant":       la.tenant_name or "—",
+            "lease_type":   la.lease_type or "—",
+            "commencement": la.commencement_date or "—",
+            "expiration":   la.expiration_date or "—",
+            "base_rent":    (f"${la.base_rent_monthly:,.0f}/mo"
+                             if la.base_rent_monthly else "—"),
+            "escalation":   la.escalation_amount or la.escalation_type or "—",
+            "cam":          la.cam_structure or "—",
+            "renewals":     "; ".join(la.renewal_options) if la.renewal_options else "—",
+            "guaranty":     ("Yes" if la.personal_guaranty else
+                             "No" if la.personal_guaranty is False else "—"),
+        }
+        for la in (ext.lease_abstracts or [])
+    ]
+
+    ctx["title_commitment_date"]   = ext.title_commitment_date or ""
+    ctx["title_company"]           = ext.title_company or ""
+    ctx["title_insurance_amount"]  = (
+        f"${ext.title_insurance_amount:,.0f}"
+        if ext.title_insurance_amount else ""
+    )
+    ctx["title_vesting"]            = ext.title_vesting or ""
+    ctx["title_legal_description"]  = ext.title_legal_description or ""
+    ctx["title_exception_rows"] = [
+        {
+            "type":           te.exception_type or "—",
+            "recording_date": te.recording_date or "—",
+            "document_id":    te.document_id or "—",
+            "summary":        te.summary or "—",
+        }
+        for te in (ext.title_exceptions or [])
+    ]
+    ctx["title_easements"]    = ext.title_easements or []
+    ctx["title_endorsements"] = ext.title_endorsements or []
+
+    ctx["pca_report_date"]      = ext.pca_report_date or ""
+    ctx["pca_consultant"]       = ext.pca_consultant or ""
+    ctx["pca_overall_condition"] = ext.pca_overall_condition or ""
+    ctx["pca_deferred_maintenance_total"] = (
+        f"${ext.pca_deferred_maintenance_total:,.0f}"
+        if ext.pca_deferred_maintenance_total else ""
+    )
+    ctx["pca_capex_12yr_total"] = (
+        f"${ext.pca_capex_12yr_total:,.0f}"
+        if ext.pca_capex_12yr_total else ""
+    )
+    ctx["pca_system_rows"] = [
+        {
+            "system":     s.system or "—",
+            "condition":  s.condition or "—",
+            "age":        (f"{s.age_years} yrs" if s.age_years else "—"),
+            "rul":        (f"{s.remaining_useful_life} yrs" if s.remaining_useful_life else "—"),
+            "repl_cost":  (f"${s.replacement_cost:,.0f}" if s.replacement_cost else "—"),
+            "notes":      s.notes or "",
+        }
+        for s in (ext.pca_building_systems or [])
+    ]
+    ctx["pca_immediate_repair_rows"] = [
+        {
+            "item":     r.item or "—",
+            "cost":     (f"${r.cost:,.0f}" if r.cost else "—"),
+            "priority": r.priority or "—",
+        }
+        for r in (ext.pca_immediate_repairs or [])
+    ]
+    ctx["pca_ada_items"] = ext.pca_ada_items or []
+
+    # Environmental from 1D (add to context so report can render)
+    ctx["environmental_phase1_status"]    = ext.phase1_status or ""
+    ctx["environmental_phase1_date"]      = ext.phase1_date or ""
+    ctx["environmental_phase1_consultant"] = ext.phase1_consultant or ""
+    ctx["environmental_recs"]              = ext.recognized_environmental_conditions or []
+    ctx["environmental_hrecs"]             = ext.historical_recognized_conditions or []
+    ctx["environmental_vapor_flag"]        = ext.vapor_intrusion_flag
+    ctx["environmental_phase2_recommended"] = ext.phase2_recommended
+    ctx["environmental_findings"]          = ext.environmental_findings or ""
+    ctx["environmental_recommendations"]   = ext.environmental_recommendations or ""
+    logger.info(
+        "1E/1F/1G CTX: leases=%d title_exceptions=%d pca_systems=%d repairs=%d RECs=%d",
+        len(ctx["lease_abstract_rows"]),
+        len(ctx["title_exception_rows"]),
+        len(ctx["pca_system_rows"]),
+        len(ctx["pca_immediate_repair_rows"]),
+        len(ctx["environmental_recs"]),
+    )
     ctx["current_ownership_rows"] = [
         {"label": k, "value": str(v)} for k, v in _current_ownership_rows
     ]

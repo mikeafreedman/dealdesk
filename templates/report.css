@@ -289,12 +289,21 @@ body {
   grid-template-columns: repeat(3, 1fr);
   gap: 14px;
   margin-bottom: 24px;
+  /* Keep the whole dashboard on one page. When the Executive Summary
+     narrative pushes the grid past the page boundary, Chromium was
+     slicing cards in half across the break — avoid that. */
+  page-break-inside: avoid;
+  break-inside: avoid;
 }
 .kpi-card {
   background: var(--white);
   border: 1px solid var(--sage-light);
   border-radius: 5px;
   padding: 14px 16px;
+  /* Belt-and-suspenders: even if the grid ever does span two pages,
+     each individual card must stay intact. */
+  page-break-inside: avoid;
+  break-inside: avoid;
 }
 .kpi-label {
   font-size: 7pt;

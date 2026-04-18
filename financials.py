@@ -2083,8 +2083,57 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
     asset = deal.asset_type
     gba = a.gba_sf or (deal.parcel_data.building_sf if deal.parcel_data else None)
 
+    # ── Public-data tax & insurance estimates (all asset types) ─────────
+    # Always compute the estimates; override the existing value only when
+    # the user hasn't supplied one (value is 0 or matches the stock model
+    # default). User-supplied values are preserved and logged against the
+    # estimate for audit.
+    _DEFAULT_RE_TAXES  = 45000.0
+    _DEFAULT_INSURANCE = 18000.0
+    try:
+        from expense_pricing import (
+            estimate_property_taxes,
+            estimate_property_insurance,
+        )
+        _tax_est = estimate_property_taxes(deal)
+        if _tax_est:
+            _tax_val, _tax_src = _tax_est
+            if a.re_taxes in (0.0, _DEFAULT_RE_TAXES):
+                logger.info(
+                    "PUBLIC DATA: re_taxes %s → $%s (%s)",
+                    f"${a.re_taxes:,.0f}", f"{_tax_val:,.0f}", _tax_src,
+                )
+                a.re_taxes = _tax_val
+            else:
+                logger.info(
+                    "PUBLIC DATA: user re_taxes=$%s retained (estimate: $%s, %s)",
+                    f"{a.re_taxes:,.0f}", f"{_tax_val:,.0f}", _tax_src,
+                )
+        else:
+            logger.info("PUBLIC DATA: no basis to estimate re_taxes "
+                        "(no parcel assessed value or purchase price)")
+
+        _ins_est = estimate_property_insurance(deal)
+        if _ins_est:
+            _ins_val, _ins_src = _ins_est
+            if a.insurance in (0.0, _DEFAULT_INSURANCE):
+                logger.info(
+                    "PUBLIC DATA: insurance %s → $%s (%s)",
+                    f"${a.insurance:,.0f}", f"{_ins_val:,.0f}", _ins_src,
+                )
+                a.insurance = _ins_val
+            else:
+                logger.info(
+                    "PUBLIC DATA: user insurance=$%s retained (estimate: $%s, %s)",
+                    f"{a.insurance:,.0f}", f"{_ins_val:,.0f}", _ins_src,
+                )
+        else:
+            logger.info("PUBLIC DATA: no GBA — cannot estimate insurance")
+    except Exception as exc:
+        logger.warning("PUBLIC DATA estimator failed (non-fatal): %s", exc)
+
     if asset not in (AssetType.OFFICE, AssetType.INDUSTRIAL, AssetType.RETAIL):
-        logger.info("Expense defaults: asset_type=%s -- using residential defaults "
+        logger.info("Expense defaults: asset_type=%s -- residential-track expenses "
                      "(salaries=$%s, insurance=$%s, re_taxes=$%s)",
                      asset.value, f"{a.salaries:,.0f}", f"{a.insurance:,.0f}", f"{a.re_taxes:,.0f}")
         return
@@ -2105,40 +2154,9 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
             logger.info("Expense scaling [%s]: salaries=$%s -- %s",
                          asset.value, f"{a.salaries:,.0f}", src)
 
-    # ── Insurance ─────────────────────────────────────────────────
-    # Only scale if still at default (0.0) — user or T-12 backfill has priority
-    if a.insurance == 0.0 and gba and gba > 0:
-        rate = _OFFICE_INSURANCE_PSF if asset in (AssetType.OFFICE, AssetType.RETAIL) else _INDUSTRIAL_INS_PSF
-        old = a.insurance
-        a.insurance = round(rate * gba, 2)
-        logger.info("Expense scaling [%s]: insurance $%s -> $%s "
-                     "(%.2f $/SF × %s SF)",
-                     asset.value, f"{old:,.0f}", f"{a.insurance:,.0f}", rate, f"{gba:,.0f}")
-    else:
-        src = "user-set" if a.insurance != 0.0 else "default (no GBA)"
-        logger.info("Expense scaling [%s]: insurance=$%s -- %s",
-                     asset.value, f"{a.insurance:,.0f}", src)
-
-    # ── Real Estate Taxes ─────────────────────────────────────────
-    # If OPA parcel data has an assessed value, derive taxes from that
-    parcel = deal.parcel_data
-    if a.re_taxes == 0.0 and parcel and parcel.assessed_value and parcel.assessed_value > 0:
-        # Philadelphia mill rate ≈ 1.3998% (combined city + school)
-        mill_rate = 0.013998
-        old = a.re_taxes
-        a.re_taxes = round(parcel.assessed_value * mill_rate, 2)
-        logger.info("Expense scaling [%s]: re_taxes $%s -> $%s "
-                     "(OPA assessed $%s × %.4f mill rate)",
-                     asset.value, f"{old:,.0f}", f"{a.re_taxes:,.0f}", f"{parcel.assessed_value:,.0f}", mill_rate)
-    else:
-        if a.re_taxes != 0.0:
-            src = "user-set"
-        elif parcel and parcel.assessed_value and parcel.assessed_value > 0:
-            src = "user-set (not default)"
-        else:
-            src = "default (no OPA data)"
-        logger.info("Expense scaling [%s]: re_taxes=$%s -- %s",
-                     asset.value, f"{a.re_taxes:,.0f}", src)
+    # Insurance and real-estate taxes now flow through expense_pricing above
+    # (public-data estimator applied to every asset type). Legacy per-SF /
+    # Philly-specific blocks removed.
 
     # ── Office-specific: zero out multifamily lines & recalibrate ─────
     if asset == AssetType.OFFICE:

@@ -391,6 +391,13 @@ def fetch_iasworld(deal: DealData, pd_obj: ParcelData, addr, base_url: str) -> N
     if last_price is not None and not pd_obj.last_sale_price:
         pd_obj.last_sale_price = last_price
 
+    # Derive ownership_entity_type + years_owned (safe: only sets if empty)
+    try:
+        from parcel_fetcher import _derive_owner_metadata
+        _derive_owner_metadata(pd_obj)
+    except Exception:
+        pass
+
     deal.provenance.field_sources["property_records"] = (
         (deal.provenance.field_sources.get("property_records", "") + " + iasworld")
         .strip(" +")

@@ -21,7 +21,11 @@ import anthropic
 import pymupdf4llm
 
 from config import ANTHROPIC_API_KEY, MODEL_HAIKU
-from models.models import CompsData, CommercialComp, DealData, ExtractedDocumentData, RentComp, SaleComp
+from models.models import (
+    CommercialComp, CompsData, DealData, ExtractedDocumentData,
+    ImmediateRepairItem, LeaseAbstract, PCASystemCondition, RentComp, SaleComp,
+    TitleException,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,170 @@ SYSTEM_1B = (
     "- Unit type: \"Studio\" | \"1BR\" | \"2BR\" | \"3BR\" | \"4BR+\" | \"Commercial\" | \"Other\"\n"
     "Output ONLY valid JSON."
 )
+
+SYSTEM_CLASSIFY = (
+    "You are a commercial real estate document classifier. Given the text of\n"
+    "an uploaded PDF, identify every document type it contains. A single PDF\n"
+    "often bundles multiple types (e.g. an offering memorandum may include a\n"
+    "rent roll and a T-12). Return every type that is present with any\n"
+    "meaningful content.\n\n"
+    "TYPES (use ONLY these slugs):\n"
+    "  om                — Offering Memorandum / broker teaser / marketing package\n"
+    "  rent_roll         — Unit-level rent roll with tenant / lease data\n"
+    "  t12               — Trailing-12 operating statement / profit & loss / P&L\n"
+    "  budget            — Forward operating budget / pro forma\n"
+    "  environmental     — Phase I or Phase II ESA, Environmental Site Assessment\n"
+    "  pca               — Property Condition Assessment / Engineering report\n"
+    "  survey            — ALTA / boundary / topo survey\n"
+    "  floor_plans       — Building / unit floor plans\n"
+    "  site_plan         — Site plan / plot plan / civil drawings\n"
+    "  appraisal         — Formal appraisal (MAI or otherwise)\n"
+    "  title             — Title commitment / title report\n"
+    "  zoning_letter     — Zoning verification letter / municipal zoning report\n"
+    "  lease             — Individual lease document\n"
+    "  other             — None of the above (describe in notes)\n\n"
+    "Output ONLY valid JSON. No markdown, no preamble."
+)
+
+USER_CLASSIFY = (
+    "Classify the document below. Return a single JSON object.\n\n"
+    "DOCUMENT TEXT (first 8000 chars):\n{doc_text}\n\n"
+    "Return JSON:\n"
+    '{{\n'
+    '  "doc_types_present": ["om"],\n'
+    '  "primary_type": "om",\n'
+    '  "confidence": "high",\n'
+    '  "notes": "single sentence — what the document actually is"\n'
+    '}}'
+)
+
+
+SYSTEM_1D = (
+    "You are an environmental due diligence analyst specializing in Phase I / II\n"
+    "Environmental Site Assessments (ASTM E1527-21). Extract findings and\n"
+    "recommendations from the report text. Return structured JSON.\n\n"
+    "RULES:\n"
+    "- Every finding must be explicitly present in the document. Return null\n"
+    "  for missing fields.\n"
+    "- RECs (Recognized Environmental Conditions) are material findings —\n"
+    "  extract each as a short sentence.\n"
+    "- HRECs (Historical RECs) are resolved historical contamination.\n"
+    "- vapor_intrusion_flag: true if the report flags vapor intrusion concerns.\n"
+    "- phase2_recommended: true if the report recommends Phase II sampling.\n"
+    "- phase1_status: \"complete\" | \"draft\" | \"pending\" | \"n/a\".\n"
+    "Output ONLY valid JSON."
+)
+
+USER_1D = (
+    "Extract environmental report findings: {env_text}\n\n"
+    "Return JSON:\n"
+    '{{\n'
+    '  "phase1_status": null, "phase1_date": null, "phase1_consultant": null,\n'
+    '  "recognized_environmental_conditions": [],\n'
+    '  "historical_recognized_conditions": [],\n'
+    '  "vapor_intrusion_flag": null,\n'
+    '  "phase2_recommended": null,\n'
+    '  "findings_summary": null,\n'
+    '  "recommendations": null\n'
+    '}}'
+)
+
+
+SYSTEM_1E = (
+    "You are a commercial real estate lease abstractor. Extract the material\n"
+    "business terms from one or more lease documents and return structured JSON.\n\n"
+    "RULES:\n"
+    "- Extract ONLY what is explicitly in the document. Null for missing fields.\n"
+    "- escalation_type ∈ {fixed, stepped, CPI, market_reset, none}.\n"
+    "- cam_structure ∈ {gross, modified_gross, base_year, expense_stop, pro_rata_NNN, full_NNN, other}.\n"
+    "- Monthly rents as numbers. Dates ISO (YYYY-MM-DD).\n"
+    "- renewal_options as short strings (e.g. \"2 × 5yr at FMV\").\n"
+    "- One lease object per distinct lease found; do not dedupe unit IDs.\n"
+    "Output ONLY valid JSON."
+)
+
+USER_1E = (
+    "Extract all lease terms from the document below: {lease_text}\n\n"
+    "Return JSON:\n"
+    '{{\n'
+    '  "leases": [{{\n'
+    '    "unit_id": null, "tenant_name": null, "lease_type": null,\n'
+    '    "commencement_date": null, "expiration_date": null, "term_months": null,\n'
+    '    "base_rent_monthly": null, "base_rent_psf": null,\n'
+    '    "escalation_type": null, "escalation_amount": null,\n'
+    '    "cam_structure": null, "cam_base_year": null,\n'
+    '    "ti_allowance_psf": null, "free_rent_months": null,\n'
+    '    "renewal_options": [], "personal_guaranty": null,\n'
+    '    "percentage_rent": null, "go_dark_allowed": null,\n'
+    '    "kickout_clause": null, "radius_restriction": null,\n'
+    '    "special_clauses": []\n'
+    '  }}]\n'
+    '}}'
+)
+
+
+SYSTEM_1F = (
+    "You are a title abstractor. Extract the material content of a title\n"
+    "commitment or preliminary title report and return structured JSON.\n\n"
+    "RULES:\n"
+    "- Schedule A → vesting, legal description, insured amount, effective date.\n"
+    "- Schedule B → each exception / encumbrance as its own record.\n"
+    "- exception_type ∈ {easement, covenant, restriction, lien, mortgage,\n"
+    "  lease, agreement, reservation, encroachment, tax_exception, other}.\n"
+    "- Summarize each exception in ≤ 25 words.\n"
+    "- Dates ISO (YYYY-MM-DD). Dollar amounts as numbers.\n"
+    "Output ONLY valid JSON."
+)
+
+USER_1F = (
+    "Extract title commitment data from the document below: {title_text}\n\n"
+    "Return JSON:\n"
+    '{{\n'
+    '  "title_commitment_date": null, "title_company": null,\n'
+    '  "title_insurance_amount": null,\n'
+    '  "title_vesting": null, "title_legal_description": null,\n'
+    '  "title_exceptions": [{{\n'
+    '    "exception_type": null, "recording_date": null, "document_id": null,\n'
+    '    "grantor": null, "grantee": null, "summary": null\n'
+    '  }}],\n'
+    '  "title_easements": [],\n'
+    '  "title_endorsements": []\n'
+    '}}'
+)
+
+
+SYSTEM_1G = (
+    "You are a building-systems engineer reviewing a Property Condition\n"
+    "Assessment / engineering report. Extract findings and capex forecasts\n"
+    "and return structured JSON.\n\n"
+    "RULES:\n"
+    "- condition ∈ {excellent, good, fair, poor, end_of_life}.\n"
+    "- priority on immediate repairs ∈ {immediate, short_term, long_term}.\n"
+    "- capex_by_year keyed by 4-digit calendar year (e.g. \"2026\"); totals in dollars.\n"
+    "- If the report states a deferred maintenance total, extract it explicitly.\n"
+    "Output ONLY valid JSON."
+)
+
+USER_1G = (
+    "Extract PCA / engineering findings from the report below: {pca_text}\n\n"
+    "Return JSON:\n"
+    '{{\n'
+    '  "pca_report_date": null, "pca_consultant": null,\n'
+    '  "pca_overall_condition": null,\n'
+    '  "pca_deferred_maintenance_total": null,\n'
+    '  "pca_capex_12yr_total": null,\n'
+    '  "pca_capex_by_year": {{}},\n'
+    '  "pca_building_systems": [{{\n'
+    '    "system": null, "age_years": null, "condition": null,\n'
+    '    "remaining_useful_life": null, "replacement_cost": null, "notes": null\n'
+    '  }}],\n'
+    '  "pca_immediate_repairs": [{{\n'
+    '    "item": null, "cost": null, "priority": null\n'
+    '  }}],\n'
+    '  "pca_ada_items": []\n'
+    '}}'
+)
+
 
 SYSTEM_1C = (
     "You are a commercial real estate financial analyst specializing in T-12 normalization.\n"
@@ -249,14 +417,38 @@ def _apply_1a(data: dict, deal: DealData) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _apply_1b(data: dict, deal: DealData) -> None:
-    """Map Prompt 1B response fields onto DealData."""
+    """Map Prompt 1B response fields onto DealData. First-populated-wins:
+    don't overwrite a value from an earlier (more-trusted) file."""
     ext = deal.extracted_docs
+    units = data.get("units") or []
+    meaningful_units = [u for u in units if isinstance(u, dict) and any(
+        u.get(k) for k in ("unit_id", "monthly_rent", "tenant_name", "sf")
+    )]
+    if not meaningful_units and not data.get("total_monthly_rent_in_place"):
+        logger.info("APPLY [1B]: no meaningful rent roll data in response — skipping")
+        return
 
-    ext.unit_mix             = data.get("units")
-    ext.total_units_from_rr  = data.get("total_units")
-    ext.total_monthly_rent   = data.get("total_monthly_rent_in_place")
-    ext.avg_rent_per_unit    = data.get("avg_rent_per_unit")
-    ext.occupancy_rate       = data.get("occupancy_rate")
+    if meaningful_units and not ext.unit_mix:
+        ext.unit_mix = meaningful_units
+        logger.info("APPLY [1B]: unit_mix ← %d units", len(meaningful_units))
+    elif meaningful_units:
+        logger.info("APPLY [1B]: unit_mix already populated (%d) — keeping prior",
+                    len(ext.unit_mix or []))
+    for src, dst, label in [
+        ("total_units",                 "total_units_from_rr", "total_units_from_rr"),
+        ("total_monthly_rent_in_place", "total_monthly_rent",  "total_monthly_rent"),
+        ("avg_rent_per_unit",           "avg_rent_per_unit",   "avg_rent_per_unit"),
+        ("occupancy_rate",              "occupancy_rate",      "occupancy_rate"),
+    ]:
+        v = data.get(src)
+        if v in (None, "", 0):
+            continue
+        if getattr(ext, dst) in (None, "", 0):
+            setattr(ext, dst, v)
+            logger.info("APPLY [1B]: %s ← %r", label, v)
+        else:
+            logger.info("APPLY [1B]: %s already set (%r) — keeping prior",
+                        label, getattr(ext, dst))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -264,13 +456,34 @@ def _apply_1b(data: dict, deal: DealData) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _apply_1c(data: dict, deal: DealData) -> None:
-    """Map Prompt 1C response fields onto DealData."""
+    """Map Prompt 1C response fields onto DealData. Validation gate: skip
+    entirely when the response has no financial signal (all critical fields
+    null — common when running 1C against a document that is not a T-12).
+    First-populated-wins for each field."""
     ext = deal.extracted_docs
+    critical = ("gross_potential_rent", "effective_gross_income",
+                "total_operating_expenses", "noi")
+    if not any(data.get(k) for k in critical):
+        logger.info("APPLY [1C]: response has no T-12 signal (all of %s are null) — skipping",
+                    list(critical))
+        return
 
-    ext.gross_potential_rent_t12   = data.get("gross_potential_rent")
-    ext.effective_gross_income_t12 = data.get("effective_gross_income")
-    ext.total_expenses_t12         = data.get("total_operating_expenses")
-    ext.noi_t12                    = data.get("noi")
+    for src, dst, label in [
+        ("gross_potential_rent",       "gross_potential_rent_t12",   "gross_potential_rent_t12"),
+        ("effective_gross_income",     "effective_gross_income_t12", "effective_gross_income_t12"),
+        ("total_operating_expenses",   "total_expenses_t12",         "total_expenses_t12"),
+        ("noi",                        "noi_t12",                    "noi_t12"),
+    ]:
+        v = data.get(src)
+        if v in (None, "", 0):
+            continue
+        if getattr(ext, dst) in (None, "", 0):
+            setattr(ext, dst, v)
+            logger.info("APPLY [1C]: %s ← $%s", label,
+                        f"{v:,.0f}" if isinstance(v, (int, float)) else v)
+        else:
+            logger.info("APPLY [1C]: %s already set ($%s) — keeping prior",
+                        label, f"{getattr(ext, dst):,.0f}")
 
     # Flatten operating_expenses dict → {key: net_to_owner or gross_amount}
     raw_expenses = data.get("operating_expenses") or {}
@@ -280,49 +493,312 @@ def _apply_1c(data: dict, deal: DealData) -> None:
             flat[key] = val.get("net_to_owner") or val.get("gross_amount")
         elif isinstance(val, (int, float)):
             flat[key] = val
-    ext.expense_line_items = flat if flat else None
+    if flat and not ext.expense_line_items:
+        ext.expense_line_items = flat
+        logger.info("APPLY [1C]: expense_line_items ← %d keys (%s)",
+                    len(flat), ", ".join(list(flat.keys())[:6]))
 
     cam = data.get("cam_reimbursements") or {}
-    ext.cam_reimbursements_t12 = cam.get("net_to_owner")
-
-    # Full NNN reconciliation dict (if present)
-    if cam.get("breakdown"):
+    cam_net = cam.get("net_to_owner") if isinstance(cam, dict) else None
+    if cam_net and not ext.cam_reimbursements_t12:
+        ext.cam_reimbursements_t12 = cam_net
+        logger.info("APPLY [1C]: cam_reimbursements_t12 ← $%s", f"{cam_net:,.0f}")
+    if isinstance(cam, dict) and cam.get("breakdown") and not ext.nnn_reconciliation:
         ext.nnn_reconciliation = cam
+        logger.info("APPLY [1C]: nnn_reconciliation captured")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROMPT 1D — Environmental (Phase I / II ESA)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _apply_1d(data: dict, deal: DealData) -> None:
+    """Map Prompt 1D (environmental) response onto DealData."""
+    ext = deal.extracted_docs
+    recs = data.get("recognized_environmental_conditions") or []
+    hrecs = data.get("historical_recognized_conditions") or []
+    signal = any([
+        recs, hrecs,
+        data.get("vapor_intrusion_flag"),
+        data.get("phase2_recommended"),
+        data.get("findings_summary"),
+        data.get("phase1_status"),
+    ])
+    if not signal:
+        logger.info("APPLY [1D]: no environmental signal — skipping")
+        return
+
+    for src, dst in [
+        ("phase1_status",            "phase1_status"),
+        ("phase1_date",              "phase1_date"),
+        ("phase1_consultant",        "phase1_consultant"),
+        ("vapor_intrusion_flag",     "vapor_intrusion_flag"),
+        ("phase2_recommended",       "phase2_recommended"),
+        ("findings_summary",         "environmental_findings"),
+        ("recommendations",          "environmental_recommendations"),
+    ]:
+        v = data.get(src)
+        if v in (None, ""):
+            continue
+        if getattr(ext, dst) in (None, "", 0):
+            setattr(ext, dst, v)
+            logger.info("APPLY [1D]: %s ← %r", dst, v)
+
+    if recs:
+        existing = list(ext.recognized_environmental_conditions or [])
+        ext.recognized_environmental_conditions = existing + [str(r) for r in recs]
+        logger.info("APPLY [1D]: recognized_environmental_conditions +%d (total=%d)",
+                    len(recs), len(ext.recognized_environmental_conditions))
+    if hrecs:
+        existing = list(ext.historical_recognized_conditions or [])
+        ext.historical_recognized_conditions = existing + [str(r) for r in hrecs]
+        logger.info("APPLY [1D]: historical_recognized_conditions +%d (total=%d)",
+                    len(hrecs), len(ext.historical_recognized_conditions))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROMPT 1E — Lease abstraction
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _apply_1e(data: dict, deal: DealData) -> None:
+    ext = deal.extracted_docs
+    raw = data.get("leases") or []
+    if not isinstance(raw, list) or not raw:
+        logger.info("APPLY [1E]: no leases in response — skipping")
+        return
+    added = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if not any(item.get(k) for k in ("tenant_name", "base_rent_monthly",
+                                          "commencement_date", "expiration_date")):
+            continue
+        try:
+            la = LeaseAbstract(**{
+                k: v for k, v in item.items() if k in LeaseAbstract.model_fields
+            })
+            ext.lease_abstracts.append(la)
+            added += 1
+        except Exception as exc:
+            logger.debug("APPLY [1E]: skipped malformed lease: %s", exc)
+    logger.info("APPLY [1E]: appended %d lease(s) (total=%d)",
+                added, len(ext.lease_abstracts))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROMPT 1F — Title commitment
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _apply_1f(data: dict, deal: DealData) -> None:
+    ext = deal.extracted_docs
+    exceptions = data.get("title_exceptions") or []
+    signal = any([
+        data.get("title_commitment_date"), data.get("title_company"),
+        data.get("title_vesting"), exceptions,
+    ])
+    if not signal:
+        logger.info("APPLY [1F]: no title signal — skipping")
+        return
+
+    for src, dst in [
+        ("title_commitment_date",   "title_commitment_date"),
+        ("title_company",           "title_company"),
+        ("title_insurance_amount",  "title_insurance_amount"),
+        ("title_vesting",           "title_vesting"),
+        ("title_legal_description", "title_legal_description"),
+    ]:
+        v = data.get(src)
+        if v in (None, ""):
+            continue
+        if getattr(ext, dst) in (None, "", 0):
+            setattr(ext, dst, v)
+            logger.info("APPLY [1F]: %s ← %r", dst, str(v)[:60])
+
+    added = 0
+    for item in (exceptions or []):
+        if not isinstance(item, dict):
+            continue
+        if not any(item.get(k) for k in ("exception_type", "summary", "document_id")):
+            continue
+        try:
+            ext.title_exceptions.append(TitleException(**{
+                k: v for k, v in item.items() if k in TitleException.model_fields
+            }))
+            added += 1
+        except Exception:
+            pass
+    if added:
+        logger.info("APPLY [1F]: appended %d title exception(s) (total=%d)",
+                    added, len(ext.title_exceptions))
+
+    ease = data.get("title_easements") or []
+    if ease:
+        ext.title_easements.extend([str(e) for e in ease])
+    endo = data.get("title_endorsements") or []
+    if endo:
+        ext.title_endorsements.extend([str(e) for e in endo])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROMPT 1G — PCA / engineering report
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _apply_1g(data: dict, deal: DealData) -> None:
+    ext = deal.extracted_docs
+    systems = data.get("pca_building_systems") or []
+    immediate = data.get("pca_immediate_repairs") or []
+    signal = any([
+        systems, immediate,
+        data.get("pca_overall_condition"),
+        data.get("pca_deferred_maintenance_total"),
+        data.get("pca_capex_12yr_total"),
+    ])
+    if not signal:
+        logger.info("APPLY [1G]: no PCA signal — skipping")
+        return
+
+    for src, dst in [
+        ("pca_report_date",               "pca_report_date"),
+        ("pca_consultant",                "pca_consultant"),
+        ("pca_overall_condition",         "pca_overall_condition"),
+        ("pca_deferred_maintenance_total","pca_deferred_maintenance_total"),
+        ("pca_capex_12yr_total",          "pca_capex_12yr_total"),
+    ]:
+        v = data.get(src)
+        if v in (None, "", 0):
+            continue
+        if getattr(ext, dst) in (None, "", 0):
+            setattr(ext, dst, v)
+            logger.info("APPLY [1G]: %s ← %r", dst, str(v)[:60])
+
+    cby = data.get("pca_capex_by_year")
+    if isinstance(cby, dict) and cby and not ext.pca_capex_by_year:
+        ext.pca_capex_by_year = {str(k): float(v) for k, v in cby.items()
+                                  if isinstance(v, (int, float))}
+        logger.info("APPLY [1G]: pca_capex_by_year ← %d years", len(ext.pca_capex_by_year))
+
+    sys_added = 0
+    for item in systems:
+        if not isinstance(item, dict) or not item.get("system"):
+            continue
+        try:
+            ext.pca_building_systems.append(PCASystemCondition(**{
+                k: v for k, v in item.items() if k in PCASystemCondition.model_fields
+            }))
+            sys_added += 1
+        except Exception:
+            pass
+    if sys_added:
+        logger.info("APPLY [1G]: appended %d building system(s) (total=%d)",
+                    sys_added, len(ext.pca_building_systems))
+
+    rep_added = 0
+    for item in immediate:
+        if not isinstance(item, dict) or not item.get("item"):
+            continue
+        try:
+            ext.pca_immediate_repairs.append(ImmediateRepairItem(**{
+                k: v for k, v in item.items() if k in ImmediateRepairItem.model_fields
+            }))
+            rep_added += 1
+        except Exception:
+            pass
+    if rep_added:
+        logger.info("APPLY [1G]: appended %d immediate repair(s) (total=%d)",
+                    rep_added, len(ext.pca_immediate_repairs))
+
+    ada = data.get("pca_ada_items") or []
+    if ada:
+        ext.pca_ada_items.extend([str(a) for a in ada])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DOCUMENT CLASSIFIER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _classify_document(md_text: str) -> dict:
+    """Run one quick Haiku call to detect which doc types are in the file.
+    Falls back to a conservative guess (treat as OM) on failure."""
+    snippet = md_text[:8000]
+    user_msg = USER_CLASSIFY.format(doc_text=snippet)
+    result = _call_haiku(SYSTEM_CLASSIFY, user_msg)
+    if not result:
+        logger.warning("CLASSIFY: LLM returned nothing — defaulting to {om}")
+        return {"doc_types_present": ["om"], "primary_type": "om",
+                "confidence": "low", "notes": "classifier failed"}
+    # Sanity
+    types = result.get("doc_types_present") or []
+    if not isinstance(types, list) or not types:
+        types = [result.get("primary_type") or "om"]
+        result["doc_types_present"] = types
+    logger.info("CLASSIFY: types=%s primary=%s conf=%s — %s",
+                types, result.get("primary_type"),
+                result.get("confidence"), (result.get("notes") or "")[:80])
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SCHEMA SANITY CHECK (runs at module import)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _verify_scalar_map_schema() -> None:
+    """Fail loudly if a _SCALAR_MAP or _LIST_MAP destination doesn't exist
+    on ExtractedDocumentData. Prevents silent no-op merges from schema drift."""
+    fields = set(ExtractedDocumentData.model_fields.keys())
+    missing = []
+    for _src, dst in _SCALAR_MAP + _LIST_MAP:
+        if dst not in fields:
+            missing.append(dst)
+    if missing:
+        logger.warning("EXTRACTOR SCHEMA: %d map destinations not on model: %s",
+                       len(missing), missing)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Scalar merge mapping: source JSON key → ExtractedDocumentData attribute
+# Scalar merge mapping: source JSON key → ExtractedDocumentData attribute.
+# Every destination must exist on ExtractedDocumentData or the merge silently
+# no-ops via AttributeError. This list is schema-validated at startup below.
 _SCALAR_MAP = [
+    # 1A — OM
     ("property_name",                "property_name"),
     ("asking_price",                 "asking_price"),
-    ("year_built",                   "year_built"),
+    ("deal_source",                  "deal_source"),
+    ("broker_name",                  "broker_name"),
+    ("year_built",                   "year_built_extracted"),
     ("num_units",                    "num_units_extracted"),
     ("total_units",                  "num_units_extracted"),
-    ("gross_building_area",          "gross_building_area"),
     ("total_sf",                     "gba_sf_extracted"),
-    ("lot_size_sf",                  "lot_size_sf"),
     ("lot_sf",                       "lot_sf_extracted"),
-    ("property_type",                "property_type_extracted"),
-    ("zoning_code",                  "zoning_code"),
+    ("property_description",         "description_extracted"),
+    # 1B — Rent Roll
     ("occupancy_rate",               "occupancy_rate"),
     ("total_monthly_rent_in_place",  "total_monthly_rent"),
     ("avg_rent_per_unit",            "avg_rent_per_unit"),
-    ("avg_rent_per_sf",              "avg_rent_per_sf"),
-    ("gross_potential_rent",         "gross_potential_rent_extracted"),
-    ("noi",                          "noi_extracted"),
-    ("effective_gross_income",       "egi_extracted"),
-    ("total_expenses",               "total_expenses_extracted"),
+    # 1C — T-12
+    ("gross_potential_rent",         "gross_potential_rent_t12"),
+    ("effective_gross_income",       "effective_gross_income_t12"),
+    ("total_operating_expenses",     "total_expenses_t12"),
+    ("noi",                          "noi_t12"),
+    # 1D — Environmental
+    ("phase1_status",                "phase1_status"),
+    ("phase1_date",                  "phase1_date"),
+    ("phase1_consultant",            "phase1_consultant"),
+    ("vapor_intrusion_flag",         "vapor_intrusion_flag"),
+    ("phase2_recommended",           "phase2_recommended"),
+    ("findings_summary",             "environmental_findings"),
+    ("recommendations",              "environmental_recommendations"),
 ]
 
 # List merge mapping: source JSON key → ExtractedDocumentData attribute (append)
 _LIST_MAP = [
-    ("units",              "unit_mix"),
-    ("unit_mix_summary",   "unit_mix_summary"),
-    ("notable_tenants",    "notable_tenants"),
-    ("deal_highlights",    "deal_highlights"),
+    ("units",                                 "unit_mix"),
+    ("recognized_environmental_conditions",   "recognized_environmental_conditions"),
+    ("historical_recognized_conditions",      "historical_recognized_conditions"),
+    ("floor_plan_pages",                      "floor_plan_pages"),
+    ("site_plan_pages",                       "site_plan_pages"),
 ]
 
 
@@ -382,11 +858,18 @@ def extract_documents(
     uploaded_files: Optional[List[Any]] = None,  # type: ignore[name-defined]
 ) -> DealData:
     """
-    Run document extraction prompts against every uploaded PDF.
+    Extract structured data from every uploaded PDF.
 
-    Every file — regardless of its original type label — is converted to text
-    and run through ALL three extraction prompts (1A, 1B, 1C). Results are
-    merged with scalar=first-populated-wins, list=append semantics.
+    Pipeline:
+        1. Collect all uploaded files (regardless of user-applied type label).
+        2. Convert each to markdown once.
+        3. Classify each file via a fast Haiku call (detects every doc type
+           the file contains — a single OM may bundle OM + rent roll + T-12).
+        4. For each extractor (1A OM, 1B rent roll, 1C T-12, 1D environmental),
+           sort files so the best-classified source runs FIRST. Subsequent
+           files fill gaps only (first-populated-wins at the field level).
+        5. Apply results with verbose logging + validation gates so silent
+           failures become visible.
     """
     # ── Collect every non-None path into `all_files`, deduped ─────────
     all_files: list = []
@@ -394,12 +877,10 @@ def extract_documents(
     def _add(path_like):
         if path_like is None:
             return
-        # Accept raw paths and also tuples/dicts/objects with a path attr
         p = None
         if isinstance(path_like, str):
             p = path_like
         elif isinstance(path_like, (tuple, list)) and path_like:
-            # allow (label, path) form
             for item in path_like:
                 if isinstance(item, str):
                     p = item
@@ -421,14 +902,11 @@ def extract_documents(
             pass
 
     logger.info("EXTRACTOR: %d file(s) to process", len(all_files))
-
     ext = deal.extracted_docs
-    prompts = [
-        ("1A", SYSTEM_1A, USER_1A, {"images_json": "[]"}, "om_text"),
-        ("1B", SYSTEM_1B, USER_1B, {},                     "rent_roll_text"),
-        ("1C", SYSTEM_1C, USER_1C, {},                     "financial_statement_text"),
-    ]
 
+    # ── Pass 1: convert + classify every file ─────────────────────────
+    # files is a list of dicts: {path, md, classification}
+    files = []
     for path in all_files:
         try:
             md = pdf_to_markdown(path)
@@ -440,38 +918,182 @@ def extract_documents(
                            path, len(md) if md else 0)
             continue
         logger.info("EXTRACTOR: extracted %d chars from '%s'", len(md), path)
+        classification = _classify_document(md)
+        ext.document_classifications.append({
+            "path": path,
+            "doc_types_present": classification.get("doc_types_present", []),
+            "primary_type": classification.get("primary_type"),
+            "confidence": classification.get("confidence"),
+            "notes": classification.get("notes"),
+        })
+        files.append({"path": path, "md": md, "classification": classification})
 
-        for tag, system, user_tpl, extra_kwargs, text_kw in prompts:
+    if not files:
+        logger.warning("EXTRACTOR: no readable files — aborting extraction")
+        deal.provenance.extractor_model = MODEL_HAIKU
+        return deal
+
+    # Rank helper — larger score = process first for this extractor
+    def _rank_for(prompt_tag: str, f: dict) -> int:
+        types = set(f["classification"].get("doc_types_present") or [])
+        primary = f["classification"].get("primary_type")
+        # Map: extractor → tuple(strong_types, weak_types)
+        match = {
+            "1A": ({"om"},             {"appraisal", "rent_roll"}),
+            "1B": ({"rent_roll"},      {"om", "appraisal"}),
+            "1C": ({"t12"},            {"budget", "om", "appraisal"}),
+            "1D": ({"environmental"},  set()),
+            "1E": ({"lease"},          {"rent_roll"}),
+            "1F": ({"title"},          set()),
+            "1G": ({"pca"},            set()),
+        }.get(prompt_tag, (set(), set()))
+        strong, weak = match
+        if primary in strong or (types & strong):
+            return 100
+        if types & weak:
+            return 50
+        return 1
+
+    # ── Pass 2: run each extractor in trust order ─────────────────────
+    # 1A — OM (always run, starts with OM-classified files)
+    for f in sorted(files, key=lambda x: _rank_for("1A", x), reverse=True):
+        try:
+            user_msg = USER_1A.format(om_text=f["md"], images_json="[]")
+            result = _call_haiku(SYSTEM_1A, user_msg)
+            if not result:
+                logger.warning("EXTRACTOR [1A]: no result for '%s'", f["path"])
+                continue
+            _apply_1a(result, deal)
+            _merge_extraction(ext, result, source="1A", file=f["path"])
+            logger.info("EXTRACTOR [1A]: complete for '%s'", f["path"])
+        except Exception as exc:
+            logger.warning("EXTRACTOR [1A]: failed for '%s': %s", f["path"], exc)
+
+    # 1B — Rent Roll
+    for f in sorted(files, key=lambda x: _rank_for("1B", x), reverse=True):
+        try:
+            user_msg = USER_1B.format(rent_roll_text=f["md"])
+            result = _call_haiku(SYSTEM_1B, user_msg)
+            if not result:
+                logger.warning("EXTRACTOR [1B]: no result for '%s'", f["path"])
+                continue
+            _apply_1b(result, deal)
+            _merge_extraction(ext, result, source="1B", file=f["path"])
+            logger.info("EXTRACTOR [1B]: complete for '%s' (%d raw units)",
+                        f["path"], len(result.get("units") or []))
+        except Exception as exc:
+            logger.warning("EXTRACTOR [1B]: failed for '%s': %s", f["path"], exc)
+
+    # 1C — T-12
+    for f in sorted(files, key=lambda x: _rank_for("1C", x), reverse=True):
+        try:
+            user_msg = USER_1C.format(financial_statement_text=f["md"])
+            result = _call_haiku(SYSTEM_1C, user_msg)
+            if not result:
+                logger.warning("EXTRACTOR [1C]: no result for '%s'", f["path"])
+                continue
+            _apply_1c(result, deal)
+            _merge_extraction(ext, result, source="1C", file=f["path"])
+            logger.info("EXTRACTOR [1C]: complete for '%s'", f["path"])
+        except Exception as exc:
+            logger.warning("EXTRACTOR [1C]: failed for '%s': %s", f["path"], exc)
+
+    def _files_tagged(types_set: set) -> list:
+        return [f for f in files
+                if set(f["classification"].get("doc_types_present") or []) & types_set
+                or f["classification"].get("primary_type") in types_set]
+
+    # 1D — Environmental (gated on classification)
+    env_candidates = _files_tagged({"environmental"})
+    if not env_candidates:
+        logger.info("EXTRACTOR [1D]: no environmental-classified files — skipping")
+    else:
+        for f in env_candidates:
             try:
-                user_msg = user_tpl.format(**{text_kw: md, **extra_kwargs})
-                result = _call_haiku(system, user_msg)
+                user_msg = USER_1D.format(env_text=f["md"])
+                result = _call_haiku(SYSTEM_1D, user_msg)
                 if not result:
-                    logger.warning("EXTRACTOR: %s returned no result for '%s'", tag, path)
+                    logger.warning("EXTRACTOR [1D]: no result for '%s'", f["path"])
                     continue
-                if tag == "1A":
-                    # Preserve legacy OM-specific behavior (comps, address, etc.)
-                    try:
-                        _apply_1a(result, deal)
-                    except Exception as exc:
-                        logger.warning("EXTRACTOR: _apply_1a failed for '%s': %s", path, exc)
-                    logger.info("EXTRACTOR: 1A complete for '%s'", path)
-                elif tag == "1B":
-                    n_units = len(result.get("units") or [])
-                    logger.info("EXTRACTOR: 1B complete for '%s' — %d units found",
-                                path, n_units)
-                else:
-                    # 1C: also run legacy mapper so expense_line_items/NNN get set
-                    try:
-                        _apply_1c(result, deal)
-                    except Exception as exc:
-                        logger.warning("EXTRACTOR: _apply_1c failed for '%s': %s", path, exc)
-                    logger.info("EXTRACTOR: 1C complete for '%s'", path)
-
-                _merge_extraction(ext, result, source=tag, file=path)
+                _apply_1d(result, deal)
+                _merge_extraction(ext, result, source="1D", file=f["path"])
+                logger.info("EXTRACTOR [1D]: complete for '%s'", f["path"])
             except Exception as exc:
-                logger.warning("EXTRACTOR: %s failed for '%s': %s", tag, path, exc)
+                logger.warning("EXTRACTOR [1D]: failed for '%s': %s", f["path"], exc)
 
-    # Record extraction model in provenance
+    # 1E — Lease abstraction (gated on lease classification; also runs on
+    # rent-roll files since lease terms sometimes appear there as footnotes)
+    lease_candidates = _files_tagged({"lease", "rent_roll"})
+    if not lease_candidates:
+        logger.info("EXTRACTOR [1E]: no lease-classified files — skipping")
+    else:
+        for f in lease_candidates:
+            try:
+                user_msg = USER_1E.format(lease_text=f["md"])
+                result = _call_haiku(SYSTEM_1E, user_msg)
+                if not result:
+                    logger.warning("EXTRACTOR [1E]: no result for '%s'", f["path"])
+                    continue
+                _apply_1e(result, deal)
+                _merge_extraction(ext, result, source="1E", file=f["path"])
+                logger.info("EXTRACTOR [1E]: complete for '%s'", f["path"])
+            except Exception as exc:
+                logger.warning("EXTRACTOR [1E]: failed for '%s': %s", f["path"], exc)
+
+    # 1F — Title commitment (gated on title classification)
+    title_candidates = _files_tagged({"title"})
+    if not title_candidates:
+        logger.info("EXTRACTOR [1F]: no title-classified files — skipping")
+    else:
+        for f in title_candidates:
+            try:
+                user_msg = USER_1F.format(title_text=f["md"])
+                result = _call_haiku(SYSTEM_1F, user_msg)
+                if not result:
+                    logger.warning("EXTRACTOR [1F]: no result for '%s'", f["path"])
+                    continue
+                _apply_1f(result, deal)
+                _merge_extraction(ext, result, source="1F", file=f["path"])
+                logger.info("EXTRACTOR [1F]: complete for '%s'", f["path"])
+            except Exception as exc:
+                logger.warning("EXTRACTOR [1F]: failed for '%s': %s", f["path"], exc)
+
+    # 1G — PCA / engineering report (gated on PCA classification)
+    pca_candidates = _files_tagged({"pca"})
+    if not pca_candidates:
+        logger.info("EXTRACTOR [1G]: no PCA-classified files — skipping")
+    else:
+        for f in pca_candidates:
+            try:
+                user_msg = USER_1G.format(pca_text=f["md"])
+                result = _call_haiku(SYSTEM_1G, user_msg)
+                if not result:
+                    logger.warning("EXTRACTOR [1G]: no result for '%s'", f["path"])
+                    continue
+                _apply_1g(result, deal)
+                _merge_extraction(ext, result, source="1G", file=f["path"])
+                logger.info("EXTRACTOR [1G]: complete for '%s'", f["path"])
+            except Exception as exc:
+                logger.warning("EXTRACTOR [1G]: failed for '%s': %s", f["path"], exc)
+
+    # ── Post-extraction summary log ───────────────────────────────────
+    logger.info(
+        "EXTRACTOR SUMMARY: files=%d units=%d t12_noi=%s phase1=%s RECs=%d "
+        "leases=%d title_exceptions=%d pca_systems=%d immediate_repairs=%d",
+        len(files),
+        len(ext.unit_mix or []),
+        f"${ext.noi_t12:,.0f}" if ext.noi_t12 else "—",
+        ext.phase1_status or "—",
+        len(ext.recognized_environmental_conditions or []),
+        len(ext.lease_abstracts or []),
+        len(ext.title_exceptions or []),
+        len(ext.pca_building_systems or []),
+        len(ext.pca_immediate_repairs or []),
+    )
+
     deal.provenance.extractor_model = MODEL_HAIKU
-
     return deal
+
+
+# Run the schema check at import so any future drift is caught immediately.
+_verify_scalar_map_schema()

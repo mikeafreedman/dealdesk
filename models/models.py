@@ -121,6 +121,71 @@ class ParcelData(BaseModel):
     zoning_code:        Optional[str]   = None
     deed_book_page:     Optional[str]   = None
     deed_history:       List[DeedRecord] = Field(default_factory=list)
+    # Extended owner / taxpayer fields (populated when the portal exposes them)
+    taxpayer_name:              Optional[str]   = None
+    taxpayer_mailing_address:   Optional[str]   = None
+    owner_occupied:             Optional[bool]  = None   # True when mailing = site
+    ownership_entity_type:      Optional[str]   = None   # LLC/Inc/Trust/Individual/etc.
+    years_owned:                Optional[float] = None   # derived from last_sale_date
+    exemptions:                 List[str]       = Field(default_factory=list)
+    annual_tax_billed:          Optional[float] = None   # actual bill, when exposed
+    homestead_status:           Optional[str]   = None
+    property_use_class:         Optional[str]   = None   # portal classification code
+    number_of_stories:          Optional[int]   = None
+    number_of_units_recorded:   Optional[int]   = None
+    # Portfolio: other parcels recorded to the same owner (if searchable)
+    other_parcels_owned:        List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class LeaseAbstract(BaseModel):
+    """Per-lease abstraction from Prompt 1E (lease document)."""
+    unit_id:              Optional[str]   = None
+    tenant_name:          Optional[str]   = None
+    lease_type:           Optional[str]   = None   # Gross / MG / NNN / etc.
+    commencement_date:    Optional[str]   = None
+    expiration_date:      Optional[str]   = None
+    term_months:          Optional[int]   = None
+    base_rent_monthly:    Optional[float] = None
+    base_rent_psf:        Optional[float] = None
+    escalation_type:      Optional[str]   = None   # CPI / fixed / stepped / none
+    escalation_amount:    Optional[str]   = None   # free-text (e.g. "3% annually", "CPI capped at 4%")
+    cam_structure:        Optional[str]   = None   # base year / expense stop / pro-rata / NNN
+    cam_base_year:        Optional[int]   = None
+    ti_allowance_psf:     Optional[float] = None
+    free_rent_months:     Optional[int]   = None
+    renewal_options:      List[str]       = Field(default_factory=list)
+    personal_guaranty:    Optional[bool]  = None
+    percentage_rent:      Optional[str]   = None
+    go_dark_allowed:      Optional[bool]  = None
+    kickout_clause:       Optional[str]   = None
+    radius_restriction:   Optional[str]   = None
+    special_clauses:      List[str]       = Field(default_factory=list)
+
+
+class TitleException(BaseModel):
+    """Single Schedule B title exception / encumbrance."""
+    exception_type:   Optional[str] = None   # easement / covenant / lien / restriction / etc.
+    recording_date:   Optional[str] = None
+    document_id:      Optional[str] = None
+    grantor:          Optional[str] = None
+    grantee:          Optional[str] = None
+    summary:          Optional[str] = None
+
+
+class PCASystemCondition(BaseModel):
+    """Single building-system condition from a PCA / engineering report."""
+    system:                  Optional[str]   = None   # roof / HVAC / plumbing / etc.
+    age_years:               Optional[int]   = None
+    condition:               Optional[str]   = None   # good / fair / poor
+    remaining_useful_life:   Optional[int]   = None
+    replacement_cost:        Optional[float] = None
+    notes:                   Optional[str]   = None
+
+
+class ImmediateRepairItem(BaseModel):
+    item:       Optional[str]   = None
+    cost:       Optional[float] = None
+    priority:   Optional[str]   = None   # immediate / short-term / long-term
 
 
 class ZoningData(BaseModel):
@@ -580,6 +645,42 @@ class ExtractedDocumentData(BaseModel):
     nnn_reconciliation:         Optional[Dict[str, Any]]   = None
     # Comparable data extracted from uploaded OM/broker package
     comps:                      Optional[CompsData]        = None
+    # From Prompt 1D — Environmental Report (Phase I / II ESA)
+    phase1_status:              Optional[str]       = None   # complete | pending | n/a
+    phase1_date:                Optional[str]       = None
+    phase1_consultant:          Optional[str]       = None
+    recognized_environmental_conditions: List[str]  = Field(default_factory=list)
+    historical_recognized_conditions:    List[str]  = Field(default_factory=list)
+    vapor_intrusion_flag:       Optional[bool]      = None
+    phase2_recommended:         Optional[bool]      = None
+    environmental_findings:     Optional[str]       = None   # narrative summary
+    environmental_recommendations: Optional[str]    = None
+    # Document-type classifications observed per uploaded file
+    document_classifications:   List[Dict[str, Any]] = Field(default_factory=list)
+    # Floor plan + site plan page references
+    floor_plan_pages:           List[int]           = Field(default_factory=list)
+    site_plan_pages:            List[int]           = Field(default_factory=list)
+    # From Prompt 1E — Lease abstraction
+    lease_abstracts:            List[LeaseAbstract] = Field(default_factory=list)
+    # From Prompt 1F — Title commitment
+    title_commitment_date:      Optional[str]       = None
+    title_company:              Optional[str]       = None
+    title_insurance_amount:     Optional[float]     = None
+    title_vesting:              Optional[str]       = None
+    title_legal_description:    Optional[str]       = None
+    title_exceptions:           List[TitleException] = Field(default_factory=list)
+    title_easements:            List[str]           = Field(default_factory=list)
+    title_endorsements:         List[str]           = Field(default_factory=list)
+    # From Prompt 1G — PCA / engineering report
+    pca_report_date:            Optional[str]       = None
+    pca_consultant:             Optional[str]       = None
+    pca_overall_condition:      Optional[str]       = None
+    pca_deferred_maintenance_total: Optional[float] = None
+    pca_building_systems:       List[PCASystemCondition] = Field(default_factory=list)
+    pca_immediate_repairs:      List[ImmediateRepairItem] = Field(default_factory=list)
+    pca_capex_12yr_total:       Optional[float]     = None
+    pca_capex_by_year:          Optional[Dict[str, float]] = None
+    pca_ada_items:              List[str]           = Field(default_factory=list)
 
 
 class InsuranceAnalysis(BaseModel):

@@ -328,6 +328,34 @@
   </table>
   {% endif %}
 
+  {% if owner_portfolio_rows %}
+  <div class="subsection-title">Other Properties Held by This Owner</div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Address</th>
+        <th>Parcel ID</th>
+        <th style="text-align:right">Market Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in owner_portfolio_rows %}
+      <tr>
+        <td>{{ row.address }}</td>
+        <td>{{ row.parcel_id }}</td>
+        <td style="text-align:right">{{ row.market_value }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="source-note">
+    Owner portfolio search: {{ owner_portfolio_rows|length }} additional parcel(s)
+    {% if owner_portfolio_total %}
+      &nbsp;|&nbsp; Combined market value: ${{ "{:,.0f}".format(owner_portfolio_total) }}
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if deed_history_rows %}
   <div class="subsection-title">Recorded Deed Transfers</div>
   <table class="data-table">
@@ -567,6 +595,38 @@
       <td class="right">{{ rent_roll_totals.total_monthly }}</td>
     </tr>
     {% endif %}
+  </table>
+  {% endif %}
+
+  {% if lease_abstract_rows %}
+  <div class="subsection-title">Lease Abstracts</div>
+  <table class="data-table rent-roll-table">
+    <tr>
+      <th>Unit</th>
+      <th>Tenant</th>
+      <th>Type</th>
+      <th>Commenc.</th>
+      <th>Expires</th>
+      <th class="right">Base Rent</th>
+      <th>Escalation</th>
+      <th>CAM</th>
+      <th>Renewals</th>
+      <th>Guaranty</th>
+    </tr>
+    {% for row in lease_abstract_rows %}
+    <tr>
+      <td>{{ row.unit }}</td>
+      <td>{{ row.tenant }}</td>
+      <td>{{ row.lease_type }}</td>
+      <td>{{ row.commencement }}</td>
+      <td>{{ row.expiration }}</td>
+      <td class="right">{{ row.base_rent }}</td>
+      <td>{{ row.escalation }}</td>
+      <td>{{ row.cam }}</td>
+      <td>{{ row.renewals }}</td>
+      <td>{{ row.guaranty }}</td>
+    </tr>
+    {% endfor %}
   </table>
   {% endif %}
 
@@ -935,6 +995,39 @@
   <div class="narrative">{{ phase_esa_narrative }}</div>
   {% endif %}
 
+  {% if environmental_phase1_status or environmental_recs or environmental_findings %}
+  <div class="subsection-title">Phase I / II Findings (Extracted)</div>
+  {% if environmental_phase1_status or environmental_phase1_date or environmental_phase1_consultant %}
+  <table class="data-table tbl-2col">
+    {% if environmental_phase1_status %}<tr><td>Phase I Status</td><td>{{ environmental_phase1_status }}</td></tr>{% endif %}
+    {% if environmental_phase1_date %}<tr><td>Report Date</td><td>{{ environmental_phase1_date }}</td></tr>{% endif %}
+    {% if environmental_phase1_consultant %}<tr><td>Consultant</td><td>{{ environmental_phase1_consultant }}</td></tr>{% endif %}
+    {% if environmental_vapor_flag is not none %}<tr><td>Vapor Intrusion Flagged</td><td>{{ "Yes" if environmental_vapor_flag else "No" }}</td></tr>{% endif %}
+    {% if environmental_phase2_recommended is not none %}<tr><td>Phase II Recommended</td><td>{{ "Yes" if environmental_phase2_recommended else "No" }}</td></tr>{% endif %}
+  </table>
+  {% endif %}
+
+  {% if environmental_recs %}
+  <div class="subsection-title">Recognized Environmental Conditions (RECs)</div>
+  {% for r in environmental_recs %}<div class="callout alert">{{ r }}</div>{% endfor %}
+  {% endif %}
+
+  {% if environmental_hrecs %}
+  <div class="subsection-title">Historical Recognized Conditions (HRECs)</div>
+  {% for r in environmental_hrecs %}<div class="callout">{{ r }}</div>{% endfor %}
+  {% endif %}
+
+  {% if environmental_findings %}
+  <div class="subsection-title">Findings Summary</div>
+  <div class="narrative">{{ environmental_findings }}</div>
+  {% endif %}
+
+  {% if environmental_recommendations %}
+  <div class="subsection-title">Recommendations</div>
+  <div class="narrative">{{ environmental_recommendations }}</div>
+  {% endif %}
+  {% endif %}
+
   {% if epa_env_flags %}
   <div class="subsection-title">EPA Environmental Flags</div>
   <ul>
@@ -960,6 +1053,46 @@
   </div>
 
   {% if legal_status_narrative %}<div class="narrative">{{ legal_status_narrative }}</div>{% endif %}
+
+  {% if title_commitment_date or title_company or title_vesting %}
+  <div class="subsection-title">Title Commitment</div>
+  <table class="data-table tbl-2col">
+    {% if title_commitment_date %}<tr><td>Commitment Date</td><td>{{ title_commitment_date }}</td></tr>{% endif %}
+    {% if title_company %}<tr><td>Title Company</td><td>{{ title_company }}</td></tr>{% endif %}
+    {% if title_insurance_amount %}<tr><td>Insurance Amount</td><td style="text-align:right">{{ title_insurance_amount }}</td></tr>{% endif %}
+    {% if title_vesting %}<tr><td>Vesting</td><td>{{ title_vesting }}</td></tr>{% endif %}
+    {% if title_legal_description %}<tr><td>Legal Description</td><td>{{ title_legal_description }}</td></tr>{% endif %}
+  </table>
+  {% endif %}
+
+  {% if title_exception_rows %}
+  <div class="subsection-title">Schedule B Exceptions</div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Recorded</th>
+        <th>Document ID</th>
+        <th>Summary</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in title_exception_rows %}
+      <tr>
+        <td>{{ row.type }}</td>
+        <td>{{ row.recording_date }}</td>
+        <td>{{ row.document_id }}</td>
+        <td>{{ row.summary }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if title_easements %}
+  <div class="subsection-title">Easements</div>
+  {% for e in title_easements %}<div class="callout">{{ e }}</div>{% endfor %}
+  {% endif %}
 
   {% if violations_narrative %}
   <div class="subsection-title">Open Violations &amp; Permits</div>
@@ -1002,6 +1135,73 @@
   </div>
   {% else %}
   <div class="callout">No due diligence flags generated for this analysis.</div>
+  {% endif %}
+
+  {% if pca_system_rows or pca_immediate_repair_rows or pca_overall_condition %}
+  <div class="subsection-title">Property Condition Assessment</div>
+  {% if pca_overall_condition or pca_deferred_maintenance_total or pca_capex_12yr_total %}
+  <table class="data-table tbl-2col">
+    {% if pca_report_date %}<tr><td>Report Date</td><td>{{ pca_report_date }}</td></tr>{% endif %}
+    {% if pca_consultant %}<tr><td>Consultant</td><td>{{ pca_consultant }}</td></tr>{% endif %}
+    {% if pca_overall_condition %}<tr><td>Overall Condition</td><td>{{ pca_overall_condition }}</td></tr>{% endif %}
+    {% if pca_deferred_maintenance_total %}<tr><td>Deferred Maintenance Total</td><td style="text-align:right">{{ pca_deferred_maintenance_total }}</td></tr>{% endif %}
+    {% if pca_capex_12yr_total %}<tr><td>12-Year Capex Forecast</td><td style="text-align:right">{{ pca_capex_12yr_total }}</td></tr>{% endif %}
+  </table>
+  {% endif %}
+
+  {% if pca_system_rows %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>System</th>
+        <th>Condition</th>
+        <th>Age</th>
+        <th>Remaining Life</th>
+        <th style="text-align:right">Replacement Cost</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in pca_system_rows %}
+      <tr>
+        <td>{{ row.system }}</td>
+        <td>{{ row.condition }}</td>
+        <td>{{ row.age }}</td>
+        <td>{{ row.rul }}</td>
+        <td style="text-align:right">{{ row.repl_cost }}</td>
+        <td>{{ row.notes }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if pca_immediate_repair_rows %}
+  <div class="subsection-title">Immediate Repairs</div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>Priority</th>
+        <th style="text-align:right">Cost</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in pca_immediate_repair_rows %}
+      <tr>
+        <td>{{ row.item }}</td>
+        <td>{{ row.priority }}</td>
+        <td style="text-align:right">{{ row.cost }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if pca_ada_items %}
+  <div class="subsection-title">ADA Findings</div>
+  {% for a in pca_ada_items %}<div class="callout">{{ a }}</div>{% endfor %}
+  {% endif %}
   {% endif %}
 </div>
 {% endif %}
