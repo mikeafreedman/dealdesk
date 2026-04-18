@@ -580,8 +580,23 @@ def _fetch_arcgis_parcel(deal: DealData, pd_obj: ParcelData, addr, gis_url: str)
                     gis_url[:80])
         return
 
-    address_fields = ["SITEADDRESS", "SITE_ADDRESS", "ADDRESS", "FULL_ADDRESS",
-                      "PROP_ADDRESS", "LOCATION", "ADDR", "SITUS_ADDRESS"]
+    # Full-address field-name variants across common county GIS schemas.
+    # Includes singular "address" field names plus the specific ones used
+    # by the metro-override counties (Cook, LA, King) and common Esri
+    # defaults. Maricopa's split-components fields (PHYSICAL_STREET_NUM +
+    # PHYSICAL_STREET_NAME) are handled via a separate code path below.
+    address_fields = [
+        # Common defaults
+        "SITEADDRESS", "SITE_ADDRESS", "ADDRESS", "FULL_ADDRESS",
+        "PROP_ADDRESS", "LOCATION", "ADDR", "SITUS_ADDRESS",
+        # Specific to metro overrides + other county schemas
+        "SitusFullAddress",     # CA LA County
+        "SitusAddress",         # CA LA County
+        "street_address",       # IL Cook County (lowercase)
+        "ADDR_FULL",            # WA King County
+        "PHYSICAL_ADDRESS",     # AZ Maricopa County (combined)
+        "PROPERTY_ADDRESS", "PROPERTYADDRESS",
+    ]
     name_token = street_name.split()[0] if street_name else ""
     search_term = f"{street_number}%{name_token}%"
 
@@ -824,6 +839,87 @@ def _fetch_arcgis_sibling_sales(pd_obj: ParcelData, gis_url: str) -> None:
             break  # stop after first productive layer
 
 
+def _fetch_arcgis_sales_explicit(pd_obj: ParcelData, sales_url: str,
+                                  pid_field: str = "PIN") -> None:
+    """Pull sales history from an explicit sales-layer URL using the
+    configured parcel_id field (no auto-discovery, no field-name fuzzing).
+    Used when a metro override pins the exact sales-layer endpoint.
+    """
+    if not pd_obj.parcel_id:
+        return
+    pid = str(pd_obj.parcel_id).strip()
+    variants = [pid, pid.replace("-", ""), pid.replace(" ", "")]
+    rows: list = []
+    for v in set(variants):
+        try:
+            resp = requests.get(
+                sales_url,
+                params={
+                    "where": f"{pid_field} = '{v}'",
+                    "outFields": "*",
+                    "returnGeometry": "false",
+                    "f": "json",
+                    "resultRecordCount": 25,
+                    "orderByFields": "SaleDate DESC" if "King" in sales_url or "king" in sales_url.lower() else None,
+                },
+                timeout=_REQUEST_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json() or {}
+            feats = data.get("features", []) or []
+            if feats:
+                rows = [f.get("attributes", {}) or {} for f in feats]
+                break
+        except Exception as exc:
+            logger.info("Explicit sales query failed for pid=%s: %s", v, exc)
+            continue
+    if not rows:
+        logger.info("Explicit sales layer: no rows for pid=%s at %s",
+                    pid, sales_url[:60])
+        return
+
+    seen_dates = {d.recording_date for d in pd_obj.deed_history if d.recording_date}
+    added = 0
+    for r in rows:
+        rec_date = _coerce_arcgis_date(
+            r.get("SaleDate") or r.get("SALE_DATE") or r.get("SALEDATE")
+            or r.get("DEED_DATE") or r.get("RECORDING_DATE")
+        )
+        if not rec_date or rec_date in seen_dates:
+            continue
+        seen_dates.add(rec_date)
+        amt = _safe_float(
+            r.get("SalePrice") or r.get("SALE_PRICE") or r.get("SALEPRICE")
+        )
+        grantor = (r.get("Sellername") or r.get("SELLER") or r.get("GRANTOR")
+                   or r.get("seller_name"))
+        grantee = (r.get("buyername") or r.get("BUYER") or r.get("GRANTEE")
+                   or r.get("buyer_name"))
+        doc_id = (r.get("RecNumber") or r.get("ExciseTaxNum")
+                  or r.get("DOC_NUMBER") or r.get("RECORDING_NUMBER"))
+        pd_obj.deed_history.append(DeedRecord(
+            recording_date=rec_date,
+            document_type="Recorded sale",
+            grantor=(str(grantor).strip() if grantor else None),
+            grantee=(str(grantee).strip() if grantee else None),
+            consideration_amount=amt,
+            document_id=(str(doc_id).strip() if doc_id else None),
+        ))
+        added += 1
+    if added:
+        pd_obj.deed_history.sort(key=lambda d: d.recording_date or "", reverse=True)
+        # Fill last_sale_* from the most recent
+        mr = pd_obj.deed_history[0]
+        if mr.recording_date and not pd_obj.last_sale_date:
+            pd_obj.last_sale_date = mr.recording_date
+        if mr.consideration_amount and not pd_obj.last_sale_price:
+            pd_obj.last_sale_price = mr.consideration_amount
+        if mr.grantee and not pd_obj.owner_name:
+            pd_obj.owner_name = mr.grantee
+    logger.info("Explicit sales layer: added %d rows for pid=%s", added, pid)
+
+
 def _query_arcgis_sales_layer(layer_url: str, pid_variants: list) -> list:
     """Query a sales-layer URL by trying each parcel-id variant against each
     common parcel-id field name. Returns the first non-empty row set.
@@ -968,6 +1064,121 @@ def _acris_name_signature(name_upper: str) -> set:
 _IASWORLD_URL_RE = re.compile(
     r"(propertyrecords\.|/pt/forms/|/pt/search/|iasworld)", re.IGNORECASE
 )
+
+# ────────────────────────────────────────────────────────────────────────
+# Metro-area GIS overrides — for big metros not in the municipal registry.
+# Keyed by (state_upper, city-name set), first match wins. Values:
+#   arcgis_rest_url: str  — REST root or specific /MapServer/<n>/query URL
+#   sales_layer_url: Optional[str] — adjacent "sales" layer query URL
+#                                    (used by _fetch_arcgis_sibling_sales;
+#                                    overrides auto-discovery when set)
+# ────────────────────────────────────────────────────────────────────────
+
+_MARICOPA_CITIES = frozenset({
+    "phoenix", "scottsdale", "mesa", "tempe", "chandler", "glendale",
+    "peoria", "gilbert", "surprise", "goodyear", "avondale", "buckeye",
+    "fountain hills", "paradise valley", "litchfield park", "tolleson",
+    "cave creek", "carefree", "queen creek", "wickenburg", "el mirage",
+    "sun city", "sun city west", "youngtown", "guadalupe", "anthem",
+})
+_COOK_CITIES = frozenset({
+    "chicago", "oak park", "evanston", "skokie", "cicero", "schaumburg",
+    "arlington heights", "des plaines", "palatine", "orland park", "tinley park",
+    "oak lawn", "berwyn", "mount prospect", "wheeling", "hoffman estates",
+    "northbrook", "elk grove village", "lombard", "buffalo grove", "park ridge",
+    "calumet city", "rolling meadows", "glenview", "oak forest", "glen ellyn",
+    "la grange", "harvey", "chicago heights",
+})
+_LA_CITIES = frozenset({
+    "los angeles", "long beach", "santa clarita", "glendale", "lancaster",
+    "palmdale", "pomona", "torrance", "pasadena", "el monte", "downey",
+    "inglewood", "west covina", "norwalk", "burbank", "compton", "carson",
+    "south gate", "santa monica", "whittier", "hawthorne", "alhambra",
+    "lakewood", "bellflower", "baldwin park", "lynwood", "redondo beach",
+    "pico rivera", "montebello", "monterey park", "rosemead", "culver city",
+    "arcadia", "diamond bar", "paramount", "rancho palos verdes", "covina",
+    "glendora", "huntington park", "la mirada", "manhattan beach",
+    "beverly hills", "west hollywood", "malibu", "calabasas",
+})
+_KING_CITIES = frozenset({
+    "seattle", "bellevue", "kent", "renton", "federal way", "kirkland",
+    "auburn", "redmond", "sammamish", "shoreline", "burien", "issaquah",
+    "des moines", "bothell", "mercer island", "tukwila", "kenmore",
+    "covington", "maple valley", "snoqualmie", "north bend", "woodinville",
+    "pacific", "duvall", "carnation", "enumclaw", "black diamond",
+    "sea-tac", "seatac", "normandy park", "lake forest park",
+})
+
+_METRO_GIS_OVERRIDES = [
+    {
+        "label": "AZ Maricopa",
+        "state": "AZ",
+        "cities": _MARICOPA_CITIES,
+        # Maricopa Dynamic Query Service — full schema with owner, sale, deed
+        "arcgis_rest_url":
+            "https://gis.mcassessor.maricopa.gov/arcgis/rest/services/"
+            "MaricopaDynamicQueryService/MapServer/3/query",
+    },
+    {
+        "label": "IL Cook",
+        "state": "IL",
+        "cities": _COOK_CITIES,
+        # Cook CookViewer3Parcels — address + assessed values, no owner/sale
+        "arcgis_rest_url":
+            "https://gis.cookcountyil.gov/traditional/rest/services/"
+            "CookViewer3Parcels/MapServer/0/query",
+    },
+    {
+        "label": "CA Los Angeles",
+        "state": "CA",
+        "cities": _LA_CITIES,
+        # LA County Parcel layer — address + assessed values, no owner/sale
+        "arcgis_rest_url":
+            "https://public.gis.lacounty.gov/public/rest/services/"
+            "LACounty_Cache/LACounty_Parcel/MapServer/0/query",
+    },
+    {
+        "label": "WA King",
+        "state": "WA",
+        "cities": _KING_CITIES,
+        # King County Parcels layer (primary)
+        "arcgis_rest_url":
+            "https://gismaps.kingcounty.gov/arcgis/rest/services/"
+            "Property/KingCo_PropertyInfo/MapServer/2/query",
+        # King has a separate sales layer with Sellername/Buyername/SaleDate/
+        # SalePrice/RecNumber — richer than any attribute scan
+        "sales_layer_url":
+            "https://gismaps.kingcounty.gov/arcgis/rest/services/"
+            "Property/KingCo_PropertyInfo/MapServer/3/query",
+        "sales_pid_field": "PIN",
+    },
+]
+
+
+def _apply_metro_gis_override(deal: DealData) -> Optional[dict]:
+    """If this deal's (state, city) matches a known metro in
+    _METRO_GIS_OVERRIDES AND no arcgis_rest_url is already set from the
+    municipal registry, populate provenance.field_sources['arcgis_rest_url']
+    (and optional sales_layer_url) from the override. Returns the matched
+    override dict, or None.
+    """
+    prov = deal.provenance.field_sources
+    if prov.get("arcgis_rest_url"):
+        return None
+    state = (deal.address.state or "").strip().upper()
+    city = (deal.address.city or "").strip().lower()
+    if not state or not city:
+        return None
+    for ov in _METRO_GIS_OVERRIDES:
+        if ov["state"] == state and city in ov["cities"]:
+            prov["arcgis_rest_url"] = ov["arcgis_rest_url"]
+            if ov.get("sales_layer_url"):
+                prov["sales_layer_url"] = ov["sales_layer_url"]
+                prov["sales_pid_field"] = ov.get("sales_pid_field", "PIN")
+            logger.info("METRO OVERRIDE: %s matched for %s, %s",
+                        ov["label"], city, state)
+            return ov
+    return None
 
 
 def _is_iasworld_url(url: str) -> bool:
@@ -1284,6 +1495,12 @@ def fetch_parcel(deal: DealData) -> None:
         deal.parcel_data = ParcelData()
     pd_obj = deal.parcel_data
 
+    # Metro-area GIS overrides — for big metros not in the registry
+    # (Phoenix/Maricopa, Chicago/Cook, LA, Seattle/King). Populates
+    # provenance.field_sources['arcgis_rest_url'] when matched so the
+    # normal ArcGIS path below can run.
+    _apply_metro_gis_override(deal)
+
     # SOURCE 1: Philadelphia OPA
     if state == "PA" and city.lower() == "philadelphia":
         _fetch_phl_opa(deal, pd_obj, addr)
@@ -1310,8 +1527,17 @@ def fetch_parcel(deal: DealData) -> None:
             _fetch_arcgis_parcel(deal, pd_obj, addr, resolved)
             # Sibling-layer discovery: pull multi-sale history from a
             # dedicated "Sales" / "Deeds" layer on the same MapServer, if
-            # the county publishes one. Adds to deed_history with dedupe.
-            _fetch_arcgis_sibling_sales(pd_obj, resolved)
+            # the county publishes one. Metro overrides can pin the exact
+            # sales-layer URL (e.g. King County's KingCo_PropertyInfo/3);
+            # otherwise fall back to automatic discovery.
+            explicit_sales = deal.provenance.field_sources.get("sales_layer_url")
+            if explicit_sales:
+                _fetch_arcgis_sales_explicit(
+                    pd_obj, explicit_sales,
+                    pid_field=deal.provenance.field_sources.get("sales_pid_field") or "PIN",
+                )
+            else:
+                _fetch_arcgis_sibling_sales(pd_obj, resolved)
         # SOURCE 4: OSM Nominatim fallback if ArcGIS didn't land a parcel_id
         if not pd_obj.parcel_id:
             _fetch_osm_parcel(deal, pd_obj, addr)
