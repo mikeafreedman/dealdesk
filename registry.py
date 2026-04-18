@@ -153,8 +153,8 @@ def apply(row: pd.Series, deal: DealData) -> None:
     # Registry URLs + code_platform into provenance (keys consumed elsewhere)
     prov = deal.provenance.field_sources
     for field in ("code_platform", "code_base_url", "zoning_chapter_url",
-                  "assessor_url", "gis_parcel_url", "recorder_of_deeds_url",
-                  "tax_collector_url"):
+                  "assessor_url", "gis_parcel_url", "arcgis_rest_url",
+                  "recorder_of_deeds_url", "tax_collector_url"):
         val = _get(field)
         if val:
             prov[field] = val

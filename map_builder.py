@@ -119,8 +119,10 @@ def build_aerial_map(deal):
     if not _lat_lon_valid(lat, lon):
         logger.info("Aerial map skipped — no geocoordinates")
         return None
-    logger.info("Building aerial map — lat=%.5f lon=%.5f zoom=13", lat, lon)
-    png = _stitch_tiles(lat, lon, zoom=13, tiles_wide=3, tiles_tall=3)
+    # zoom=9: ~140 km across the cropped image at mid latitudes — roughly a
+    # 1-hour driving radius from the property.
+    logger.info("Building aerial map — lat=%.5f lon=%.5f zoom=9", lat, lon)
+    png = _stitch_tiles(lat, lon, zoom=9, tiles_wide=3, tiles_tall=3)
     if png:
         logger.info("Aerial map built — %d bytes", len(png))
     return png
@@ -208,9 +210,13 @@ def build_fema_map(deal):
     north = tile_to_lat(cy - half, zoom)
     south = tile_to_lat(cy + half + 1, zoom)
 
+    # Layer 28 = Flood Hazard Zones (SFHA polygons). The group layer "NFHL"
+    # often renders nothing at typical report-map extents because its
+    # sub-layers are scale-dependent — requesting the zones layer directly
+    # is reliable across zoom levels.
     wms_url = (
         "https://hazards.fema.gov/gis/nfhl/services/public/NFHL/MapServer/WMSServer?"
-        f"SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=NFHL&STYLES=&CRS=EPSG:4326"
+        f"SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=28&STYLES=&CRS=EPSG:4326"
         f"&BBOX={south},{west},{north},{east}&WIDTH={MAP_WIDTH}&HEIGHT={MAP_HEIGHT}"
         f"&FORMAT=image/png&TRANSPARENT=TRUE"
     )
@@ -221,12 +227,16 @@ def build_fema_map(deal):
             overlay_img = Image.open(io.BytesIO(overlay_data)).convert("RGBA")
             overlay_img = overlay_img.resize((MAP_WIDTH, MAP_HEIGHT), Image.LANCZOS)
             pixels = overlay_img.load()
+            # Keep only colored flood-zone polygons; drop the near-white
+            # background so the OSM base shows through. Preserve the service's
+            # native alpha on the zones themselves.
             for y_px in range(overlay_img.height):
                 for x_px in range(overlay_img.width):
                     r, g, b, a = pixels[x_px, y_px]
-                    pixels[x_px, y_px] = (r, g, b, 0) if (r > 240 and g > 240 and b > 240) else (r, g, b, min(180, a))
+                    if r > 248 and g > 248 and b > 248:
+                        pixels[x_px, y_px] = (r, g, b, 0)
             base_img = Image.alpha_composite(base_img, overlay_img)
-            logger.info("FEMA NFHL overlay applied")
+            logger.info("FEMA NFHL overlay applied (layer 28)")
         except Exception as exc:
             logger.warning("FEMA overlay compositing failed: %s", exc)
     else:

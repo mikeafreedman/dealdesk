@@ -97,6 +97,15 @@ class PropertyAddress(BaseModel):
     fips_code:    Optional[str]   = None
 
 
+class DeedRecord(BaseModel):
+    recording_date:       Optional[str]   = None
+    document_type:        Optional[str]   = None
+    grantor:              Optional[str]   = None
+    grantee:              Optional[str]   = None
+    consideration_amount: Optional[float] = None
+    document_id:          Optional[str]   = None
+
+
 class ParcelData(BaseModel):
     parcel_id:          Optional[str]   = None
     owner_name:         Optional[str]   = None
@@ -111,6 +120,7 @@ class ParcelData(BaseModel):
     year_built:         Optional[int]   = None
     zoning_code:        Optional[str]   = None
     deed_book_page:     Optional[str]   = None
+    deed_history:       List[DeedRecord] = Field(default_factory=list)
 
 
 class ZoningData(BaseModel):

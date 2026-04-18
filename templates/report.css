@@ -39,7 +39,7 @@
 
 body {
   font-family: var(--font);
-  background: var(--parchment);
+  background: var(--white);
   color: var(--dark-walnut);
   font-size: 10pt;
   line-height: 1.55;
@@ -166,6 +166,7 @@ body {
   /* Same inner padding as .report-page — @page margin provides the 1" gutter */
   padding: 20px 18px 40px;
   page-break-after: always;
+  page-break-inside: avoid;
 }
 .toc-header,
 .toc-title-block {
@@ -174,15 +175,16 @@ body {
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--sage-deep);
-  margin-bottom: 28px;
-  padding-bottom: 10px;
+  margin-bottom: 18px;
+  padding-bottom: 8px;
   border-bottom: 2px solid var(--sage-deep);
 }
 .toc-entry {
   display: flex;
   align-items: center;
-  padding: 9px 0;
-  font-size: 10.5pt;
+  padding: 4px 0;
+  font-size: 10pt;
+  line-height: 1.2;
   color: var(--dark-walnut);
   border-bottom: none;    /* removes the inter-row rules */
 }
@@ -563,6 +565,8 @@ h4, .subsection-title {
   margin: 12pt 0;
 }
 .photo-grid.hero { grid-template-columns: 1fr; }
+.narrative + .photo-grid { margin-top: 0; }
+.narrative:has(+ .photo-grid) { margin-bottom: 0; }
 .photo-cell img {
   width: 100%;
   height: auto;

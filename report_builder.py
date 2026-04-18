@@ -1,18 +1,18 @@
 """
 report_builder.py — DealDesk Playwright PDF Report Generator
 =============================================================
-Option 1 scaffold: Playwright + headless Chromium + Jinja2/HTML/CSS.
+Playwright + headless Chromium + Jinja2/HTML/CSS.
 
-Runs in PARALLEL with word_builder.py during the transition. Reuses
-word_builder._build_context() unchanged as the context source, then
-renders via an independent HTML template under templates/.
+Runs narrative generation (context_builder.generate_narratives), builds the
+template context (context_builder.build_context), then renders the HTML
+template under templates/ and prints to PDF via Playwright.
 
 Image layer is self-contained:
     - maps  → map_builder.build_all_maps(deal) (PNG bytes)
-    - street view → word_builder.fetch_street_view_image(addr, deal_id)
+    - street view → context_builder.fetch_street_view_image(addr, deal_id)
 Each call is wrapped so a single image failure never aborts the PDF.
 
-Output: outputs/{deal_id}_report_playwright.pdf
+Output: outputs/{deal_id}_report.pdf
 """
 
 from __future__ import annotations
@@ -27,6 +27,11 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from playwright.sync_api import sync_playwright
 
 from config import OUTPUTS_DIR, WORD_TEMPLATES_DIR
+from context_builder import (
+    build_context,
+    fetch_street_view_image,
+    generate_narratives,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +124,6 @@ def _build_image_context(deal) -> dict:
 
     # Street view
     try:
-        from word_builder import fetch_street_view_image
         sv_path = fetch_street_view_image(
             deal.address.full_address or "",
             deal.deal_id or "unknown",
@@ -136,58 +140,6 @@ def _build_image_context(deal) -> dict:
 
 
 # ── Context sanitization ─────────────────────────────────────────────────────
-
-_DOCX_OBJ_TYPES = {"InlineImage"}
-
-# Phrases that belong only to the Word template (TOC field instructions,
-# Conditional-block notes) and should never appear in any rendered PDF.
-_SCRUB_PHRASES = (
-    "Right-click the table above",
-    "Update Field",
-    "refresh page numbers",
-    "Conditional block",
-    "renders only when image_type",
-)
-
-
-def _scrub_string(s: str) -> str:
-    """Remove any sentence containing a _SCRUB_PHRASES fragment. Operates per
-    string and is a no-op when none of the phrases are present."""
-    if not s or not any(p in s for p in _SCRUB_PHRASES):
-        return s
-    # Split on sentence terminators, drop dirty sentences, rejoin. Cheap and
-    # safe — at worst we over-trim a narrative that literally named one of
-    # these phrases, which is fine for a report.
-    parts = re.split(r'(?<=[.!?])\s+', s)
-    kept = [p for p in parts if not any(ph in p for ph in _SCRUB_PHRASES)]
-    return " ".join(kept).strip()
-
-
-def _strip_docx_objects(ctx: dict) -> dict:
-    """Remove docx-specific objects (InlineImage) from ctx and scrub any
-    narrative strings that leaked Word-only instruction text.
-    word_builder._build_context() itself doesn't produce InlineImage objects
-    today, but a future refactor might — cheap insurance.
-    """
-    cleaned = {}
-    removed = 0
-    scrubbed = 0
-    for k, v in ctx.items():
-        if type(v).__name__ in _DOCX_OBJ_TYPES:
-            removed += 1
-            continue
-        if isinstance(v, str):
-            new_v = _scrub_string(v)
-            if new_v != v:
-                scrubbed += 1
-                v = new_v
-        cleaned[k] = v
-    if removed:
-        logger.info("REPORT: stripped %d docx-specific objects from ctx", removed)
-    if scrubbed:
-        logger.info("REPORT: scrubbed Word-only phrases from %d ctx strings", scrubbed)
-    return cleaned
-
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
@@ -207,19 +159,23 @@ def generate_report(deal, pdf_path: str | Path | None = None) -> Path:
     # ── Resolve output path ───────────────────────────────────────
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     if pdf_path is None:
-        pdf_path = OUTPUTS_DIR / f"{deal.deal_id or 'unknown'}_report_playwright.pdf"
+        pdf_path = OUTPUTS_DIR / f"{deal.deal_id or 'unknown'}_report.pdf"
     pdf_path = Path(pdf_path)
 
-    # ── Build context (reuse word_builder._build_context unchanged) ──
-    from word_builder import _build_context as _wb_build_context
+    # ── Generate narratives (Sonnet Prompts 4-MASTER + 5D) ───────
     try:
-        ctx = _wb_build_context(deal)
+        generate_narratives(deal)
     except Exception as exc:
-        logger.error("REPORT: _build_context failed — %s", exc, exc_info=True)
-        raise RuntimeError(f"report_builder: context build failed: {exc}") from exc
-    logger.info("REPORT: context built from word_builder (%d keys)", len(ctx))
+        logger.error("REPORT: narrative generation failed — %s", exc, exc_info=True)
+        raise RuntimeError(f"report_builder: narrative generation failed: {exc}") from exc
 
-    ctx = _strip_docx_objects(ctx)
+    # ── Build template context ───────────────────────────────────
+    try:
+        ctx = build_context(deal)
+    except Exception as exc:
+        logger.error("REPORT: build_context failed — %s", exc, exc_info=True)
+        raise RuntimeError(f"report_builder: context build failed: {exc}") from exc
+    logger.info("REPORT: context built (%d keys)", len(ctx))
 
     # ── Image layer (independent, defensive) ─────────────────────
     ctx.update(_build_image_context(deal))

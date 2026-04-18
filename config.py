@@ -70,9 +70,6 @@ def get_excel_template(strategy: InvestmentStrategy | None) -> Path:
     return path
 
 
-# ── Word / report template ────────────────────────────────────
-WORD_TEMPLATE = WORD_TEMPLATES_DIR / "DealDesk_Report_Template_v4.docx"
-
 # ── Reference data ────────────────────────────────────────────
 MUNICIPAL_REGISTRY_CSV = DATA_DIR / "municipal_registry.csv"
 
@@ -93,5 +90,3 @@ GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 # ── FRED (Federal Reserve Economic Data) ─────────────────────
 FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 
-# ── Pipeline defaults ─────────────────────────────────────────
-PDF_CONVERSION_TIMEOUT = 60                 # seconds

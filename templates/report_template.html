@@ -118,6 +118,12 @@
     <div class="section-title">Executive Summary</div>
   </div>
 
+  {% if exec_pullquote %}<div class="pullquote">{{ exec_pullquote }}</div>{% endif %}
+
+  {% if exec_overview_p1 %}<div class="narrative">{{ exec_overview_p1 }}</div>{% endif %}
+  {% if exec_overview_p2 %}<div class="narrative">{{ exec_overview_p2 }}</div>{% endif %}
+  {% if exec_overview_p3 %}<div class="narrative">{{ exec_overview_p3 }}</div>{% endif %}
+
   {% if kpi_rows %}
   <div class="kpi-grid">
     {% for row in kpi_rows %}
@@ -128,12 +134,6 @@
     {% endfor %}
   </div>
   {% endif %}
-
-  {% if exec_pullquote %}<div class="pullquote">{{ exec_pullquote }}</div>{% endif %}
-
-  {% if exec_overview_p1 %}<div class="narrative">{{ exec_overview_p1 }}</div>{% endif %}
-  {% if exec_overview_p2 %}<div class="narrative">{{ exec_overview_p2 }}</div>{% endif %}
-  {% if exec_overview_p3 %}<div class="narrative">{{ exec_overview_p3 }}</div>{% endif %}
 
   {% if deal_thesis %}
   <div class="subsection-title">Deal Thesis</div>
@@ -211,6 +211,26 @@
   {% if neighborhood_map_b64 %}
   <div class="subsection-title">Neighborhood Context</div>
   <div class="map-container"><img src="{{ neighborhood_map_b64 }}" alt="Neighborhood Map"></div>
+  {% endif %}
+
+  {% if amenity_rows %}
+  <div class="subsection-title">Neighborhood Amenities</div>
+  <table class="data-table">
+    <tr>
+      <th>Category</th>
+      <th>Name</th>
+      <th class="right">Distance</th>
+      <th>Notes</th>
+    </tr>
+    {% for row in amenity_rows %}
+    <tr>
+      <td>{{ row.category }}</td>
+      <td>{{ row.name }}</td>
+      <td class="right">{{ row.distance }}</td>
+      <td>{{ row.notes }}</td>
+    </tr>
+    {% endfor %}
+  </table>
   {% endif %}
 
   {% if fema_map_b64 %}
@@ -355,6 +375,11 @@
   </table>
   {% endif %}
 
+  {% if permitted_uses_description %}
+  <div class="subsection-title">Permitted Uses</div>
+  <div class="narrative">{{ permitted_uses_description }}</div>
+  {% endif %}
+
   {% if buildable_capacity or buildable_capacity_narrative %}
   <div class="subsection-title">Buildable Capacity</div>
   <div class="narrative">{{ buildable_capacity or buildable_capacity_narrative }}</div>
@@ -484,6 +509,76 @@
   </div>
 
   {% if rent_roll_intro %}<div class="narrative">{{ rent_roll_intro }}</div>{% endif %}
+
+  {% if unit_mix_summary_rows %}
+  <div class="subsection-title">Unit Mix Summary</div>
+  <table class="data-table">
+    <tr>
+      <th>Unit Type</th>
+      <th class="right">Count</th>
+      <th class="right">Avg SF</th>
+      <th class="right">Avg Rent</th>
+      <th class="right">Total Monthly Rent</th>
+    </tr>
+    {% for row in unit_mix_summary_rows %}
+    <tr>
+      <td>{{ row.unit_type }}</td>
+      <td class="right">{{ row.count }}</td>
+      <td class="right">{{ row.avg_sf }}</td>
+      <td class="right">{{ row.avg_rent }}</td>
+      <td class="right">{{ row.total_rent }}</td>
+    </tr>
+    {% endfor %}
+    {% if rent_roll_totals and rent_roll_totals.units %}
+    <tr class="total-row">
+      <td>Total</td>
+      <td class="right">{{ rent_roll_totals.units }}</td>
+      <td class="right">{{ rent_roll_totals.total_sf }}</td>
+      <td class="right">—</td>
+      <td class="right">{{ rent_roll_totals.total_monthly }}</td>
+    </tr>
+    {% endif %}
+  </table>
+  {% endif %}
+
+  {% if rent_roll_rows %}
+  <div class="subsection-title">Rent Roll Detail</div>
+  <table class="data-table">
+    <tr>
+      <th>Unit</th>
+      <th>Type</th>
+      <th class="right">SF</th>
+      <th>Tenant</th>
+      <th class="right">Monthly Rent</th>
+      <th class="right">Market Rent</th>
+      <th>Lease Start</th>
+      <th>Lease End</th>
+      <th>Status</th>
+    </tr>
+    {% for row in rent_roll_rows %}
+    <tr>
+      <td>{{ row.unit }}</td>
+      <td>{{ row.type }}</td>
+      <td class="right">{{ row.sf }}</td>
+      <td>{{ row.tenant }}</td>
+      <td class="right">{{ row.monthly_rent }}</td>
+      <td class="right">{{ row.market_rent }}</td>
+      <td>{{ row.lease_start }}</td>
+      <td>{{ row.lease_end }}</td>
+      <td>{{ row.status }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if rent_roll_totals and rent_roll_totals.total_monthly %}
+  <div class="source-note">
+    Occupied: {{ rent_roll_totals.occupied }} &nbsp;|&nbsp;
+    Vacant: {{ rent_roll_totals.vacant }} &nbsp;|&nbsp;
+    Total SF: {{ rent_roll_totals.total_sf }} &nbsp;|&nbsp;
+    Monthly In-Place Rent: {{ rent_roll_totals.total_monthly }} &nbsp;|&nbsp;
+    Annualized: {{ rent_roll_totals.annual }}
+  </div>
+  {% endif %}
+  {% endif %}
 
   <div class="subsection-title">Income Summary (Stabilized Year)</div>
   <table class="data-table">

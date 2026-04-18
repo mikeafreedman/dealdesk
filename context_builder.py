@@ -1,15 +1,13 @@
 """
-word_builder.py — Report Generation Module
-===========================================
-Generates the final PDF underwriting report in three stages:
+context_builder.py — Narrative + Template Context Builder
+=========================================================
+Generates the Sonnet narratives (Prompts 4-MASTER and 5D) and builds the
+template context dict consumed by report_builder.py (HTML → Playwright → PDF).
 
-    1. Prompt 4-MASTER (Sonnet) — batched generation of all narrative sections.
-    2. Prompt 5D (Sonnet, investor_mode only) — rewrites 9 narrative blocks
-       in LP-appropriate language.
-    3. docxtpl template population → LibreOffice headless PDF conversion.
-
-Pipeline position: Stage 7 — runs after financials.py.
-Output: {deal_id}_report.pdf saved to outputs/.
+Public entry point:
+    generate_narratives(deal)   — run 4-MASTER, then 5D if investor_mode
+    build_context(deal)         — build the full template context dict
+    fetch_street_view_image()   — Google Street View fallback hero photo
 """
 
 from __future__ import annotations
@@ -17,27 +15,17 @@ from __future__ import annotations
 import json
 import logging
 import os
-import platform
-from collections import defaultdict
-import subprocess
+import re
 import time
-from pathlib import Path
+from collections import defaultdict
 from typing import Optional
 
 import anthropic
-from docxtpl import DocxTemplate, InlineImage
-from docx.shared import Mm
-from docx.oxml.ns import qn
 
 from config import (
     ANTHROPIC_API_KEY,
     MODEL_SONNET,
-    OUTPUTS_DIR,
-    PDF_CONVERSION_TIMEOUT,
-    WORD_TEMPLATE,
 )
-from map_builder import build_all_maps, MapImages
-from chart_builder import build_all_charts, ChartImages
 from models.models import DealData, RecommendationVerdict
 
 logger = logging.getLogger(__name__)
@@ -230,20 +218,6 @@ def validate_and_build_narrative_context(deal: DealData) -> dict:
     return ctx
 
 
-def _safe_image(path, doc, width_cm):
-    """Return InlineImage if file exists with content, else None.
-    Never returns a placeholder."""
-    from docx.shared import Cm
-    if (path and
-            os.path.exists(path) and
-            os.path.getsize(path) > 0):
-        try:
-            return InlineImage(doc, path, width=Cm(width_cm))
-        except Exception:
-            return None
-    return None
-
-
 def fetch_street_view_image(address: str, deal_id: str, output_dir: str = "outputs") -> Optional[str]:
     """Fetch a Google Street View static image as a fallback hero photo.
     Returns path to saved image, or None if fetch fails."""
@@ -331,6 +305,11 @@ _SYSTEM_4MASTER = (
     "prop_desc_p4 (50-70 words): Utilities and infrastructure systems.\n"
     "utilities_analysis (50-70 words): Systems condition, deferred maintenance.\n"
     "ownership_narrative (80-110 words): Chain of title, entity structure, notable events.\n"
+    "  Ground this narrative in parcel_data.deed_history (recording_date, document_type,\n"
+    "  grantor, grantee, consideration_amount) when present — summarize recency of\n"
+    "  ownership, number of transfers, and any consideration amounts that stand out.\n"
+    "  If parcel_data.deed_history is empty, state that recorded-deed data is not\n"
+    "  available for this jurisdiction and reference parcel_data.owner_name only.\n"
     "liens_narrative (50-70 words): Recorded encumbrances. If none, state clearly.\n"
     "location_pullquote (15-25 words): Location's strongest attribute.\n"
     "location_overview_p1 (90-120 words): Neighborhood, submarket, major employers, transit.\n"
@@ -645,57 +624,6 @@ def _rewrite_investor_narratives(deal: DealData) -> None:
 # TEMPLATE CONTEXT BUILDER
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _excel_total_uses(deal) -> float:
-    """Compute total USES exactly as the Excel S&U tab sums it.
-
-    This mirrors the individual cell values written by excel_builder._section_uses()
-    plus the origination fee (which Excel computes as a formula but from the same inputs).
-    Renovations are NOT included here — they live in Below-the-Line (C168), not S&U.
-    """
-    a = deal.assumptions
-    fo = deal.financial_outputs
-    transfer_tax = a.purchase_price * a.transfer_tax_rate
-    professional = (a.legal_closing + a.title_insurance + a.legal_bank +
-                    a.appraisal + a.environmental + a.architect +
-                    a.structural + a.geotech + a.surveyor + a.civil_eng +
-                    a.meps + a.legal_zoning)
-    financing = (a.acq_fee_fixed + a.mortgage_carry + a.mezz_interest)
-    initial_loan = fo.initial_loan_amount or 0.0
-    origination = initial_loan * a.origination_fee_pct
-    soft = (a.working_capital + a.marketing + a.re_tax_carry +
-            a.prop_ins_carry + a.dev_fee + a.dev_pref + a.permits)
-    hard = (a.stormwater + a.demo + a.const_hard +
-            a.const_reserve + a.gc_overhead)
-    return (a.purchase_price + transfer_tax +
-            a.tenant_buyout + professional + financing + origination +
-            soft + hard)
-
-
-def _reconcile_total_uses(deal: DealData) -> float:
-    """Return the authoritative total project cost for PDF narratives.
-
-    Compares deal.financial_outputs.total_uses (Python-computed) against
-    the sum of individual Assumptions line items (what the Excel S&U tab
-    actually sums).  If they agree within $1, use fo.total_uses.
-    Otherwise, trust the Excel sum and log a warning.
-    """
-    a = deal.assumptions
-    fo = deal.financial_outputs
-    excel_total = _excel_total_uses(deal)
-    python_fo = fo.total_uses or 0.0
-
-    gap = abs(excel_total - python_fo)
-    if gap < 1.0:
-        logger.info("TOTAL PROJECT COST: excel_sum=%s, python_fo=%s, using=%s",
-                     f"{excel_total:,.0f}", f"{python_fo:,.0f}", f"{python_fo:,.0f}")
-        return python_fo
-    else:
-        logger.warning(
-            "TOTAL PROJECT COST MISMATCH: excel_sum=%s, python_fo=%s, gap=%s — using excel_sum",
-            f"{excel_total:,.0f}", f"{python_fo:,.0f}", f"{gap:,.0f}")
-        return excel_total
-
-
 _US_STATE_CODES = {
     "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
     "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
@@ -724,8 +652,8 @@ def _title_case_address(raw: str) -> str:
     return s
 
 
-def _build_context(deal: DealData) -> dict:
-    """Build the full template context dict from DealData for docxtpl."""
+def build_context(deal: DealData) -> dict:
+    """Build the full template context dict from DealData for the HTML report."""
     narr = deal.narratives
     a = deal.assumptions
     fo = deal.financial_outputs
@@ -934,8 +862,10 @@ def _build_context(deal: DealData) -> dict:
         {"parameter": "Rear Setback (ft)",     "standard": z.rear_setback_ft or "",    "proposed": "", "code_section": ""},
         {"parameter": "Side Setback (ft)",     "standard": z.side_setback_ft or "",    "proposed": "", "code_section": ""},
         {"parameter": "Min Parking Spaces",    "standard": z.min_parking_spaces or "", "proposed": "", "code_section": ""},
-        {"parameter": "Permitted Uses",        "standard": ", ".join(z.permitted_uses) if z.permitted_uses else "", "proposed": "", "code_section": ""},
     ]
+    ctx["permitted_uses_description"] = (
+        ", ".join(z.permitted_uses) if z.permitted_uses else ""
+    )
 
     # ── Pro forma table rows (formatted for report) ───────────────
     pf_rows = []
@@ -1084,6 +1014,8 @@ def _build_context(deal: DealData) -> dict:
     has_rent_roll = bool(getattr(deal, "rent_roll", None))
     if not has_unit_mix and not has_rent_roll:
         ctx["rent_roll_rows"] = []
+        ctx["unit_mix_summary_rows"] = []
+        ctx["rent_roll_totals"] = {}
         ctx["rent_roll_note"] = (
             "No rent roll data is on file. All gross potential "
             "rent figures in the pro forma are projection-based "
@@ -1094,6 +1026,76 @@ def _build_context(deal: DealData) -> dict:
         )
     else:
         ctx["rent_roll_note"] = ""
+        # Detailed rent roll rows (unit-by-unit)
+        rr_rows = []
+        total_sf = 0.0
+        total_rent = 0.0
+        occupied = 0
+        vacant = 0
+        for u in (ext.unit_mix or []):
+            if not isinstance(u, dict):
+                continue
+            sf = u.get("sf")
+            mr = u.get("monthly_rent")
+            status = (u.get("status") or "").strip()
+            if sf:
+                total_sf += float(sf)
+            if mr:
+                total_rent += float(mr)
+            s_low = status.lower()
+            if s_low in ("vacant", "vac"):
+                vacant += 1
+            elif s_low:
+                occupied += 1
+            rr_rows.append({
+                "unit":         u.get("unit_id") or "",
+                "type":         u.get("unit_type") or "",
+                "sf":           f"{float(sf):,.0f}" if sf else "",
+                "tenant":       u.get("tenant_name") or "",
+                "monthly_rent": f"${float(mr):,.0f}" if mr else "",
+                "market_rent":  (f"${float(u['market_rent']):,.0f}"
+                                 if u.get("market_rent") else ""),
+                "lease_start":  u.get("lease_start") or "",
+                "lease_end":    u.get("lease_end") or "",
+                "status":       status,
+            })
+        ctx["rent_roll_rows"] = rr_rows
+
+        # Aggregate by unit_type for summary table
+        agg: dict = defaultdict(lambda: {"count": 0, "sf_sum": 0.0,
+                                         "rent_sum": 0.0, "rent_n": 0})
+        for u in (ext.unit_mix or []):
+            if not isinstance(u, dict):
+                continue
+            t = (u.get("unit_type") or "Unspecified").strip() or "Unspecified"
+            a_ = agg[t]
+            a_["count"] += 1
+            if u.get("sf"):
+                a_["sf_sum"] += float(u["sf"])
+            if u.get("monthly_rent"):
+                a_["rent_sum"] += float(u["monthly_rent"])
+                a_["rent_n"] += 1
+        summary = []
+        for t, v in agg.items():
+            avg_sf = (v["sf_sum"] / v["count"]) if v["count"] else 0
+            avg_rent = (v["rent_sum"] / v["rent_n"]) if v["rent_n"] else 0
+            summary.append({
+                "unit_type":    t,
+                "count":        str(v["count"]),
+                "avg_sf":       f"{avg_sf:,.0f}" if avg_sf else "",
+                "avg_rent":     f"${avg_rent:,.0f}" if avg_rent else "",
+                "total_rent":   f"${v['rent_sum']:,.0f}" if v["rent_sum"] else "",
+            })
+        ctx["unit_mix_summary_rows"] = summary
+
+        ctx["rent_roll_totals"] = {
+            "units":          str(len(rr_rows)) if rr_rows else "",
+            "occupied":       str(occupied),
+            "vacant":         str(vacant),
+            "total_sf":       f"{total_sf:,.0f}" if total_sf else "",
+            "total_monthly":  f"${total_rent:,.0f}" if total_rent else "",
+            "annual":         f"${total_rent * 12:,.0f}" if total_rent else "",
+        }
 
     # Section 11.1 — Residential Rent Comparables
     if not ctx.get("rent_comp_rows"):
@@ -1252,16 +1254,6 @@ def _build_context(deal: DealData) -> dict:
          "value": _safe_fmt(fo.gp_equity)},
         {"label": "LP Equity",
          "value": _safe_fmt(fo.lp_equity)},
-        {"label": "Year 1 NOI",
-         "value": _safe_fmt(fo.noi_yr1)},
-        {"label": "Going-In Cap Rate",
-         "value": (_safe_fmt((fo.going_in_cap_rate or 0) * 100, fmt="{:.2f}%")
-                   if fo.going_in_cap_rate is not None else "N/A")},
-        {"label": "Year 1 DSCR",
-         "value": _safe_fmt(fo.dscr_yr1, fmt="{:.2f}x")},
-        {"label": "Year 1 Cash-on-Cash",
-         "value": (_safe_fmt((fo.cash_on_cash_yr1 or 0) * 100, fmt="{:.2f}%")
-                   if fo.cash_on_cash_yr1 is not None else "N/A")},
         {"label": "Project IRR",
          "value": (_safe_fmt((fo.project_irr or 0) * 100, fmt="{:.1f}%")
                    if fo.project_irr is not None else "N/A")},
@@ -1272,9 +1264,6 @@ def _build_context(deal: DealData) -> dict:
          "value": _safe_fmt(fo.lp_equity_multiple, fmt="{:.2f}x")},
         {"label": "Hold Period",
          "value": (f"{a.hold_period} years" if a.hold_period else "N/A")},
-        {"label": "Exit Cap Rate",
-         "value": (_safe_fmt((a.exit_cap_rate or 0) * 100, fmt="{:.2f}%")
-                   if a.exit_cap_rate else "N/A")},
     ]
     ctx["kpi_rows"] = kpi_rows
     logger.info("KPI_ROWS built: %d rows", len(kpi_rows))
@@ -1351,6 +1340,39 @@ def _build_context(deal: DealData) -> dict:
                 ctx["parcel_a_owner"],
                 ctx["parcel_a_zoning"])
 
+    # Deed / title transfer history — sourced from PHL rtt_summary in
+    # parcel_fetcher.py. Empty list when no data (non-Phl deal or no records).
+    def _fmt_recording_date(d):
+        if not d:
+            return "—"
+        s = str(d)[:10]
+        return s if re.match(r"^\d{4}-\d{2}-\d{2}$", s) else s
+
+    _deeds = (pd_.deed_history if pd_ else []) or []
+    ctx["deed_history_rows"] = [
+        {
+            "recording_date": _fmt_recording_date(d.recording_date),
+            "document_type":  d.document_type or "—",
+            "grantor":        d.grantor or "—",
+            "grantee":        d.grantee or "—",
+            "consideration":  (f"${d.consideration_amount:,.0f}"
+                               if d.consideration_amount not in (None, 0, 0.0)
+                               else "—"),
+            "document_id":    d.document_id or "—",
+        }
+        for d in _deeds
+    ]
+    # Deep-link to the county recorder portal (for jurisdictions where we
+    # couldn't pull full chain of title programmatically — i.e., most of
+    # the registry's 185 portal hosts). Value comes from the registry's
+    # recorder_of_deeds_url column, plumbed via provenance.field_sources.
+    ctx["recorder_portal_url"] = (
+        deal.provenance.field_sources.get("recorder_of_deeds_url") or ""
+    )
+    logger.info("DEED HISTORY ROWS: %d rows (portal=%s)",
+                len(ctx["deed_history_rows"]),
+                ctx["recorder_portal_url"][:60] or "none")
+
     # ── Fix 7: Transit rows for the template ─────────────────────────
     transit_list = list(getattr(md, "transit_options", []) or [])
     ctx["transit_rows"] = [
@@ -1363,6 +1385,19 @@ def _build_context(deal: DealData) -> dict:
         for t in transit_list[:8]
     ]
     logger.info("TRANSIT ROWS: %d rows", len(ctx["transit_rows"]))
+
+    # Amenity rows (rendered after the neighborhood context map)
+    amenity_list = list(getattr(md, "nearby_amenities", []) or [])
+    ctx["amenity_rows"] = [
+        {
+            "category": (a.get("category") or "").strip() or "—",
+            "name":     (a.get("name") or "").strip() or "—",
+            "distance": (a.get("distance") or "").strip() or "—",
+            "notes":    (a.get("notes") or "").strip(),
+        }
+        for a in amenity_list if isinstance(a, dict)
+    ]
+    logger.info("AMENITY ROWS: %d rows", len(ctx["amenity_rows"]))
 
     # ── Income Summary: use FIRST STABILIZED YEAR from pro forma ────
     # For stabilized assets stab_factor is 1.0 in Year 1.
@@ -1847,1599 +1882,14 @@ def _build_context(deal: DealData) -> dict:
     return ctx
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# DOCX GENERATION & PDF CONVERSION
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _strip_highlight(doc):
-    """Remove yellow highlight formatting from all runs."""
-    for para in doc.paragraphs:
-        for run in para.runs:
-            rPr = run._r.get_or_add_rPr()
-            highlight = rPr.find(qn('w:highlight'))
-            if highlight is not None:
-                rPr.remove(highlight)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    for run in para.runs:
-                        rPr = run._r.get_or_add_rPr()
-                        highlight = rPr.find(qn('w:highlight'))
-                        if highlight is not None:
-                            rPr.remove(highlight)
-
-
-
-def _set_cell_shading(cell, fill_color):
-    """Set cell background color."""
-    from docx.oxml import OxmlElement
-    tc_pr = cell._tc.get_or_add_tcPr()
-    shading = tc_pr.find(qn('w:shd'))
-    if shading is None:
-        shading = OxmlElement('w:shd')
-        tc_pr.append(shading)
-    shading.set(qn('w:fill'), fill_color)
-    shading.set(qn('w:val'), 'clear')
-
-
-def _set_cell_text_color(cell, color):
-    """Set all runs in cell to specified text color."""
-    from docx.oxml import OxmlElement
-    for paragraph in cell.paragraphs:
-        for run in paragraph.runs:
-            rpr = run._r.get_or_add_rPr()
-            c = rpr.find(qn('w:color'))
-            if c is None:
-                c = OxmlElement('w:color')
-                rpr.append(c)
-            c.set(qn('w:val'), color)
-
-
-def populate_table(table, data_rows, style="data"):
-    """Inject data rows into a table that currently has only a header row.
-
-    - table: the python-docx Table object
-    - data_rows: list of lists, each inner list = one row's cell values
-    - Removes ALL rows after the header (row 0) before adding data
-    """
-    import copy
-
-    if not data_rows:
-        if len(table.rows) > 1:
-            tr = table.rows[1]._tr
-            tr.getparent().remove(tr)
-        return
-
-    # Remove ALL placeholder rows after header (row 0)
-    while len(table.rows) > 1:
-        tr = table.rows[1]._tr
-        tr.getparent().remove(tr)
-
-    header_row = table.rows[0]
-
-    for row_data in data_rows:
-        new_row = copy.deepcopy(header_row._tr)
-        # Clear content from the copied header row
-        for cell_elem in new_row.findall(f'.//{qn("w:tc")}'):
-            for p in cell_elem.findall(f'.//{qn("w:p")}'):
-                for r in p.findall(f'.//{qn("w:r")}'):
-                    p.remove(r)
-        table._tbl.append(new_row)
-
-        new_docx_row = table.rows[-1]
-        for col_idx, cell_value in enumerate(row_data):
-            if col_idx >= len(new_docx_row.cells):
-                break
-            cell = new_docx_row.cells[col_idx]
-            cell.text = str(cell_value) if cell_value is not None else ""
-            # Style data rows: parchment background, walnut text
-            _set_cell_shading(cell, 'F5EFE4')
-            _set_cell_text_color(cell, '2C1F14')
-
-
-def _remove_image_placeholder_boxes(doc) -> None:
-    """Remove sage-green single-cell placeholder boxes wrapping image frames that have no actual image.
-
-    CRITICAL: In the v4 template, each sage-green image box contains BOTH
-    a {{ image_var }} placeholder AND a caption marker like "Hero Shot —
-    primary exterior elevation...".  After tpl.render(), the placeholder
-    is replaced with the InlineImage (a <w:drawing> element), but the
-    caption text remains in cell.text.  If we match only on caption text
-    we'll delete the whole cell — and the image we just rendered with it.
-
-    Fix: skip any cell that now contains a drawing (the image was
-    successfully rendered).  Only truly empty placeholder boxes are removed.
-    """
-    PLACEHOLDER_MARKERS = [
-        "Hero Shot", "Property Photo Gallery",
-        "Floor Plan", "Supply Pipeline",
-        "KPI Dashboard", "Insurance KPI Strip",
-        "Risk Matrix", "image_placements.json",
-        "Conditional block", "renders only when",
-        "Prompt 1A image extraction",
-        "plan=full width", "market.py output",
-        "FEMA Flood Map", "Flood Map",
-    ]
-    tables_to_remove = []
-    captions_stripped = 0
-    for table in doc.tables:
-        if len(table.rows) == 1 and len(table.rows[0].cells) == 1:
-            cell = table.rows[0].cells[0]
-            text = cell.text.strip()
-            if not any(m.lower() in text.lower() for m in PLACEHOLDER_MARKERS):
-                continue
-            # If a real image has rendered into this cell, keep the cell
-            # but strip the caption paragraphs (the text is developer
-            # documentation, not report copy).
-            if cell._tc.findall(f'.//{qn("w:drawing")}'):
-                for p in list(cell.paragraphs):
-                    if p._element.findall(f'.//{qn("w:drawing")}'):
-                        continue
-                    p._element.getparent().remove(p._element)
-                captions_stripped += 1
-                continue
-            tables_to_remove.append(table)
-    for table in tables_to_remove:
-        tbl = table._tbl
-        tbl.getparent().remove(tbl)
-    logger.info("PLACEHOLDER: removed %d image placeholder boxes, "
-                "stripped %d captions from rendered image cells",
-                len(tables_to_remove), captions_stripped)
-
-
-def _remove_parameter_placeholder_boxes(doc, labels: list) -> int:
-    """Remove single-cell placeholder boxes whose cell text EQUALS one of the
-    provided labels (case-insensitive, whitespace-stripped).
-
-    Safer than remove_placeholder_box for parameter labels that also appear as
-    data values inside populated multi-row tables — the equality check + the
-    single-cell filter prevents accidentally removing real data tables or
-    narrative paragraph blocks.
-    """
-    label_set = {s.strip().lower() for s in labels}
-    to_remove = []
-    removed_labels = []
-    for table in doc.tables:
-        if len(table.rows) != 1 or len(table.rows[0].cells) != 1:
-            continue
-        raw_text = table.rows[0].cells[0].text.strip()
-        if raw_text.lower() in label_set:
-            to_remove.append(table)
-            removed_labels.append(raw_text)
-    for table in to_remove:
-        tbl = table._tbl
-        tbl.getparent().remove(tbl)
-    for lbl in removed_labels:
-        logger.info("PLACEHOLDER KPI: removed box '%s'", lbl)
-    if to_remove:
-        logger.info("PLACEHOLDER: removed %d parameter-label boxes", len(to_remove))
-    return len(to_remove)
-
-
-def log_all_table_indexes(doc) -> None:
-    """Print the first cell of each table to verify index mappings.
-
-    Run once after template render to confirm table order matches the indices
-    used by _safe_pop() in _populate_data_tables().
-    """
-    for i, table in enumerate(doc.tables):
-        if table.rows and table.rows[0].cells:
-            first_cell = table.rows[0].cells[0].text[:80].replace("\n", " ")
-        else:
-            first_cell = "(empty)"
-        logger.info("TABLE[%d]: '%s'", i, first_cell)
-
-
-def _populate_exec_summary_kpi(doc, deal: DealData) -> None:
-    """Populate the Section 01 Executive Summary KPI table.
-
-    Locates the table by keyword search (first table whose text contains both
-    'Purchase Price' and 'LP IRR' — distinguishes it from the S&U and
-    assumptions tables which also mention Purchase Price).
-    """
-    a = deal.assumptions
-    fo = deal.financial_outputs
-
-    def _pct(v):
-        return f"{v * 100:.2f}%" if isinstance(v, (int, float)) and v else "N/A"
-
-    def _pct1(v):
-        return f"{v * 100:.1f}%" if isinstance(v, (int, float)) and v else "N/A"
-
-    kpi_rows = [
-        ["Purchase Price",       f"${(a.purchase_price or 0):,.0f}"],
-        ["Total Project Cost",   f"${(fo.total_uses or 0):,.0f}"],
-        ["Total Equity Required",f"${(fo.total_equity_required or 0):,.0f}"],
-        ["GP Equity",            f"${(fo.gp_equity or 0):,.0f}"],
-        ["LP Equity",            f"${(fo.lp_equity or 0):,.0f}"],
-        ["Year 1 NOI",           f"${(fo.noi_yr1 or 0):,.0f}"],
-        ["Going-In Cap Rate",    _pct(fo.going_in_cap_rate)],
-        ["Year 1 DSCR",          f"{fo.dscr_yr1:.2f}x" if fo.dscr_yr1 else "N/A"],
-        ["Year 1 Cash-on-Cash",  _pct(fo.cash_on_cash_yr1)],
-        ["LP IRR",               _pct1(fo.lp_irr)],
-        ["LP Equity Multiple",   f"{fo.lp_equity_multiple:.2f}x" if fo.lp_equity_multiple else "N/A"],
-        ["Project IRR",          _pct1(fo.project_irr)],
-        ["Hold Period",          f"{a.hold_period} Years"],
-        ["Exit Cap Rate",        _pct(a.exit_cap_rate)],
-    ]
-
-    # Locate by header-row text: the KPI table's first row contains one of
-    # ('Metric', 'Value', 'KPI') as a column label, not the data values.
-    target = None
-    for table in doc.tables:
-        if not table.rows:
-            continue
-        header_txt = ' '.join(c.text for c in table.rows[0].cells).lower()
-        if 'metric' in header_txt or 'kpi' in header_txt or (
-                'value' in header_txt and len(table.rows[0].cells) <= 3):
-            target = table
-            break
-    if target is None:
-        logger.info("EXEC KPI: could not find exec summary KPI table — skipping")
-        return
-
-    logger.info("EXEC KPI: found KPI table, populating %d rows", len(kpi_rows))
-    logger.info("KPI TABLE: irr=%s lp_irr=%s em=%s",
-                fo.project_irr, fo.lp_irr, fo.lp_equity_multiple)
-    populate_table(target, kpi_rows)
-
-
-def _fix_dark_data_rows(doc) -> int:
-    """Fix data rows that inherited the header's dark background after render."""
-    count = 0
-    for table in doc.tables:
-        for ri, row in enumerate(table.rows):
-            if ri == 0:
-                continue
-            for cell in row.cells:
-                tc_pr = cell._tc.find(qn('w:tcPr'))
-                if tc_pr is not None:
-                    shd = tc_pr.find(qn('w:shd'))
-                    if shd is not None:
-                        current_fill = (shd.get(qn('w:fill')) or '').upper()
-                        if current_fill == '2C1F14':
-                            _set_cell_shading(cell, 'F5EFE4')
-                            _set_cell_text_color(cell, '2C1F14')
-                            count += 1
-    return count
-
-
-def _fix_toc_page_break(doc) -> None:
-    """Ensure the TABLE OF CONTENTS paragraph starts on its own page."""
-    from docx.oxml import OxmlElement
-    for para in doc.paragraphs:
-        if "TABLE OF CONTENTS" in (para.text or "").upper():
-            pPr = para._p.get_or_add_pPr()
-            pageBreak = OxmlElement('w:pageBreakBefore')
-            pageBreak.set(qn('w:val'), '1')
-            pPr.append(pageBreak)
-            logger.info("TOC: page break added before paragraph")
-            return
-
-
-def remove_placeholder_box(doc, placeholder_text_contains):
-    """Find a SINGLE-CELL placeholder table whose cell contains the given text
-    and remove it entirely.
-
-    The sage green placeholder boxes are single-cell tables containing
-    {{ image_variable }} or descriptive caption text. When the image is
-    not available, the table renders as an empty styled box.
-
-    CRITICAL: must only match single-cell tables (1 row × 1 col). Otherwise
-    loose substrings like "Year 1" match populated data tables (the 10-year
-    pro forma starts every row with "Year 1", "Year 2", …) and we delete
-    the whole populated table instead of the placeholder box.
-    """
-    for table in doc.tables:
-        if len(table.rows) != 1 or len(table.rows[0].cells) != 1:
-            continue
-        full_text = table.rows[0].cells[0].text
-        if placeholder_text_contains.lower() in full_text.lower():
-            tbl = table._tbl
-            tbl.getparent().remove(tbl)
-            logger.info("PLACEHOLDER REMOVED: table containing '%s'", placeholder_text_contains)
-            return True
-    return False
-
-
-def _pop_by_header(doc, header_keyword: str, rows: list, label: str,
-                   num_cols: int | None = None) -> bool:
-    """Find a table whose first-cell text EQUALS header_keyword and populate it.
-
-    Uses case-insensitive, whitespace-stripped EXACT equality — not substring —
-    to avoid collisions like "Type" matching "Asset Type" on the cover table
-    (which caused the Violations row to overwrite the cover). Every caller in
-    this file passes a keyword that's the full first-cell label.
-
-    If `num_cols` is given, also require the matching table to have exactly
-    that many columns. Use this to disambiguate when several templates share
-    a generic first-cell label (e.g. both the Parcel table and the Owner
-    Entity table start with "Field"; Parcel = 3 cols, Owner = 2 cols).
-    """
-    for i, t in enumerate(doc.tables):
-        try:
-            first = t.cell(0, 0).text.strip()
-            col_count = len(t.rows[0].cells)
-        except Exception:
-            continue
-        if num_cols is not None and col_count != num_cols:
-            continue
-        if header_keyword.lower() == first.lower():
-            try:
-                populate_table(t, rows)
-                logger.info("%s: populated %d rows into table[%d] (header='%s')",
-                            label, len(rows), i, first[:40])
-                return True
-            except Exception as e:
-                logger.error("%s: populate failed on table[%d] — %s", label, i, e)
-                return False
-    logger.warning("%s: could not find table with header '%s'", label, header_keyword)
-    return False
-
-
-def populate_sensitivity_table(doc, deal: DealData) -> None:
-    """Find the sensitivity table and populate with IRR matrix data."""
-    import copy
-
-    fo = deal.financial_outputs
-    matrix = fo.sensitivity_matrix
-    if not matrix:
-        logger.info("SENSITIVITY: no matrix data — skipping table population")
-        return
-
-    # Find the table by searching for sensitivity-related keywords
-    target_table = None
-    for table in doc.tables:
-        full_text = ' '.join(c.text for row in table.rows for c in row.cells)
-        if any(kw in full_text.lower() for kw in ['exit cap', 'revenue growth', 'sensitivity', 'irr']):
-            target_table = table
-            break
-
-    if target_table is None:
-        logger.info("SENSITIVITY: could not find sensitivity table in document")
-        return
-
-    cap_labels = [f"{c * 100:.1f}%" for c in (fo.sensitivity_axis_exit_cap or [])]
-    growth_labels = [f"{g * 100:.1f}%/yr" for g in (fo.sensitivity_axis_rent_growth or [])]
-    note = fo.sensitivity_note or ""
-
-    if not cap_labels or not growth_labels:
-        logger.info("SENSITIVITY: no axis labels — skipping")
-        return
-
-    # Clear existing rows except header
-    tbl = target_table._tbl
-    rows_to_remove = list(tbl.findall(qn('w:tr')))[1:]
-    for tr in rows_to_remove:
-        tbl.remove(tr)
-
-    # Rebuild header row with growth labels
-    header_cells = target_table.rows[0].cells
-    header_cells[0].text = "Exit Cap \\ Rev Growth"
-    _set_cell_shading(header_cells[0], '2C1F14')
-    _set_cell_text_color(header_cells[0], 'F5EFE4')
-    for j, label in enumerate(growth_labels):
-        if j + 1 < len(header_cells):
-            header_cells[j + 1].text = label
-            _set_cell_shading(header_cells[j + 1], '2C1F14')
-            _set_cell_text_color(header_cells[j + 1], 'F5EFE4')
-    logger.info("SENSITIVITY HEADER: wrote '%s' + %s",
-                "Exit Cap \\\\ Rev Growth", growth_labels)
-
-    # Add data rows
-    header_tr = tbl.findall(qn('w:tr'))[0]
-    for i, row_data in enumerate(matrix):
-        new_tr = copy.deepcopy(header_tr)
-        for tc in new_tr.findall(f'.//{qn("w:t")}'):
-            tc.text = ''
-        tbl.append(new_tr)
-
-        new_row = target_table.rows[-1]
-        cap_label = cap_labels[i] if i < len(cap_labels) else ""
-        new_row.cells[0].text = cap_label
-        _set_cell_shading(new_row.cells[0], 'F5EFE4')
-        _set_cell_text_color(new_row.cells[0], '2C1F14')
-
-        for j, irr_val in enumerate(row_data):
-            if j + 1 < len(new_row.cells):
-                cell = new_row.cells[j + 1]
-                if isinstance(irr_val, str):
-                    cell.text = irr_val
-                elif irr_val is None:
-                    cell.text = "N/A"
-                else:
-                    cell.text = f"{irr_val * 100:.1f}%"
-                _set_cell_shading(cell, 'F5EFE4')
-                _set_cell_text_color(cell, '2C1F14')
-
-                # Bold the base case (center cell)
-                if i == len(matrix) // 2 and j == len(row_data) // 2:
-                    for para in cell.paragraphs:
-                        for run in para.runs:
-                            run.bold = True
-
-    # Add note paragraph after the table
-    if note:
-        from docx.oxml import OxmlElement
-        tbl_parent = tbl.getparent()
-        tbl_idx = list(tbl_parent).index(tbl)
-        note_para = OxmlElement('w:p')
-        note_run = OxmlElement('w:r')
-        note_rpr = OxmlElement('w:rPr')
-        note_i = OxmlElement('w:i')
-        note_sz = OxmlElement('w:sz')
-        note_sz.set(qn('w:val'), '16')  # 8pt
-        note_rpr.append(note_i)
-        note_rpr.append(note_sz)
-        note_run.append(note_rpr)
-        note_t = OxmlElement('w:t')
-        note_t.text = note
-        note_run.append(note_t)
-        note_para.append(note_run)
-        tbl_parent.insert(tbl_idx + 1, note_para)
-
-    logger.info("SENSITIVITY: table populated (%d rows × %d cols)",
-                len(matrix), len(growth_labels))
-
-
-def _remove_empty_single_cell_tables(doc) -> None:
-    """Remove single-cell tables that are empty or contain placeholder text."""
-    remove_keywords = [
-        'KPI Dashboard', '12-metric traffic', 'Risk-Weighted',
-        'Monte Carlo', 'Conditional block', 'Pending enrichment',
-    ]
-    tables_to_remove = []
-    for table in doc.tables:
-        if len(table.rows) == 1 and len(table.columns) == 1:
-            text = table.rows[0].cells[0].text.strip()
-            if (text == '' or
-                    any(kw in text for kw in remove_keywords) or
-                    text.startswith('Conditional block')):
-                tables_to_remove.append(table)
-
-    for table in tables_to_remove:
-        tbl = table._tbl
-        tbl.getparent().remove(tbl)
-
-    if tables_to_remove:
-        logger.info("PLACEHOLDER REMOVAL: removed %d empty/placeholder boxes",
-                    len(tables_to_remove))
-
-
-def _remove_paragraphs_containing(doc, search_strings: list) -> None:
-    """Remove paragraphs whose text contains any of the given strings."""
-    for p in doc.paragraphs:
-        if any(s.lower() in p.text.lower() for s in search_strings):
-            parent = p._element.getparent()
-            parent.remove(p._element)
-            logger.info("PLACEHOLDER REMOVED: paragraph containing '%s'",
-                        p.text[:80] if p.text else "(empty)")
-
-
-def _remove_empty_placeholders(doc, deal: DealData) -> None:
-    """Remove sage green placeholder boxes for images/data that are not available."""
-    ins = deal.insurance
-    ins_pf = ins.insurance_proforma_line_item or deal.assumptions.insurance
-
-    # Image placeholders — remove if the image was not generated
-    # (docxtpl rendered them as empty strings, leaving empty styled tables)
-    placeholder_removals = [
-        ("photo_gallery_hero", "Hero Shot"),
-        ("photo_gallery_grid", "Photo Gallery"),
-        ("floor_plan_block", "Floor Plan"),
-        ("supply_pipeline_chart", "Supply Pipeline"),
-    ]
-    for ctx_key, search_text in placeholder_removals:
-        remove_placeholder_box(doc, search_text)
-
-    # Remove floor plan instruction paragraphs that leak into PDF
-    # These are plain paragraphs (not tables) containing instruction text
-    _remove_paragraphs_containing(doc, [
-        "Conditional block",
-        "renders only when image_type",
-        # Word-only TOC refresh instruction — meaningless in the PDF.
-        "Right-click the table above",
-        "Update Field",
-        "refresh page numbers",
-    ])
-
-    # Insurance KPI Strip placeholder
-    remove_placeholder_box(doc, "Insurance KPI Strip")
-
-    # Replace recommended insurance line item text
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                if "Recommended Pro Forma Insurance Line Item" in cell.text:
-                    cell.text = (f"Recommended Pro Forma Insurance Line Item "
-                                 f"(recurring, stabilized): ${ins_pf:,.0f}/year")
-                    logger.info("PLACEHOLDER: wrote insurance proforma line item $%.0f", ins_pf)
-
-    logger.info("PLACEHOLDER REMOVAL: completed")
-
 
 # ═══════════════════════════════════════════════════════════════════════════
-# IMAGE CONTEXT BUILDER
+# PUBLIC ENTRY POINTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _build_image_context(deal: DealData, tpl: DocxTemplate) -> dict:
-    """
-    Generate all map and chart images and return them as InlineImage
-    objects ready for docxtpl template substitution.
-    Each image slot gets either a real InlineImage or None.
-    """
-    import tempfile, os
-    ctx = {}
-    _tmp_files = []  # track temp files — deleted after tpl.render() completes
-
-    def _inline(png_bytes, w_mm=160, h_mm=100):
-        if not png_bytes:
-            return None
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        tmp.write(png_bytes)
-        tmp.close()
-        # Do NOT delete here — InlineImage is lazy and reads the file during tpl.render()
-        # Temp files are cleaned up in _populate_docx after render completes
-        _tmp_files.append(tmp.name)
-        try:
-            return InlineImage(tpl, tmp.name, width=Mm(w_mm), height=Mm(h_mm))
-        except Exception as exc:
-            logger.warning("InlineImage creation failed: %s", exc)
-            return None
-
-    # Maps
-    try:
-        maps = build_all_maps(deal)
-    except Exception as exc:
-        logger.error("map_builder failed: %s", exc)
-        maps = MapImages()
-
-    ctx["img_aerial_map"]       = _inline(maps.aerial)
-    ctx["img_neighborhood_map"] = _inline(maps.neighborhood)
-    ctx["img_fema_map"]         = _inline(maps.fema)
-
-    # Charts
-    try:
-        charts = build_all_charts(deal)
-    except Exception as exc:
-        logger.error("chart_builder failed: %s", exc)
-        charts = ChartImages()
-
-    ctx["img_kpi_dashboard"]     = _inline(charts.kpi_dashboard,  w_mm=170, h_mm=75)
-    ctx["kpi_dashboard_image"]   = ctx["img_kpi_dashboard"]  # template alias
-    ctx["img_demographic_chart"] = _inline(charts.demographic,   w_mm=160, h_mm=90)
-    ctx["img_proforma_chart"]    = _inline(charts.proforma,      w_mm=160, h_mm=90)
-    ctx["img_irr_heatmap"]       = _inline(charts.irr_heatmap,   w_mm=160, h_mm=90)
-    ctx["img_capital_stack"]     = _inline(charts.capital_stack, w_mm=80,  h_mm=100)
-    ctx["img_financing_chart"]   = _inline(charts.financing,     w_mm=160, h_mm=80)
-    ctx["img_risk_matrix"]       = _inline(charts.risk_matrix,   w_mm=160, h_mm=90)
-    ctx["img_gantt_chart"]       = _inline(charts.gantt,         w_mm=160, h_mm=80)
-
-    # Street View hero image — fallback when no OM photos available
-    street_view_path = fetch_street_view_image(
-        deal.address.full_address or "",
-        deal.deal_id or "unknown",
-    )
-    if street_view_path and os.path.exists(street_view_path):
-        try:
-            ctx["photo_gallery_hero"] = InlineImage(
-                tpl, street_view_path, width=Mm(160), height=Mm(100))
-            # Override the "no photos" note: the street-view hero IS a photo.
-            ctx["photo_gallery_note"] = (
-                "Hero image: Google Street View capture of the property "
-                "frontage on the report date. Replace with site-inspection "
-                "photographs prior to investment committee presentation."
-            )
-            logger.info("PHOTO GALLERY: inserting street view from %s", street_view_path)
-            logger.info("STREET VIEW: wired as photo_gallery_hero")
-        except Exception as exc:
-            logger.warning("STREET VIEW: InlineImage failed — %s", exc)
-            ctx["photo_gallery_hero"] = None
-    else:
-        logger.warning("STREET VIEW: path not found or None — %s", street_view_path)
-        ctx.setdefault("photo_gallery_hero", None)
-
-    # ── Fix 2: street_view_image context alias (template uses {{ street_view_image }})
-    _sv_candidates = [
-        street_view_path,
-        os.path.join("outputs", f"{deal.deal_id or 'unknown'}_street_view.jpg"),
-    ]
-    ctx["street_view_image"] = None
-    ctx["has_street_view"] = False
-    for _sv in _sv_candidates:
-        if _sv and os.path.exists(_sv):
-            try:
-                ctx["street_view_image"] = InlineImage(
-                    tpl, _sv, width=Mm(140))
-                ctx["has_street_view"] = True
-                logger.info("STREET VIEW: embedded from %s", _sv)
-                break
-            except Exception as exc:
-                logger.warning("STREET VIEW alias: InlineImage failed (%s) — %s",
-                               _sv, exc)
-    if not ctx["has_street_view"]:
-        logger.warning("STREET VIEW: no image available for alias — tried %s",
-                       _sv_candidates)
-
-    # Photo/floor plan/supply pipeline chart placeholders — not yet wired
-    # but referenced in the template.  Set to None so {%tr if %} removes them.
-    ctx.setdefault("photo_gallery_grid", None)
-    ctx.setdefault("floor_plan_block", None)
-    ctx.setdefault("supply_pipeline_chart", None)
-    ctx.setdefault("has_floor_plans", False)
-    ctx.setdefault("floor_plan_images", [])
-    logger.info("FLOOR PLAN: has_floor_plans=%s", ctx["has_floor_plans"])
-    logger.info("KPI TABLE: img_kpi_dashboard=%s", "present" if ctx.get("img_kpi_dashboard") else "None")
-
-    # IMAGE CONTEXT log — detailed availability breakdown
-    image_vars = {k: v for k, v in ctx.items() if
-                  k.startswith(("map_", "chart_", "fig_", "img_",
-                                "hero_", "photo_", "floor_",
-                                "supply_pipeline_chart"))}
-    available = sum(1 for v in image_vars.values() if v is not None)
-    missing = [k for k, v in image_vars.items() if v is None]
-    logger.info("IMAGE CONTEXT: %d/%d available — missing: %s",
-                available, len(image_vars), missing)
-
-    # Replace None image values with empty string so docxtpl does not
-    # render None for image slots (conditional tags were removed from
-    # the template due to Word XML run-splitting issues).
-    clean_ctx = {k: (v if v is not None else "") for k, v in ctx.items()}
-    return clean_ctx, _tmp_files
-
-
-def _populate_data_tables(doc, deal: DealData, ctx: dict) -> None:
-    """Populate all data tables in the rendered document using populate_table()."""
-    # Diagnostic: dump table indexes + first-cell text for verification
-    log_all_table_indexes(doc)
-
-    # Executive summary KPI table (located via keyword search, not index)
-    _populate_exec_summary_kpi(doc, deal)
-
-    a = deal.assumptions
-    fo = deal.financial_outputs
-    ext = deal.extracted_docs
-    md = deal.market_data
-    pd_ = deal.parcel_data
-    z = deal.zoning
-    proforma = fo.pro_forma_years or []
-    hold = a.hold_period or 10
-    gba = a.gba_sf or 1
-
-    def _tbl(idx):
-        try:
-            return doc.tables[idx]
-        except IndexError:
-            logger.warning("TABLE POPULATE: table index %d out of range (%d tables)",
-                           idx, len(doc.tables))
-            return None
-
-    _populate_counter = [0]  # list for closure-mutable counter
-
-    def _safe_pop(idx, rows):
-        t = _tbl(idx)
-        if t is not None:
-            populate_table(t, rows)
-            _populate_counter[0] += 1
-
-    # ── Table 10 (idx=9): Parcel & Improvement Data ──────────────
-    # Template header is "Field / Parcel A / Parcel B" (3 cols). When OPA
-    # parcel_data is present we populate the full schema; when it is missing
-    # (common — Philly OPA scraper gap for range addresses) we fall back to
-    # the fields the pipeline DOES have so the table isn't empty.
-    if pd_:
-        parcel_rows = [
-            ["Parcel ID (APN/OPA)", pd_.parcel_id or "—", "—"],
-            ["Owner", pd_.owner_name or "—", "—"],
-            ["Assessed Value", f"${pd_.assessed_value:,.0f}" if pd_.assessed_value else "—", "—"],
-            ["Land Value", f"${pd_.land_value:,.0f}" if pd_.land_value else "—", "—"],
-            ["Improvement Value", f"${pd_.improvement_value:,.0f}" if pd_.improvement_value else "—", "—"],
-            ["Last Sale Date", pd_.last_sale_date or "—", "—"],
-            ["Last Sale Price", f"${pd_.last_sale_price:,.0f}" if pd_.last_sale_price else "—", "—"],
-            ["Lot Area", f"{pd_.lot_area_sf:,.0f} SF" if pd_.lot_area_sf else "—", "—"],
-            ["Building SF", f"{pd_.building_sf:,.0f} SF" if pd_.building_sf else "—", "—"],
-            ["Year Built", str(pd_.year_built) if pd_.year_built else "—", "—"],
-            ["Zoning", pd_.zoning_code or "—", "—"],
-        ]
-    else:
-        addr = deal.address
-        parcel_rows = [
-            ["Census Tract", addr.census_tract or "—", "—"],
-            ["FIPS Code",    addr.fips_code    or "—", "—"],
-            ["Asset Type",   deal.asset_type.value,     "—"],
-            ["Zoning",       z.zoning_code or "Pending verification", "—"],
-            ["Units",        str(a.num_units) if a.num_units else "—", "—"],
-            ["Building SF",  f"{a.gba_sf:,.0f} SF" if a.gba_sf else "—", "—"],
-            ["Lot Area",     f"{a.lot_sf:,.0f} SF" if a.lot_sf else "—", "—"],
-            ["Year Built",   str(a.year_built) if a.year_built else "—", "—"],
-        ]
-    logger.info("PARCEL TABLE: writing %d rows (parcel_data=%s)",
-                len(parcel_rows), "present" if pd_ else "fallback")
-    logger.info("PARCEL CTX: parcel_id=%s owner=%s zoning=%s",
-                getattr(pd_, 'parcel_id', None) if pd_ else None,
-                getattr(pd_, 'owner_name', None) if pd_ else None,
-                getattr(z, 'zoning_code', None) if z else None)
-    _pop_by_header(doc, "Field", parcel_rows, "PARCEL", num_cols=3)
-
-    # ── Ownership History ─────────────────────────────────────────
-    _pop_by_header(doc, "Date", [], "OWNERSHIP_HIST")
-
-    # ── Current Ownership & Entity ────────────────────────────────
-    owner_rows = []
-    if pd_ and pd_.owner_name:
-        owner_rows = [
-            ["Owner Name", pd_.owner_name or "Not provided"],
-            ["Entity Type", pd_.owner_entity or "Not provided"],
-        ]
-    _pop_by_header(doc, "Field", owner_rows, "OWNER_ENTITY", num_cols=2)
-
-    # ── Liens, Mortgages & Encumbrances ──────────────────────────
-    _safe_pop(12, [["—", "No recorded liens on file", "—", "—", "—", "—"]])
-
-    # ── Zoning Standards (always 12 rows) ─────────────────────────
-    zoning_rows = [
-        ["Zoning District",    z.zoning_code or "Pending verification",  "—",  z.zoning_code_chapter or "Title 14"],
-        ["District Name",      z.zoning_district or "—",                 "—",  ""],
-        ["Max Height (ft)",    f"{z.max_height_ft:.0f} ft" if z.max_height_ft else "—", "—", ""],
-        ["Max Stories",        str(z.max_stories) if z.max_stories else "—", "—", ""],
-        ["Min Lot Area (SF)",  f"{z.min_lot_area_sf:,.0f}" if z.min_lot_area_sf else "—", "—", ""],
-        ["Max Lot Coverage",   f"{z.max_lot_coverage_pct:.0%}" if z.max_lot_coverage_pct else "—", "—", ""],
-        ["Max FAR",            f"{z.max_far:.2f}" if z.max_far else "—", "—", ""],
-        ["Front Setback (ft)", f"{z.front_setback_ft:.0f}" if z.front_setback_ft else "—", "—", ""],
-        ["Rear Setback (ft)",  f"{z.rear_setback_ft:.0f}" if z.rear_setback_ft else "—", "—", ""],
-        ["Side Setback (ft)",  f"{z.side_setback_ft:.0f}" if z.side_setback_ft else "—", "—", ""],
-        ["Parking Required",   str(z.min_parking_spaces) if z.min_parking_spaces else "—", "—", ""],
-        ["Permitted Uses",     ", ".join(z.permitted_uses) if z.permitted_uses else "—", "—", ""],
-    ]
-    _pop_by_header(doc, "Parameter", zoning_rows, "ZONING")
-
-    # ── Transportation & Access ───────────────────────────────────
-    transit_data = list(getattr(md, "transit_options", []) or [])
-    transit_rows = [
-        [t.get("mode", "—"), t.get("route", "—"),
-         t.get("distance", "—"), t.get("destination", "—")]
-        for t in transit_data[:8]
-    ]
-    if not transit_rows:
-        transit_rows = [["Transit data", "No nearby transit found", "—", "OSM Overpass"]]
-    logger.info("TRANSIT TABLE: %d rows", len(transit_rows))
-    _pop_by_header(doc, "Mode", transit_rows, "TRANSIT")
-
-    # ── Nearby Amenities ──────────────────────────────────────────
-    amenity_data = list(getattr(md, "nearby_amenities", []) or [])
-    amenity_rows = [
-        [a_item.get("category", "—"), a_item.get("name", "—"),
-         a_item.get("distance", "—"), a_item.get("notes", "")]
-        for a_item in amenity_data[:15]
-    ]
-    if not amenity_rows:
-        amenity_rows = [["Amenity data", "No nearby amenities found", "—", "OpenStreetMap"]]
-    logger.info("AMENITY TABLE: %d rows", len(amenity_rows))
-    _pop_by_header(doc, "Category", amenity_rows, "AMENITY")
-
-    # ── Key Demographic Indicators ────────────────────────────────
-    if md.population_1mi or md.median_hh_income_1mi or md.population_3mi:
-        demo_rows = [
-            ["Population", f"{md.population_1mi:,}" if md.population_1mi else "—",
-             f"{md.population_3mi:,}" if md.population_3mi else "—", "—", "2022 ACS 5-Year"],
-            ["Median HH Income", f"${md.median_hh_income_1mi:,.0f}" if md.median_hh_income_1mi else "—",
-             f"${md.median_hh_income_3mi:,.0f}" if md.median_hh_income_3mi else "—", "—", "2022 ACS 5-Year"],
-            ["Renter Occupancy", f"{md.pct_renter_occ_1mi:.1%}" if md.pct_renter_occ_1mi else "—",
-             f"{md.pct_renter_occ_3mi:.1%}" if md.pct_renter_occ_3mi else "—", "—", "2022 ACS 5-Year"],
-            ["Unemployment Rate", f"{md.unemployment_rate:.1%}" if md.unemployment_rate else "—",
-             "—", "—", "BLS / ACS 2022"],
-        ]
-    else:
-        demo_rows = [
-            ["Population", "—", "1,593,208", "\u2191 Growing", "2022 ACS 5-Year"],
-            ["Median HH Income", "—", "$57,537", "Stable", "2022 ACS 5-Year"],
-            ["Renter Occupancy", "—", "47.8%", "High", "2022 ACS 5-Year"],
-            ["Unemployment Rate", "—", "8.6%", "Above MSA avg", "BLS / ACS 2022"],
-        ]
-    logger.info(
-        "DEMOGRAPHICS: pop_1mi=%s pop_3mi=%s income_1mi=%s income_3mi=%s "
-        "renter_1mi=%s renter_3mi=%s unemployment=%s",
-        md.population_1mi, md.population_3mi,
-        md.median_hh_income_1mi, md.median_hh_income_3mi,
-        md.pct_renter_occ_1mi, md.pct_renter_occ_3mi,
-        md.unemployment_rate,
-    )
-    _pop_by_header(doc, "Indicator", demo_rows, "DEMOGRAPHICS")
-
-    # ── Table 21 (idx=20): Pipeline Register ──────────────────────
-    _safe_pop(20, [["No pipeline data available", "—", "—", "CoStar data required", "—", "—"]])
-
-    # ── Table 22 (idx=21): Unit Mix Summary ───────────────────────
-    units = ext.unit_mix or [] if ext else []
-    unit_buckets = defaultdict(lambda: {"count": 0, "rents": []})
-    units_src = (deal.extracted_docs.unit_mix or []) if deal.extracted_docs else []
-    for u in units_src:
-        utype = (u.get("unit_type") or u.get("type") or "N/A").strip()
-        cnt = int(float(u.get("count") or 1))
-        unit_buckets[utype]["count"] += cnt
-        rent = u.get("monthly_rent") or 0
-        if rent and rent > 0:
-            # append the unit-level rent, weighted by count via repetition
-            for _ in range(cnt):
-                unit_buckets[utype]["rents"].append(rent)
-
-    total_annual_gpr = sum(
-        (u.get("monthly_rent") or 0) * int(float(u.get("count") or 1)) * 12
-        for u in units_src
-    )
-
-    unit_mix_rows = []
-    for utype, d in unit_buckets.items():
-        avg_rent = (sum(d["rents"]) / len(d["rents"])) if d["rents"] else 0
-        type_annual = avg_rent * d["count"] * 12
-        pct_gpr = (f"{type_annual / total_annual_gpr * 100:.1f}%"
-                   if total_annual_gpr else "N/A")
-        unit_mix_rows.append([
-            utype, str(d["count"]), "N/A",
-            f"${avg_rent:,.0f}/mo" if avg_rent else "Vacant",
-            "N/A", pct_gpr,
-        ])
-    if not unit_mix_rows:
-        # fallback
-        gpr_yr1 = (deal.financial_outputs.gross_potential_rent or 0)
-        n = deal.assumptions.num_units or 1
-        avg_mo = gpr_yr1 / 12 / n if n > 0 and gpr_yr1 > 0 else 0
-        unit_mix_rows = [["Unit", str(n), "N/A",
-                          f"${avg_mo:,.0f}/mo" if avg_mo else "Vacant", "N/A", "100%"]]
-    logger.info("UNIT MIX: built %d rows from extracted_docs.unit_mix", len(unit_mix_rows))
-    _pop_by_header(doc, "Unit Type", unit_mix_rows, "UNIT MIX")
-
-    # ── Table 23 (idx=22): Full Rent Roll ─────────────────────────
-    rr_rows = []
-    units_src = (deal.extracted_docs.unit_mix or []) if deal.extracted_docs else []
-    for u in units_src:
-        cnt = int(float(u.get("count") or 1))
-        for _ in range(cnt):
-            rr_rows.append([
-                u.get("unit_id") or u.get("unit_number") or "—",
-                u.get("unit_type") or u.get("type") or "—",
-                f"{u.get('sf'):,.0f}" if u.get("sf") else "N/A",
-                u.get("tenant_name") or u.get("tenant") or "—",
-                f"${u.get('monthly_rent'):,.0f}" if u.get("monthly_rent") else "—",
-                f"${u.get('market_rent'):,.0f}" if u.get("market_rent") else "N/A",
-                str(u.get("lease_start"))[:10] if u.get("lease_start") else "—",
-                str(u.get("lease_end"))[:10] if u.get("lease_end") else "—",
-                u.get("status") or "Occupied",
-            ])
-    if not rr_rows:
-        rr_rows = [["1", "Unit", "—", "—", "$0", "—", "—", "—", "Vacant"]]
-    logger.info("RENT ROLL: built %d rows", len(rr_rows))
-    logger.info("RENT ROLL TABLE: about to populate with %d rows (units src=%d)",
-                len(rr_rows), len(units))
-    _pop_by_header(doc, "Unit #", rr_rows, "RENT ROLL")
-    logger.info("RENT ROLL TABLE: populate call returned")
-
-    # ── Table 24 (idx=23): Income Summary ─────────────────────────
-    # Use the first STABILIZED year from pro_forma_years (first yr where
-    # gpr > 0). For a value-add deal, Year 1 has gpr=0/egi=0 because the
-    # stabilization factor is 0 during construction — that would show the
-    # Income Summary as all zeroes. Pull the first occupied year instead.
-    vac_rate = a.vacancy_rate if a.vacancy_rate is not None else 0.05
-    ltl_rate = a.loss_to_lease if a.loss_to_lease is not None else 0.03
-    other_inc = (a.cam_reimbursements or 0) + (a.fee_income or 0)
-
-    stab_yr = next(
-        (y for y in (fo.pro_forma_years or []) if (y.get("gpr") or 0) > 0),
-        None,
-    )
-    if stab_yr is not None:
-        gpr = stab_yr.get("gpr") or 0
-        egi = stab_yr.get("egi") or 0
-        vacancy = gpr * vac_rate
-        ltl = gpr * ltl_rate
-        egi_source = f"pro_forma_years[year={stab_yr.get('year')}]"
-    else:
-        gpr = fo.gross_potential_rent or 0
-        vacancy = gpr * vac_rate
-        ltl = gpr * ltl_rate
-        # Compute EGI from GPR when fo.effective_gross_income is 0 or None.
-        # Treat 0 as "not available" here because the Year-1 scalar is 0 for
-        # value-add deals during construction.
-        if not (fo.effective_gross_income or 0):
-            egi = max(gpr - vacancy - ltl + other_inc, 0)
-        else:
-            egi = fo.effective_gross_income
-        egi_source = "computed from scalar gpr"
-    logger.info("EGI: gpr=%s vacancy=%s l2l=%s egi=%s (source=%s)",
-                f"{gpr:,.0f}", f"{vacancy:,.0f}", f"{ltl:,.0f}",
-                f"{egi:,.0f}", egi_source)
-
-    income_summary_rows = [
-        ["Gross Potential Rent (GPR)",
-         f"${gpr:,.0f}" if gpr is not None else "N/A", "100.0%",
-         "In-place rent × 12 months"],
-        ["Less: Vacancy & Bad Debt",
-         f"(${abs(vacancy):,.0f})" if vacancy is not None else "N/A",
-         f"({vac_rate*100:.1f}%)", "Vacancy allowance"],
-        ["Less: Loss to Lease",
-         f"(${abs(ltl):,.0f})" if ltl is not None else "N/A",
-         f"({ltl_rate*100:.1f}%)", "Market adjustment"],
-        ["Fee / Other Income",
-         f"${other_inc:,.0f}", "", "CAM / fee income"],
-        ["Effective Gross Income (EGI)",
-         f"${egi:,.0f}" if egi is not None else "N/A",
-         f"{egi/gpr*100:.1f}%" if gpr else "N/A",
-         "After vacancy & concessions"],
-    ]
-    logger.info("INCOME SUMMARY: built %d rows", len(income_summary_rows))
-    _pop_by_header(doc, "Income Category", income_summary_rows, "INCOME SUMMARY")
-
-    # ── Table 25 (idx=24): Residential Rent Comparables ───────────
-    res_comp_rows = []
-    for c in (deal.comps.rent_comps or []):
-        res_comp_rows.append([c.address or "—", c.unit_type or "—", str(c.beds or "—"),
-                              f"${c.monthly_rent:,.0f}" if c.monthly_rent else "—",
-                              f"${c.rent_per_sf:.2f}" if c.rent_per_sf else "—",
-                              f"{c.distance_miles:.1f} mi" if c.distance_miles else "—",
-                              c.source or "—"])
-    if not res_comp_rows:
-        res_comp_rows = [["No residential comps", "—", "—", "—", "—", "—", "See commercial comps"]]
-    _safe_pop(24, res_comp_rows)
-
-    # ── Table 26 (idx=25): Commercial Rent Comparables ────────────
-    comm_comp_rows = []
-    for c in (deal.comps.commercial_comps or []):
-        comm_comp_rows.append([c.address or "—", f"{c.sq_ft:,}" if c.sq_ft else "—",
-                               c.use_type or "—",
-                               f"${c.asking_rent_per_sf:.2f}" if c.asking_rent_per_sf else "—",
-                               c.lease_type or "—"])
-    if not comm_comp_rows:
-        comm_comp_rows = [["Comps pending — CoStar data required", "—", "—", "TBD", "—"]]
-    _safe_pop(25, comm_comp_rows)
-
-    # ── Table 27 (idx=26): Sale Comparables ───────────────────────
-    sale_comp_rows = []
-    for c in (deal.comps.sale_comps or []):
-        sale_comp_rows.append([c.address or "—", c.sale_date or "—",
-                               f"${c.sale_price:,.0f}" if c.sale_price else "—",
-                               f"${c.price_per_sf:.2f}" if c.price_per_sf else "—",
-                               f"{c.cap_rate:.2%}" if c.cap_rate else "—",
-                               "—"])
-    if not sale_comp_rows:
-        sale_comp_rows = [["Sale comps pending — CoStar data required", "—", "—", "—", "—", "—"]]
-    _safe_pop(26, sale_comp_rows)
-
-    # ── Table 29 (idx=28): Underwriting Assumptions ───────────────
-    total_project_cost = ctx.get("total_project_cost", fo.total_uses or 0)
-    initial_loan = fo.initial_loan_amount or 0
-    total_equity = fo.total_equity_required or 0
-    uw_rows = [
-        ["Purchase Price", f"${a.purchase_price:,.0f}", "Acquisition", "As-offered"],
-        ["Total Project Cost", f"${total_project_cost:,.0f}", "Acquisition", "Incl. all S&U"],
-        ["Loan Amount (LTV)", f"${initial_loan:,.0f} ({a.ltv_pct * 100:.0f}%)", "Financing", "On total project cost"],
-        ["Interest Rate", f"{a.interest_rate * 100:.2f}%", "Financing", "Fixed rate"],
-        ["Loan Term", f"{a.loan_term} years", "Financing", "Initial term"],
-        ["IO Period", f"{a.io_period_months} months", "Financing", "Interest-only"],
-        ["Amortization", f"{a.amort_years} years", "Financing", "After IO period"],
-        ["Hold Period", f"{hold} years", "Exit", "Target hold"],
-        ["Exit Cap Rate", f"{a.exit_cap_rate * 100:.2f}%", "Exit", "Disposition assumption"],
-        ["Vacancy Rate", f"{a.vacancy_rate * 100:.1f}%", "Income", "Stabilized assumption"],
-        ["Revenue Growth", f"{a.annual_rent_growth * 100:.1f}%/yr", "Income", "Annual escalator"],
-        ["Expense Growth", f"{a.expense_growth_rate * 100:.1f}%/yr", "Expenses", "Annual escalator"],
-        ["GP/LP Split", f"{a.gp_equity_pct * 100:.0f}% / {a.lp_equity_pct * 100:.0f}%", "Capital", "Equity structure"],
-        ["Target LP IRR", f"{a.target_lp_irr * 100:.1f}%", "Returns", "Investment threshold"],
-        ["Min LP IRR", f"{a.min_lp_irr * 100:.1f}%", "Returns", "Minimum acceptable"],
-    ]
-    _safe_pop(28, uw_rows)
-
-    # ── Table 30 (idx=29): Sources & Uses ─────────────────────────
-    total_uses = fo.total_uses or 0
-    def _pct(amt):
-        return f"{amt / total_uses * 100:.1f}%" if total_uses > 0 and amt else ""
-    su_prof_dd = sum(
-        (getattr(a, k, 0) or 0)
-        for k in ['legal_closing', 'title_insurance', 'legal_bank', 'appraisal',
-                  'environmental', 'surveyor', 'architect', 'structural',
-                  'civil_eng', 'meps', 'legal_zoning', 'geotech']
-    )
-    su_hard = (getattr(a, 'const_hard', 0) or 0) + (getattr(a, 'const_reserve', 0) or 0)
-    su_orig = (fo.initial_loan_amount or 0) * (getattr(a, 'origination_fee_pct', 0.01) or 0.01)
-    su_rows = [
-        ["Purchase Price", f"${a.purchase_price:,.0f}", _pct(a.purchase_price), "Acquisition"],
-        ["Transfer Tax",
-         f"${a.purchase_price * getattr(a, 'transfer_tax_rate', 0.02139):,.0f}",
-         "", "PA buyer share"],
-        ["Professional & DD", f"${su_prof_dd:,.0f}", "", "Legal, title, inspections"],
-        ["Construction Hard Costs", f"${su_hard:,.0f}", "", "Renovation + reserve"],
-        ["Origination Fee", f"${su_orig:,.0f}", "", "1% of loan"],
-        ["Senior Debt", f"${fo.initial_loan_amount or 0:,.0f}",
-         f"{(fo.initial_loan_amount or 0) / max(total_uses, 1) * 100:.0f}% LTV",
-         f"{getattr(a, 'ltv_pct', 0.70) * 100:.0f}% LTV"],
-        ["Total Equity Required", f"${fo.total_equity_required or 0:,.0f}", "", "GP + LP"],
-        ["GP Equity", f"${fo.gp_equity or 0:,.0f}",
-         f"{getattr(a, 'gp_equity_pct', 0.10) * 100:.0f}%", ""],
-        ["LP Equity", f"${fo.lp_equity or 0:,.0f}",
-         f"{getattr(a, 'lp_equity_pct', 0.90) * 100:.0f}%", ""],
-    ]
-    _safe_pop(29, su_rows)
-
-    # ── Table 31 (idx=30): Construction Budget ────────────────────
-    hard = a.const_hard or 0
-    reserve = a.const_reserve or 0
-    const_rows = []
-    if hard > 0 or reserve > 0:
-        if hard > 0:
-            const_rows.append(["Hard Costs", "Renovation / Conversion", f"${hard:,.0f}",
-                               f"${hard / gba:.2f}" if gba > 0 else "—", "GC budget"])
-        if reserve > 0:
-            const_rows.append(["Hard Costs", "Construction Reserve", f"${reserve:,.0f}",
-                               f"${reserve / gba:.2f}" if gba > 0 else "—", "Contingency"])
-    if not const_rows:
-        const_rows = [["No construction budget", "—", "$0", "—", "Stabilized acquisition"]]
-    _safe_pop(30, const_rows)
-
-    # ── Table 33 (idx=32): 10-Year Pro Forma Summary ──────────────
-    pf_rows = []
-    for yr in (fo.pro_forma_years or []):
-        yr_num = yr.get("year", "")
-        gpr_v = yr.get("gpr", 0) or yr.get("gross_potential_rent", 0)
-        egi_v = yr.get("egi", 0) or yr.get("egr", 0) or yr.get("effective_gross_income", 0)
-        opex_v = yr.get("opex", 0) or yr.get("total_opex", 0) or yr.get("operating_expenses", 0)
-        noi_v = yr.get("noi", 0)
-        ds_v = yr.get("debt_service", 0) or yr.get("annual_debt_service", 0)
-        cfbt_v = yr.get("cfbt", 0) or yr.get("fcf", 0) or yr.get("free_cash_flow", 0) or yr.get("cash_flow_before_tax", 0)
-        coc_v = yr.get("coc", 0) or yr.get("cash_on_cash", 0)
-        pf_rows.append([
-            f"Year {yr_num}",
-            f"${gpr_v:,.0f}",
-            f"${egi_v:,.0f}",
-            f"${opex_v:,.0f}",
-            f"${noi_v:,.0f}",
-            f"${ds_v:,.0f}",
-            f"${cfbt_v:,.0f}",
-            f"{coc_v * 100:.1f}%" if isinstance(coc_v, float) else str(coc_v),
-        ])
-    _safe_pop(32, pf_rows)
-
-    # ── Table 36 (idx=35): Exit Analysis ──────────────────────────
-    exit_noi = proforma[hold - 1].get("noi", 0) if len(proforma) >= hold else 0
-    gross_sale = fo.gross_sale_price or 0
-    disp_costs = gross_sale * a.disposition_costs_pct
-    net_sale = fo.net_sale_proceeds or 0
-    exit_bal = gross_sale - disp_costs - (fo.net_equity_at_exit or 0) if gross_sale > 0 else 0
-    exit_rows = [
-        ["Exit Year NOI", f"${exit_noi:,.0f}", f"Year {hold} pro forma NOI"],
-        ["Exit Cap Rate", f"{a.exit_cap_rate * 100:.2f}%", "Underwritten disposition cap rate"],
-        ["Gross Sale Price", f"${gross_sale:,.0f}", "NOI / Cap Rate"],
-        ["Less: Disposition Costs", f"(${disp_costs:,.0f})", f"{a.disposition_costs_pct * 100:.1f}% of gross"],
-        ["Net Sale Proceeds", f"${net_sale:,.0f}", "After disposition costs"],
-        ["Net Equity at Exit", f"${fo.net_equity_at_exit or 0:,.0f}", "To equity investors"],
-        ["Total Equity Invested", f"${total_equity:,.0f}", "GP + LP contributions"],
-        ["Equity Multiple", f"{fo.project_equity_multiple or 0:.2f}x", "Net proceeds / invested equity"],
-    ]
-    _safe_pop(35, exit_rows)
-
-    # ── Table 39 (idx=38): LP/GP Waterfall Tiers ─────────────────
-    wf_rows = [["Tier 0: Preferred Return", f"{a.pref_return * 100:.1f}%", "0%",
-                f"{a.lp_equity_pct * 100:.0f}%", f"{a.gp_equity_pct * 100:.0f}%"]]
-    for t in a.waterfall_tiers:
-        wf_rows.append([
-            f"Tier {t.tier_number}: {t.hurdle_type.upper()} Hurdle",
-            f"{t.hurdle_value * 100:.1f}%",
-            f"{t.gp_share * 100:.0f}%",
-            f"{t.lp_share * 100:.0f}%",
-            f"{t.gp_share * 100:.0f}%",
-        ])
-    wf_rows.append(["Residual (above all tiers)", "—",
-                     f"{a.residual_tier.gp_share * 100:.0f}%",
-                     f"{a.residual_tier.lp_share * 100:.0f}%",
-                     f"{a.residual_tier.gp_share * 100:.0f}%"])
-    _pop_by_header(doc, "Tier", wf_rows, "WATERFALL")
-
-    # ── Table 41 (idx=40): Environmental Screening ────────────────
-    env_rows = [
-        ["EPA Brownfields", "No flags identified" if not md.epa_env_flags else "; ".join(md.epa_env_flags),
-         "EPA EnviroFacts", "Review required"],
-        ["Phase I ESA", "Not completed", "Due diligence gap", "Required pre-closing"],
-        ["Phase II ESA", "Not applicable (Phase I pending)", "Contingent on Phase I", "TBD"],
-    ]
-    _pop_by_header(doc, "Risk Factor", env_rows, "ENV SCREENING")
-
-    # ── Table 42 (idx=41): Climate Risk (First Street) ───────────
-    climate_rows = [
-        ["Flood", f"{md.first_street_flood or 'Not Determined'}", "First Street / FEMA", "Zone confirmation required"],
-        ["Fire", f"{md.first_street_fire or 'Low (urban)'}", "First Street Foundation", ""],
-        ["Heat", f"{md.first_street_heat or 'Moderate'}", "First Street Foundation", "Urban heat island"],
-        ["Wind", f"{md.first_street_wind or 'Low'}", "First Street Foundation", "Mid-Atlantic"],
-    ]
-    _safe_pop(41, climate_rows)
-
-    # ── Table 43 (idx=42): Title Search Summary ──────────────────
-    title_rows = [
-        ["Title Search", "Not completed", "No title commitment on file", "Required pre-closing"],
-        ["Title Insurance", "Not bound", f"Budget: ${a.title_insurance:,.0f}", "Bind at closing"],
-        ["ALTA Survey", "Not completed", "Due diligence gap", "Required for lender"],
-    ]
-    _safe_pop(42, title_rows)
-
-    # ── Table 44 (idx=43): Outstanding Violations & Permits ──────
-    _pop_by_header(doc, "Type",
-        [["L&I Search", "Not completed", "Open violations unknown", "Pending", "Municipal lien search required"]],
-        "VIOLATIONS")
-
-    # ── Table 48 (idx=47): Insurance Coverage Rollup ─────────────
-    ins_pf = deal.insurance.insurance_proforma_line_item or a.insurance
-    ins_rows = [
-        ["Property (Replacement)", "Commercial", f"${ins_pf * 0.8:,.0f}", f"${ins_pf * 1.2:,.0f}", f"${ins_pf:,.0f}", "Replacement cost"],
-        ["General Liability", "Commercial", "$4,500", "$6,500", "$5,000", "$1M/$2M aggregate"],
-        ["Umbrella/Excess", "Excess", "$2,000", "$3,500", "$2,500", "$5M limit"],
-        ["Loss of Rents", "Business income", "$2,500", "$4,000", "$3,000", "12-month indemnity"],
-    ]
-    _safe_pop(47, ins_rows)
-
-    # ── Table 54 (idx=53): Milestone Schedule ────────────────────
-    milestone_rows = [
-        ["Due Diligence", "Phase I ESA", "Month 1", "30 days", "LOI executed", "Sponsor"],
-        ["Due Diligence", "Title search", "Month 1", "21 days", "Contract executed", "Title company"],
-        ["Financing", "Loan application", "Month 2", "30 days", "Phase I clean", "Lender"],
-        ["Closing", "Acquisition closing", "Month 3", "30 days", "Loan approval", "All parties"],
-        ["Operations", "Stabilized operations", "Year 1–2", "Ongoing", "Lease executed", "Property mgr"],
-        ["Exit", "Disposition", f"Year {hold}", "6 months", "Market conditions", "Sponsor"],
-    ]
-    _pop_by_header(doc, "Phase", milestone_rows, "MILESTONE")
-
-    # ── Table 57 (idx=56): Scenario Comparison ───────────────────
-    def _safe_pct(val, decimals=1):
-        if val is None: return "N/A"
-        try: return f"{float(val)*100:.{decimals}f}%"
-        except: return "N/A"
-    def _safe_dollar(val):
-        if val is None: return "N/A"
-        try: return f"${float(val):,.0f}"
-        except: return "N/A"
-    def _safe_x(val, decimals=2):
-        if val is None: return "N/A"
-        try: return f"{float(val):.{decimals}f}x"
-        except: return "N/A"
-
-    lp_irr   = fo.lp_irr
-    lp_em    = fo.lp_equity_multiple
-    proj_irr = fo.project_irr
-    dscr_y1  = fo.dscr_yr1
-    gi_cap   = fo.going_in_cap_rate
-    coc_y1   = fo.cash_on_cash_yr1
-    exit_px  = fo.gross_sale_price
-    net_exit = fo.net_equity_at_exit
-    eq_mult  = fo.project_equity_multiple
-    fcf_y1   = (fo.pro_forma_years[0].get("fcf") if fo.pro_forma_years else None)
-
-    # ── Conservative scenario: re-run financials on a deepcopy with
-    #    rent growth -1pp, exit cap +0.5pp, vacancy +2pp ──────────────
-    cons = {}
-    try:
-        import copy as _copy
-        from financials import run_financials as _run_fin
-        cdeal = _copy.deepcopy(deal)
-        ca = cdeal.assumptions
-        ca.annual_rent_growth = max(0.0, (ca.annual_rent_growth or 0.03) - 0.01)
-        ca.exit_cap_rate      = (ca.exit_cap_rate or 0.07) + 0.005
-        ca.vacancy_rate       = (ca.vacancy_rate or 0.05) + 0.02
-        # Reset financial outputs so the engine fully recomputes
-        from models.models import FinancialOutputs as _FO
-        cdeal.financial_outputs = _FO()
-        cdeal = _run_fin(cdeal)
-        cfo = cdeal.financial_outputs
-        cons = {
-            "lp_irr":   cfo.lp_irr,
-            "lp_em":    cfo.lp_equity_multiple,
-            "proj_irr": cfo.project_irr,
-            "dscr_y1":  cfo.dscr_yr1,
-            "gi_cap":   cfo.going_in_cap_rate,
-            "coc_y1":   cfo.cash_on_cash_yr1,
-            "exit_px":  cfo.gross_sale_price,
-            "net_exit": cfo.net_equity_at_exit,
-            "eq_mult":  cfo.project_equity_multiple,
-        }
-        logger.info("SCENARIO: base computed, conservative computed (lp_irr=%s vs %s)",
-                    lp_irr, cfo.lp_irr)
-    except Exception as exc:
-        logger.warning("SCENARIO conservative re-run failed: %s", exc)
-
-    def _c(key, fmt):
-        v = cons.get(key)
-        return fmt(v) if v is not None else "N/A"
-
-    scenario_rows = [
-        ["LP IRR",              _safe_pct(lp_irr),    _c("lp_irr", _safe_pct),                 "12.0%"],
-        ["LP Equity Multiple",  _safe_x(lp_em),       _c("lp_em", _safe_x),                    "1.8x"],
-        ["Project IRR",         _safe_pct(proj_irr),  _c("proj_irr", _safe_pct),               "—"],
-        ["Year 1 DSCR",         _safe_x(dscr_y1),     _c("dscr_y1", _safe_x),                  "1.20x"],
-        ["Going-In Cap Rate",   _safe_pct(gi_cap, 2), _c("gi_cap", lambda v: _safe_pct(v, 2)), "≥5.5%"],
-        ["Year 1 Cash-on-Cash", _safe_pct(coc_y1),    _c("coc_y1", _safe_pct),                 "≥6.0%"],
-        ["Gross Exit Price",    _safe_dollar(exit_px),_c("exit_px", _safe_dollar),             "—"],
-        ["Net Equity at Exit",  _safe_dollar(net_exit),_c("net_exit", _safe_dollar),           "—"],
-        ["Equity Multiple",     _safe_x(eq_mult),     _c("eq_mult", _safe_x),                  "—"],
-    ]
-    logger.info("SCENARIO: built %d rows", len(scenario_rows))
-    logger.info(
-        "SCENARIO TABLE: A_lp_irr=%s B_lp_irr=%s A_em=%s B_em=%s "
-        "A_exit=%s B_exit=%s A_net=%s B_net=%s",
-        lp_irr, cons.get("lp_irr"),
-        lp_em, cons.get("lp_em"),
-        exit_px, cons.get("exit_px"),
-        net_exit, cons.get("net_exit"),
-    )
-    # Find the Scenario Comparison table specifically (avoid KPI table which also has "Metric")
-    _scenario_table = None
-    for _st in doc.tables:
-        if not _st.rows:
-            continue
-        _hdr = ' '.join(c.text for c in _st.rows[0].cells).lower()
-        if 'metric' in _hdr and ('scenario' in _hdr or 'base' in _hdr or 'conservative' in _hdr):
-            _scenario_table = _st
-            break
-    if _scenario_table is None:
-        # Fallback: 4-column table with "Metric" in first cell
-        for _st in doc.tables:
-            if not _st.rows:
-                continue
-            _hdr = ' '.join(c.text for c in _st.rows[0].cells).lower()
-            if 'metric' in _hdr and len(_st.rows[0].cells) == 4:
-                _scenario_table = _st
-                break
-    if _scenario_table and scenario_rows:
-        populate_table(_scenario_table, scenario_rows)
-        logger.info("SCENARIO: populated %d rows", len(scenario_rows))
-    else:
-        logger.warning("SCENARIO: could not find Scenario Comparison table")
-
-    # ── Table 58 (idx=57): Go/No-Go Assessment ───────────────────
-    def _verdict(condition):
-        return "PASS" if condition else "FAIL"
-
-    gono_rows = [
-        ["Going-In Cap Rate ≥ 5.5%",
-         f"Actual: {_safe_pct(gi_cap, 2)}",
-         _verdict(gi_cap is not None and gi_cap >= 0.055)],
-        ["LP IRR ≥ 12.0%",
-         f"Actual: {_safe_pct(lp_irr)}",
-         _verdict(lp_irr is not None and lp_irr >= 0.12)],
-        ["LP Equity Multiple ≥ 1.8x",
-         f"Actual: {_safe_x(lp_em)}",
-         _verdict(lp_em is not None and lp_em >= 1.8)],
-        ["Year 1 DSCR ≥ 1.20x",
-         f"Actual: {_safe_x(dscr_y1)}",
-         _verdict(dscr_y1 is not None and dscr_y1 >= 1.2)],
-        ["Positive Free Cash Flow Yr 1",
-         f"Actual: {_safe_dollar(fcf_y1)}",
-         _verdict(fcf_y1 is not None and fcf_y1 > 0)],
-    ]
-    logger.info("GO_NOGO: built %d rows", len(gono_rows))
-    _pop_by_header(doc, "Criterion", gono_rows, "GO_NOGO")
-
-    # ── Table 46 (idx=45): DD Flag Summary ──────────────────────
-    dd_flag_rows = []
-    for f in deal.dd_flags:
-        color_emoji = {"RED": "\U0001f534  RED", "AMBER": "\U0001f7e1  YELLOW",
-                       "GREEN": "\U0001f7e2  GREEN"}.get(f.color.value, f.color.value)
-        dd_flag_rows.append([color_emoji, f.title, f.category, f.remediation or f.narrative[:60]])
-    if not dd_flag_rows:
-        # Default flags for 5600 Chestnut-style deals
-        dd_flag_rows = [
-            ["\U0001f534  RED", "100% vacancy — no executed lease", "Financial", "Execute LOI with qualified tenant before closing"],
-            ["\U0001f534  RED", "Negative NOI across entire hold period", "Financial", "Re-underwrite upon lease execution with market rents"],
-            ["\U0001f534  RED", "No Phase I ESA on file", "Environmental", "Commission Phase I ESA — budget $6,000, 30-day turnaround"],
-            ["\U0001f7e1  YELLOW", "Zoning classification unconfirmed", "Legal/Regulatory", "Engage zoning counsel; verify via atlas.phila.gov"],
-            ["\U0001f7e1  YELLOW", "FEMA flood zone 'Not Determined'", "Environmental", "Obtain SFHDS certificate from licensed surveyor"],
-            ["\U0001f7e1  YELLOW", "No rent or sale comparables", "Market", "Request CoStar comp set from Shonda at Binswanger"],
-            ["\U0001f7e1  YELLOW", "24-month balloon refinance risk", "Financial", "Secure lease within 18 months to support refi underwriting"],
-            ["\U0001f7e2  GREEN", "2011 renovation — reduced deferred maintenance", "Physical", "Confirm with PCA inspection"],
-            ["\U0001f7e2  GREEN", "Corner lot with dual frontage", "Physical", "Leverage for medical/retail tenant marketing"],
-            ["\U0001f7e2  GREEN", "Below replacement cost basis ($86.79/SF)", "Financial", "Validate with closed sale comps"],
-            ["\U0001f7e2  GREEN", "University City institutional anchor proximity", "Market", "Cite in tenant marketing materials"],
-            ["\U0001f7e2  GREEN", "Dual-path strategy preserves optionality", "Strategic", "Finalize use decision post-zoning confirmation"],
-        ]
-    logger.info("DD FLAG: %d rows to populate (template rows cleared first)", len(dd_flag_rows))
-    _safe_pop(45, dd_flag_rows)
-
-    # ── Table 61 (idx=60): Data Sources Provenance ────────────────
-    report_date = deal.report_date or ""
-    provenance_rows = [
-        ["Property Data", "User Input (Frontend)", report_date, "localhost:8000"],
-        ["Demographics", "U.S. Census ACS 2022", report_date, "data.census.gov"],
-        ["Flood Zone", "FEMA NFHL", report_date, "msc.fema.gov"],
-        ["Environmental", "EPA EnviroFacts", report_date, "epa.gov/enviro"],
-        ["Maps", "Google Maps Static API", report_date, "maps.googleapis.com"],
-        ["Financial Model", "DealDesk Engine v1.0", report_date, "Deterministic Python"],
-        ["Narratives", "Claude Sonnet 4.5", report_date, "api.anthropic.com"],
-        ["Municipal Data", "DealDesk Registry", report_date, "municipal_registry.csv"],
-    ]
-    _safe_pop(60, provenance_rows)
-
-    # Sensitivity table — disabled: keyword-match was injecting the matrix
-    # into the Executive Summary table (matched on 'irr'). Section 12.5
-    # renders the matrix via the docxtpl context keys (sensitivity_rows,
-    # sensitivity_cap_axis). Re-enable only with a tighter table selector.
-    # populate_sensitivity_table(doc, deal)
-
-    # Fix 9: data row colors — parchment background for dark-inherited rows
-    color_count = _fix_dark_data_rows(doc)
-    if color_count > 0:
-        logger.info("TABLE COLORS: fixed %d data cells from dark to parchment", color_count)
-
-    # Remove placeholder boxes that have no data source yet
-    PLACEHOLDER_BOXES_TO_REMOVE = [
-        "Floor Plans",
-        "Aerial Location Map",
-        "Neighborhood Map",
-        "FEMA Flood Map",
-        "KPI Dashboard",
-        "Supply Pipeline",
-        "Demographic Chart",
-        "Zoning Code",
-    ]
-    for box_label in PLACEHOLDER_BOXES_TO_REMOVE:
-        if remove_placeholder_box(doc, box_label):
-            logger.info("PLACEHOLDER: removed '%s' box", box_label)
-
-    # Remove single-cell parameter-label placeholder boxes (sensitivity
-    # page KPI boxes — one label per box across report pages 22-35).
-    _remove_parameter_placeholder_boxes(doc, [
-        "Purchase Price", "Total Project Cost", "Loan Amount (LTV)",
-        "Interest Rate", "Loan Term", "IO Period", "Amortization",
-        "Hold Period", "Exit Cap Rate", "Vacancy Rate",
-        "Revenue Growth", "Expense Growth", "GP/LP Split",
-        "Target LP IRR", "Min LP IRR", "Transfer Tax",
-        "Professional & DD", "Construction Hard Costs", "Origination Fee",
-        "Senior Debt", "Total Equity Required", "GP Equity", "LP Equity",
-        # KPI boxes on report pages 7–20 (single-label parchment boxes)
-        "Year 1 NOI", "Going-In Cap Rate", "Year 1 DSCR",
-        "Year 1 Cash-on-Cash", "LP IRR", "LP Equity Multiple",
-        "Project IRR",
-    ])
-
-    # Remove per-year placeholder boxes ("Year 1" … "Year 13")
-    # — the 10-year summary table at idx=32 holds the consolidated pro forma.
-    _yr_removed = 0
-    for year in range(1, 14):
-        if remove_placeholder_box(doc, f"Year {year}"):
-            _yr_removed += 1
-    if _yr_removed:
-        logger.info("PLACEHOLDER: removed %d 'Year N' per-year placeholder boxes", _yr_removed)
-
-    logger.info("TABLE POPULATE: completed all data tables")
-    return _populate_counter[0]
-
-
-def _populate_docx(deal: DealData) -> Path:
-    """Populate DealDesk_Report_Template_v4.docx with template context. Returns docx path."""
-    ctx = _build_context(deal)
-
-    tpl = DocxTemplate(str(WORD_TEMPLATE))
-
-    # Generate and merge image context
-    # _build_image_context returns (ctx_dict, tmp_file_list)
-    # temp files must stay alive until AFTER tpl.render() — InlineImage is lazy
-    img_ctx, img_tmp_files = _build_image_context(deal, tpl)
-    ctx.update(img_ctx)
-
-    logger.info(f"[WORD_BUILDER] ctx keys: {list(ctx.keys())}")
-    for k, v in ctx.items():
-        try:
-            v_repr = repr(v)[:80] if not hasattr(v, '_insert_image') else "<InlineImage>"
-        except Exception:
-            v_repr = "<unrepresentable>"
-        logger.info(f"  {k}: {type(v).__name__} = {v_repr}")
-
-    for key, val in ctx.items():
-        if isinstance(val, str):
-            if len(val) == 0:
-                logger.warning(f"CTX EMPTY: {key}")
-            elif val.strip().startswith('{{') or 'placeholder' in val.lower():
-                logger.warning(f"CTX UNFILLED: {key} = {val[:80]}")
-            else:
-                logger.info(f"CTX OK: {key} = {len(val)} chars")
-        elif val is None:
-            logger.warning(f"CTX NONE: {key}")
-
-    # ── Fix 9: master context audit (critical keys) ──────────────────
-    logger.info("=" * 60)
-    logger.info("WORD BUILDER CONTEXT AUDIT — DEAL %s", deal.deal_id)
-    logger.info("=" * 60)
-    _critical_keys = [
-        "kpi_rows", "street_view_image", "has_street_view",
-        "parcel_a_account", "parcel_a_zoning", "parcel_a_owner",
-        "parcel_census_tract", "parcel_fips",
-        "hbu_content", "transit_rows", "income_egi",
-        "income_gpr", "fmr_2br",
-    ]
-    for _k in _critical_keys:
-        _v = ctx.get(_k)
-        if isinstance(_v, list):
-            logger.info("  CTX[%s] = list(%d items)", _k, len(_v))
-        elif _v is None:
-            logger.warning("  CTX[%s] = MISSING/NONE \u2190 FIX NEEDED", _k)
-        else:
-            # IMPORTANT: Do NOT call str() on InlineImage objects —
-            # that triggers _insert_image() before tpl.render() and crashes.
-            # Check type name safely instead.
-            _type_name = type(_v).__name__
-            if _type_name == "InlineImage":
-                logger.info("  CTX[%s] = InlineImage(ready)", _k)
-            else:
-                try:
-                    _repr = str(_v)[:80]
-                except Exception:
-                    _repr = f"<{_type_name}>"
-                logger.info("  CTX[%s] = %s", _k, _repr)
-    logger.info("=" * 60)
-
-    try:
-        tpl.render(ctx)
-    finally:
-        # Clean up temp image files after render completes
-        import os as _os
-        for tmp_path in img_tmp_files:
-            try:
-                _os.unlink(tmp_path)
-            except Exception:
-                pass
-    _strip_highlight(tpl.docx)
-
-    # Force TOC onto its own page (the v4 template omits a page break
-    # before the "TABLE OF CONTENTS" heading).
-    _fix_toc_page_break(tpl.docx)
-
-    # ── Fix 3: remove leaked Jinja conditional-comment paragraphs ────
-    _paras_to_remove = []
-    for _para in tpl.docx.paragraphs:
-        _txt = _para.text or ""
-        if ("Conditional block" in _txt
-                or "image_placements.json" in _txt
-                or "renders only when image_type" in _txt):
-            _paras_to_remove.append(_para)
-    for _para in _paras_to_remove:
-        _p = _para._element
-        _p.getparent().remove(_p)
-    if _paras_to_remove:
-        logger.info("FLOOR PLAN: removed %d leaked conditional paragraph(s)",
-                    len(_paras_to_remove))
-
-    # ── Populate data tables FIRST against original-template indices ──
-    n_tables_before = len(tpl.docx.tables)
-    tables_populated_count = _populate_data_tables(tpl.docx, deal, ctx)
-
-    # Remove sage-green image placeholder boxes AFTER population — otherwise
-    # the removal shifts doc.tables[] indices and the hardcoded _safe_pop(N,)
-    # positions in _populate_data_tables write into the wrong tables.
-    _remove_image_placeholder_boxes(tpl.docx)
-
-    n_tables_after = len(tpl.docx.tables)
-    placeholders_removed_count = n_tables_before - n_tables_after
-    logger.info("DOCX COMPLETE: tables_populated=%d, placeholders_removed=%d",
-                tables_populated_count, placeholders_removed_count)
-
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    docx_path = OUTPUTS_DIR / f"{deal.deal_id}_report.docx"
-    tpl.save(str(docx_path))
-    logger.info("DOCX generated: %s", docx_path)
-    return docx_path
-
-
-def _update_toc_fields(docx_path: Path) -> None:
-    """
-    Open the DOCX in a live Word instance via win32com, update all fields
-    (including the Table of Contents), save, and close.
-
-    This must run on Windows with Microsoft Word installed.  It is required
-    because docxtpl renders the template but cannot update Word fields — the
-    TOC field remains empty until Word recalculates it.
-
-    Falls back gracefully with a warning if win32com is unavailable (e.g.
-    on Streamlit Community Cloud) — the PDF will render with a blank TOC
-    but all other content will be correct.
-    """
-    try:
-        import win32com.client as win32
-    except ImportError:
-        logger.warning(
-            "win32com not available — TOC fields will not be updated. "
-            "Install pywin32 to enable automatic TOC generation."
-        )
-        return
-
-    try:
-        word = win32.Dispatch("Word.Application")
-        word.Visible = False
-        word.DisplayAlerts = False
-        try:
-            doc = word.Documents.Open(str(docx_path.resolve()))
-            doc.Fields.Update()          # updates all fields including TOC
-            doc.TablesOfContents(1).Update()  # explicitly refresh TOC entries + page numbers
-            doc.Save()
-            doc.Close()
-        finally:
-            word.Quit()
-        logger.info("TOC fields updated: %s", docx_path.name)
-    except Exception as exc:
-        logger.warning(
-            "win32com TOC update failed: %s — proceeding with blank TOC", exc
-        )
-
-
-def _convert_to_pdf(docx_path: Path) -> Path:
-    """Convert DOCX to PDF via LibreOffice headless. Returns PDF path."""
-    if platform.system() == "Windows":
-        soffice = r"C:\Program Files\LibreOffice\program\soffice.exe"
-    else:
-        soffice = "soffice"
-
-    output_dir = docx_path.parent
-    try:
-        subprocess.run(
-            [
-                soffice,
-                "--headless",
-                "--convert-to", "pdf",
-                "--outdir", str(output_dir),
-                str(docx_path),
-            ],
-            timeout=PDF_CONVERSION_TIMEOUT,
-            check=True,
-            capture_output=True,
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(
-            f"LibreOffice PDF conversion timed out after {PDF_CONVERSION_TIMEOUT}s"
-        )
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"LibreOffice PDF conversion failed: {exc.stderr.decode()}")
-    except FileNotFoundError:
-        raise RuntimeError(
-            f"LibreOffice not found at: {soffice}. "
-            "Please verify the installation path."
-        )
-
-    pdf_path = output_dir / f"{docx_path.stem}.pdf"
-    if not pdf_path.exists():
-        raise RuntimeError(f"PDF not found after conversion: {pdf_path}")
-
-    logger.info("PDF generated: %s", pdf_path)
-    return pdf_path
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PUBLIC API
-# ═══════════════════════════════════════════════════════════════════════════
-
-def generate_report(deal: DealData) -> DealData:
-    """
-    Generate the full PDF underwriting report.
-
-    1. Calls Prompt 4-MASTER (Sonnet) to generate all narrative sections.
-    2. If investor_mode is True, calls Prompt 5D to rewrite 9 narrative
-       blocks in LP-appropriate language.
-    3. Populates DealDesk_Report_Template_v4.docx via docxtpl.
-    4. Converts to PDF via LibreOffice headless (60s timeout).
-
-    Args:
-        deal: DealData with all upstream modules already populated.
-
-    Returns:
-        The same DealData object with output_pdf_path set.
-    """
-    # Stage 1: Generate all narratives
+def generate_narratives(deal: DealData) -> None:
+    """Run Prompt 4-MASTER, then Prompt 5D if investor_mode is True.
+    Mutates deal.narratives / deal.recommendation in place."""
     _generate_narratives(deal)
-
-    # Stage 2: Investor mode rewrite (if applicable)
     if deal.investor_mode:
         _rewrite_investor_narratives(deal)
-
-    # Stage 3: Populate DOCX template
-    docx_path = _populate_docx(deal)
-
-    # Stage 3B: Update Word fields (TOC page numbers) before PDF conversion
-    _update_toc_fields(docx_path)
-
-    # Stage 4: Convert to PDF
-    pdf_path = _convert_to_pdf(docx_path)
-    deal.output_pdf_path = str(pdf_path)
-
-    logger.info("Report generation complete: %s", pdf_path)
-    return deal

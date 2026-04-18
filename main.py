@@ -2,7 +2,7 @@
 main.py — DealDesk CRE Underwriting Pipeline Orchestrator & FastAPI Entry Point
 =================================================================================
 Runs the full pipeline in sequence:
-    extractor → deal_data → market → risk → financials → excel_builder → word_builder
+    extractor → deal_data → market → risk → financials → excel_builder → report_builder
 
 Usage:  python main.py
 """
@@ -56,8 +56,7 @@ from market import enrich_market_data
 from risk import analyze_insurance
 from financials import run_financials
 from excel_builder import populate_excel
-from word_builder import generate_report
-from report_builder import generate_report as generate_report_playwright
+from report_builder import generate_report
 
 logger = logging.getLogger(__name__)
 _fmt = "%(asctime)s  %(name)s  %(levelname)s  %(message)s"
@@ -76,7 +75,7 @@ STAGES = [
     ("Analyzing insurance & risk …",  "risk"),
     ("Running financial engine …",    "financials"),
     ("Building Excel model …",        "excel_builder"),
-    ("Generating PDF report …",       "word_builder"),
+    ("Generating PDF report …",       "report_builder"),
 ]
 
 # ── In-memory cache for Excel downloads ──────────────────────────────────
@@ -903,20 +902,11 @@ async def underwrite(req: UnderwriteRequest, request: Request):
                 except Exception as _ke:
                     logger.warning("KPI VALIDATOR (non-fatal): %s", _ke)
 
-            elif stage_name == "word_builder":
-                deal = generate_report(deal)
-                # Playwright/HTML-CSS build. When it succeeds we prefer it —
-                # point deal.output_pdf_path at the new PDF so the download
-                # endpoint serves it. If Playwright fails, the docx-derived
-                # PDF that word_builder just set remains the fallback.
-                try:
-                    pw_pdf = generate_report_playwright(deal)
-                    logger.info("PLAYWRIGHT PDF: %s", pw_pdf)
-                    if pw_pdf and Path(pw_pdf).exists():
-                        deal.output_pdf_path = str(pw_pdf)
-                        logger.info("PDF SERVE TARGET: Playwright PDF (%s)", pw_pdf)
-                except Exception as exc:
-                    logger.warning("PLAYWRIGHT PDF failed (non-fatal): %s", exc)
+            elif stage_name == "report_builder":
+                pdf_path = generate_report(deal)
+                if pdf_path and Path(pdf_path).exists():
+                    deal.output_pdf_path = str(pdf_path)
+                    logger.info("PDF SERVE TARGET: %s", pdf_path)
 
         # Cache Excel path for download endpoint
         if deal.deal_id and deal.output_xlsx_path:
@@ -930,17 +920,10 @@ async def underwrite(req: UnderwriteRequest, request: Request):
         # Return PDF as file download
         if deal.output_pdf_path and Path(deal.output_pdf_path).exists():
             _pdf_path = Path(deal.output_pdf_path)
-            # User-visible filename: strip the "_playwright" disambiguator so
-            # the browser save-as dialog shows a clean {deal_id}_report.pdf.
-            # The on-disk file keeps its suffix to avoid collision with the
-            # docx-derived PDF during the transition.
-            _download_name = _pdf_path.name.replace(
-                "_report_playwright.pdf", "_report.pdf"
-            )
             return FileResponse(
                 path=str(_pdf_path),
                 media_type="application/pdf",
-                filename=_download_name,
+                filename=_pdf_path.name,
                 headers={"X-Deal-Id": deal.deal_id or "",
                          "Access-Control-Expose-Headers": "X-Deal-Id"},
             )

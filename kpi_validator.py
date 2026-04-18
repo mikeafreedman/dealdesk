@@ -9,7 +9,7 @@ Purpose: lets us build a targeted cell-update list for a real
 Excel/PDF sync pass in a follow-up. Not a fix in itself.
 
 Call site: main.py, after excel_builder.populate_excel() and before
-word_builder.generate_report().
+report_builder.generate_report().
 """
 
 from __future__ import annotations
