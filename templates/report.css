@@ -361,6 +361,68 @@ table.tbl-2col th:first-child { width: 45%; }
 table.tbl-2col td:last-child,
 table.tbl-2col th:last-child  { width: 55%; }
 
+/* DD checklist: 4 columns. Auto layout + smaller font keeps ~35 rows on one
+   page, with a status pill for quick visual scan. */
+table.dd-checklist-table {
+    table-layout: auto;
+    font-size: 8pt;
+}
+table.dd-checklist-table th,
+table.dd-checklist-table td {
+    padding: 4pt 8pt;
+    vertical-align: middle;
+}
+table.dd-checklist-table td.dd-status {
+    text-align: center;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    font-size: 7.5pt;
+}
+table.dd-checklist-table td.dd-status-complete    { color: #1d6b3f; }
+table.dd-checklist-table td.dd-status-in-progress { color: #a16207; }
+table.dd-checklist-table td.dd-status-pending     { color: #8a2e2e; }
+table.dd-checklist-table td.dd-status-na          { color: #6b6b6b; }
+
+/* Rent roll: 9 columns (Unit, Type, SF, Tenant, Monthly, Market, Start, End,
+   Status). Fixed-width equal columns crush the tenant column and over-allocate
+   to short IDs/dates. Auto layout + nowrap on numeric/date columns + wrap on
+   the tenant column produces a far more legible row. */
+table.rent-roll-table {
+    table-layout: auto;
+    font-size: 7.5pt;
+    letter-spacing: -0.01em;
+}
+table.rent-roll-table th,
+table.rent-roll-table td {
+    padding: 4pt 6pt;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+/* Tenant (col 4) — the only free-wrap column */
+table.rent-roll-table th:nth-child(4),
+table.rent-roll-table td:nth-child(4) {
+    white-space: normal;
+    word-break: break-word;
+    min-width: 80pt;
+}
+/* Status pill (col 9) — align center so "Occupied"/"Vacant" read cleanly */
+table.rent-roll-table th:nth-child(9),
+table.rent-roll-table td:nth-child(9) { text-align: center; }
+
+/* Unit mix summary: 5 columns. Smaller font + auto layout keeps the
+   "Total Monthly Rent" header on a single line. */
+table.unit-mix-table {
+    table-layout: auto;
+    font-size: 8.5pt;
+}
+table.unit-mix-table th,
+table.unit-mix-table td {
+    padding: 5pt 8pt;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
 /* Pro-forma: 11 columns on Letter. Override generic table-layout:fixed so
    narrow year columns can shrink to content; shrink font to fit. */
 table.proforma-table {

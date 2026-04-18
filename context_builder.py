@@ -758,6 +758,123 @@ def build_context(deal: DealData) -> dict:
     # DD Flags
     ctx["dd_flags"] = [f.model_dump() for f in deal.dd_flags]
 
+    # DD Checklist — a standard CRE due diligence tracker. Status is derived
+    # from upstream pipeline data where we have signal; everything else
+    # defaults to "Pending" so the checklist reads as an action list.
+    _md = deal.market_data
+    _pd = deal.parcel_data
+    _ext = deal.extracted_docs
+    _comps = deal.comps
+    _is_value_add = deal.investment_strategy.value.lower() in ("value_add", "value-add", "development", "ground_up")
+
+    def _status(done, in_progress=False, na=False):
+        if na:
+            return "N/A"
+        if done:
+            return "Complete"
+        if in_progress:
+            return "In Progress"
+        return "Pending"
+
+    _checklist_items = [
+        # Property / Physical
+        ("Property", "Property Condition Assessment (PCA)", _status(False), "Engineering / Owner"),
+        ("Property", "Roof & HVAC inspection", _status(False), "Owner / Vendor"),
+        ("Property", "Pest & termite inspection", _status(False), "Vendor"),
+        ("Property", "ADA accessibility survey", _status(False), "Owner / Counsel"),
+        ("Property", "Floor plans & as-built drawings", _status(bool(_ext and _ext.image_placements)), "Owner"),
+
+        # Financial / Operational
+        ("Financial", "T-12 operating statements",
+         _status(bool(_ext and _ext.noi_t12 is not None)), "Owner / Accounting"),
+        ("Financial", "Rent roll (current, dated)",
+         _status(bool(_ext and _ext.unit_mix)), "Owner / Property Mgmt"),
+        ("Financial", "Operating expense backup / invoices", _status(False), "Owner"),
+        ("Financial", "Tax returns (property, 2 years)", _status(False), "Owner / Accounting"),
+        ("Financial", "CAM reconciliations",
+         _status(bool(_ext and _ext.cam_reimbursements_t12), na=not _ext or not _ext.unit_mix),
+         "Owner / Property Mgmt"),
+        ("Financial", "Utility bills (12 months)", _status(False), "Owner"),
+
+        # Legal / Title
+        ("Legal", "Title commitment & exceptions",
+         _status(bool(_pd and _pd.parcel_id), in_progress=bool(_pd and _pd.parcel_id)),
+         "Title Co. / Counsel"),
+        ("Legal", "Deed / chain of title review",
+         _status(bool(_pd and _pd.deed_history), in_progress=bool(_pd and _pd.parcel_id)),
+         "Title Co. / Counsel"),
+        ("Legal", "Recorded survey (ALTA/NSPS)", _status(False), "Surveyor"),
+        ("Legal", "Existing lease abstracts & estoppels",
+         _status(False, in_progress=bool(_ext and _ext.unit_mix)), "Counsel / Property Mgmt"),
+        ("Legal", "SNDAs on material tenants", _status(False), "Counsel"),
+        ("Legal", "Litigation & judgment search", _status(False), "Counsel"),
+        ("Legal", "UCC / lien search",
+         _status(False, in_progress=bool(_pd and _pd.parcel_id)), "Title Co. / Counsel"),
+
+        # Environmental
+        ("Environmental", "Phase I Environmental Site Assessment", _status(False), "Env. Consultant"),
+        ("Environmental", "Phase II ESA (if recommended)",
+         _status(False, na=not (_md and _md.epa_env_flags)), "Env. Consultant"),
+        ("Environmental", "FEMA flood zone determination",
+         _status(bool(_md and _md.fema_flood_zone)), "Pipeline / Surveyor"),
+        ("Environmental", "EPA environmental flags reviewed",
+         _status(bool(_md and _md.epa_env_flags is not None)), "Underwriting"),
+        ("Environmental", "Radon / mold / asbestos screening", _status(False), "Env. Consultant"),
+
+        # Zoning / Permits
+        ("Zoning", "Zoning verification letter",
+         _status(bool(deal.zoning and deal.zoning.source_verified),
+                 in_progress=bool(deal.zoning and deal.zoning.zoning_code)),
+         "Counsel / Municipality"),
+        ("Zoning", "Certificate of Occupancy", _status(False), "Owner / Municipality"),
+        ("Zoning", "Open code violations / permits review", _status(False), "Municipality / Counsel"),
+        ("Zoning", "Buildable capacity analysis",
+         _status(bool(deal.zoning and deal.zoning.buildable_capacity_narrative)),
+         "Underwriting"),
+
+        # Insurance
+        ("Insurance", "Property & casualty insurance quote",
+         _status(bool(deal.insurance and deal.insurance.insurance_proforma_line_item)),
+         "Insurance Broker"),
+        ("Insurance", "Loss run history (5 years)", _status(False), "Owner / Carrier"),
+        ("Insurance", "Flood insurance (if in SFHA)",
+         _status(False,
+                 na=(_md and _md.fema_flood_zone and _md.fema_flood_zone.upper().startswith("X"))),
+         "Insurance Broker"),
+
+        # Market
+        ("Market", "Rent comparables study",
+         _status(bool(_comps and _comps.rent_comps)), "Broker / Appraiser"),
+        ("Market", "Sales comparables study",
+         _status(bool(_comps and _comps.sale_comps)), "Broker / Appraiser"),
+        ("Market", "Appraisal (MAI)", _status(False), "Appraiser"),
+        ("Market", "Submarket supply pipeline",
+         _status(bool(_md and _md.supply_pipeline_narrative)), "Underwriting"),
+    ]
+
+    if _is_value_add:
+        _checklist_items.extend([
+            ("Construction", "Architect / engineering drawings", _status(False), "Architect"),
+            ("Construction", "GC bid / GMP contract",             _status(False), "General Contractor"),
+            ("Construction", "Construction budget with 5–10% contingency", _status(False), "Development"),
+            ("Construction", "Construction schedule / critical path",       _status(False), "Development"),
+            ("Construction", "Permit pull plan & timeline",                 _status(False), "Architect / Municipality"),
+        ])
+
+    ctx["dd_checklist_rows"] = [
+        {"category": c, "item": i, "status": s, "owner": o}
+        for c, i, s, o in _checklist_items
+    ]
+    _by_status = defaultdict(int)
+    for _, _, s, _ in _checklist_items:
+        _by_status[s] += 1
+    logger.info(
+        "DD CHECKLIST: %d items — Complete=%d In Progress=%d Pending=%d N/A=%d",
+        len(_checklist_items),
+        _by_status["Complete"], _by_status["In Progress"],
+        _by_status["Pending"], _by_status["N/A"],
+    )
+
     # Recommendation — populated by Prompt 4-MASTER into deal.recommendation
     ctx["recommendation"] = deal.recommendation.value if deal.recommendation else ""
     ctx["recommendation_one_line"] = deal.recommendation_one_line or ""
@@ -850,19 +967,30 @@ def build_context(deal: DealData) -> dict:
 
     # ── Zoning standards table rows ───────────────────────────────
     z = deal.zoning
+    def _zs(val, suffix=""):
+        if val in (None, "", 0, 0.0):
+            return "—"
+        return f"{val}{suffix}"
+
     ctx["zoning_standards_rows"] = [
-        {"parameter": "Zoning District",      "standard": z.zoning_code or "",         "proposed": "", "code_section": ""},
-        {"parameter": "District Name",         "standard": z.zoning_district or "",     "proposed": "", "code_section": ""},
-        {"parameter": "Max Height (ft)",       "standard": z.max_height_ft or "",       "proposed": "", "code_section": ""},
-        {"parameter": "Max Stories",           "standard": z.max_stories or "",         "proposed": "", "code_section": ""},
-        {"parameter": "Min Lot Area (SF)",     "standard": z.min_lot_area_sf or "",     "proposed": "", "code_section": ""},
-        {"parameter": "Max Lot Coverage",      "standard": f"{z.max_lot_coverage_pct:.0%}" if z.max_lot_coverage_pct else "", "proposed": "", "code_section": ""},
-        {"parameter": "Max FAR",               "standard": z.max_far or "",             "proposed": "", "code_section": ""},
-        {"parameter": "Front Setback (ft)",    "standard": z.front_setback_ft or "",   "proposed": "", "code_section": ""},
-        {"parameter": "Rear Setback (ft)",     "standard": z.rear_setback_ft or "",    "proposed": "", "code_section": ""},
-        {"parameter": "Side Setback (ft)",     "standard": z.side_setback_ft or "",    "proposed": "", "code_section": ""},
-        {"parameter": "Min Parking Spaces",    "standard": z.min_parking_spaces or "", "proposed": "", "code_section": ""},
+        {"parameter": "Zoning District",   "standard": _zs(z.zoning_code),           "proposed": "", "code_section": ""},
+        {"parameter": "District Name",      "standard": _zs(z.zoning_district),       "proposed": "", "code_section": ""},
+        {"parameter": "Max Height (ft)",    "standard": _zs(z.max_height_ft),         "proposed": "", "code_section": ""},
+        {"parameter": "Max Stories",        "standard": _zs(z.max_stories),           "proposed": "", "code_section": ""},
+        {"parameter": "Min Lot Area (SF)",  "standard": _zs(z.min_lot_area_sf),       "proposed": "", "code_section": ""},
+        {"parameter": "Max Lot Coverage",
+         "standard": (f"{z.max_lot_coverage_pct:.0%}" if z.max_lot_coverage_pct else "—"),
+         "proposed": "", "code_section": ""},
+        {"parameter": "Max FAR",            "standard": _zs(z.max_far),               "proposed": "", "code_section": ""},
+        {"parameter": "Front Setback (ft)", "standard": _zs(z.front_setback_ft),      "proposed": "", "code_section": ""},
+        {"parameter": "Rear Setback (ft)",  "standard": _zs(z.rear_setback_ft),       "proposed": "", "code_section": ""},
+        {"parameter": "Side Setback (ft)",  "standard": _zs(z.side_setback_ft),       "proposed": "", "code_section": ""},
+        {"parameter": "Min Parking Spaces", "standard": _zs(z.min_parking_spaces),    "proposed": "", "code_section": ""},
     ]
+    ctx["zoning_standards_note"] = ""
+    _populated = sum(1 for r in ctx["zoning_standards_rows"] if r["standard"] != "—")
+    logger.info("ZONING STANDARDS: %d / %d rows populated",
+                _populated, len(ctx["zoning_standards_rows"]))
     ctx["permitted_uses_description"] = (
         ", ".join(z.permitted_uses) if z.permitted_uses else ""
     )
@@ -925,6 +1053,39 @@ def build_context(deal: DealData) -> dict:
            "This analysis will be completed upon lease execution and "
            "confirmation of stabilized operating assumptions."
     )
+
+    # ── Price solver (MC-backed purchase price at 15% median LP IRR) ─
+    _ps = fo.price_solver_results or {}
+    ctx["price_solver"] = _ps
+    if _ps.get("converged") and _ps.get("solved_purchase_price"):
+        _solved = _ps["solved_purchase_price"]
+        _base = _ps.get("base_purchase_price") or a.purchase_price or 0
+        _adj = _ps.get("price_adjustment_pct") or 0
+        _tgt = _ps.get("target_lp_irr") or 0.15
+        _direction = "below" if _adj < 0 else "above"
+        ctx["solved_price_display"] = f"${_solved:,.0f}"
+        ctx["solved_price_vs_base_pct"] = f"{abs(_adj) * 100:.1f}%"
+        ctx["solved_price_direction"] = _direction
+        ctx["solved_price_target_irr_pct"] = f"{_tgt * 100:.0f}%"
+        ctx["solved_price_median_lp_irr_pct"] = (
+            f"{_ps.get('solved_median_lp_irr', 0) * 100:.2f}%"
+        )
+        ctx["solved_price_narrative"] = (
+            f"Monte Carlo simulation indicates that a purchase price of "
+            f"${_solved:,.0f} — {abs(_adj) * 100:.1f}% {_direction} the current "
+            f"${_base:,.0f} basis — would produce a median LP IRR of "
+            f"{_tgt * 100:.0f}% across the 2,000-iteration stochastic range of "
+            f"rent growth, exit cap rate, vacancy, and expense growth. "
+            f"This price is an advisory target for negotiation; a full "
+            f"deterministic underwrite at that price should be run before "
+            f"committee submission."
+        )
+        logger.info("PRICE SOLVER CTX: solved=%s (%+.1f%% vs base)",
+                    ctx["solved_price_display"], _adj * 100)
+    else:
+        ctx["solved_price_narrative"] = ""
+        _reason = _ps.get("reason", "not_run")
+        logger.info("PRICE SOLVER CTX: no result (reason=%s)", _reason)
 
     # ── Full market data object (for demographic table) ───────────
     ctx["market_data"] = deal.market_data.model_dump() if deal.market_data else {}
@@ -1339,6 +1500,55 @@ def build_context(deal: DealData) -> dict:
                 ctx["parcel_a_account"],
                 ctx["parcel_a_owner"],
                 ctx["parcel_a_zoning"])
+
+    # Current ownership snapshot — parcel-record fields rendered as a
+    # two-column key/value table in Section 05.
+    def _or_na(v):
+        return v if v not in (None, "", 0, 0.0) else "N/A"
+
+    _last_sale_price = (pd_.last_sale_price if pd_ else None)
+    _last_sale_date = (pd_.last_sale_date if pd_ else None)
+    _current_ownership_rows = [
+        ("Current Owner",         _or_na(pd_.owner_name if pd_ else None)),
+        ("Owner Entity Type",     _or_na(pd_.owner_entity if pd_ else None)),
+        ("Parcel / Account ID",   _or_na(pd_.parcel_id if pd_ else None)),
+        ("Deed Book / Page",      _or_na(pd_.deed_book_page if pd_ else None)),
+        ("Last Sale Date",        _or_na(_last_sale_date)),
+        ("Last Sale Price",
+         f"${_last_sale_price:,.0f}" if _last_sale_price else "N/A"),
+        ("Census Tract",          _or_na(deal.address.census_tract)),
+        ("FIPS Code",             _or_na(deal.address.fips_code)),
+    ]
+    ctx["current_ownership_rows"] = [
+        {"label": k, "value": str(v)} for k, v in _current_ownership_rows
+    ]
+
+    # Assessment & valuation breakdown (separate table so the reader can
+    # quickly compare taxable basis against current carrying value).
+    _assessed = (pd_.assessed_value if pd_ else None)
+    _land = (pd_.land_value if pd_ else None)
+    _impr = (pd_.improvement_value if pd_ else None)
+    _assessment_rows = []
+    if any(v not in (None, 0, 0.0) for v in (_assessed, _land, _impr)):
+        _assessment_rows = [
+            {"label": "Land Value",          "value": f"${_land:,.0f}" if _land else "N/A"},
+            {"label": "Improvement Value",   "value": f"${_impr:,.0f}" if _impr else "N/A"},
+            {"label": "Total Assessed Value","value": f"${_assessed:,.0f}" if _assessed else "N/A"},
+        ]
+        if _assessed and a.purchase_price:
+            _ratio = _assessed / a.purchase_price
+            _assessment_rows.append({
+                "label": "Assessed / Purchase Price",
+                "value": f"{_ratio:.1%}",
+            })
+    ctx["assessment_rows"] = _assessment_rows
+    logger.info(
+        "OWNERSHIP CONTEXT: owner=%s parcel=%s sale=%s assessed=%s",
+        _or_na(pd_.owner_name if pd_ else None),
+        _or_na(pd_.parcel_id if pd_ else None),
+        _or_na(_last_sale_date),
+        _or_na(_assessed),
+    )
 
     # Deed / title transfer history — sourced from PHL rtt_summary in
     # parcel_fetcher.py. Empty list when no data (non-Phl deal or no records).

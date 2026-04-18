@@ -304,6 +304,30 @@
 
   {% if ownership_narrative %}<div class="narrative">{{ ownership_narrative }}</div>{% endif %}
 
+  {% if current_ownership_rows %}
+  <div class="subsection-title">Current Ownership</div>
+  <table class="data-table tbl-2col">
+    {% for row in current_ownership_rows %}
+    <tr>
+      <td>{{ row.label }}</td>
+      <td>{{ row.value }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if assessment_rows %}
+  <div class="subsection-title">Assessment &amp; Valuation</div>
+  <table class="data-table tbl-2col">
+    {% for row in assessment_rows %}
+    <tr>
+      <td>{{ row.label }}</td>
+      <td style="text-align:right">{{ row.value }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
   {% if deed_history_rows %}
   <div class="subsection-title">Recorded Deed Transfers</div>
   <table class="data-table">
@@ -314,6 +338,7 @@
         <th>Grantor</th>
         <th>Grantee</th>
         <th style="text-align:right">Consideration</th>
+        <th>Document ID</th>
       </tr>
     </thead>
     <tbody>
@@ -324,6 +349,7 @@
         <td>{{ row.grantor }}</td>
         <td>{{ row.grantee }}</td>
         <td style="text-align:right">{{ row.consideration }}</td>
+        <td>{{ row.document_id }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -373,6 +399,9 @@
     </tr>
     {% endfor %}
   </table>
+  {% elif zoning_standards_note %}
+  <div class="subsection-title">Zoning Standards</div>
+  <div class="source-note">{{ zoning_standards_note }}</div>
   {% endif %}
 
   {% if permitted_uses_description %}
@@ -512,7 +541,7 @@
 
   {% if unit_mix_summary_rows %}
   <div class="subsection-title">Unit Mix Summary</div>
-  <table class="data-table">
+  <table class="data-table unit-mix-table">
     <tr>
       <th>Unit Type</th>
       <th class="right">Count</th>
@@ -543,7 +572,7 @@
 
   {% if rent_roll_rows %}
   <div class="subsection-title">Rent Roll Detail</div>
-  <table class="data-table">
+  <table class="data-table rent-roll-table">
     <tr>
       <th>Unit</th>
       <th>Type</th>
@@ -987,6 +1016,29 @@
     <div class="section-title">Due Diligence Checklist &amp; Status Tracker</div>
   </div>
   {% if dd_checklist_intro %}<div class="narrative">{{ dd_checklist_intro }}</div>{% endif %}
+
+  {% if dd_checklist_rows %}
+  <table class="data-table dd-checklist-table">
+    <thead>
+      <tr>
+        <th>Category</th>
+        <th>Item</th>
+        <th>Status</th>
+        <th>Owner</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in dd_checklist_rows %}
+      <tr>
+        <td>{{ row.category }}</td>
+        <td>{{ row.item }}</td>
+        <td class="dd-status dd-status-{{ row.status|lower|replace(' ', '-')|replace('/', '') }}">{{ row.status }}</td>
+        <td>{{ row.owner }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -1049,6 +1101,18 @@
   {% if conclusion_3 %}<div class="narrative">{{ conclusion_3 }}</div>{% endif %}
   {% if conclusion_4 %}<div class="narrative">{{ conclusion_4 }}</div>{% endif %}
   {% if conclusion_5 %}<div class="narrative">{{ conclusion_5 }}</div>{% endif %}
+
+  {% if solved_price_narrative %}
+  <div class="subsection-title">Monte Carlo-Indicated Purchase Price</div>
+  <table class="data-table tbl-2col">
+    <tr><td>Target Median LP IRR</td><td style="text-align:right"><strong>{{ solved_price_target_irr_pct }}</strong></td></tr>
+    <tr><td>Current Underwritten Price</td><td style="text-align:right">${{ "{:,.0f}".format(price_solver.base_purchase_price) }}</td></tr>
+    <tr><td>Monte Carlo-Solved Price</td><td style="text-align:right"><strong>{{ solved_price_display }}</strong></td></tr>
+    <tr><td>Adjustment vs. Current Basis</td><td style="text-align:right">{{ solved_price_vs_base_pct }} {{ solved_price_direction }}</td></tr>
+    <tr><td>Median LP IRR at Solved Price</td><td style="text-align:right">{{ solved_price_median_lp_irr_pct }}</td></tr>
+  </table>
+  <div class="narrative">{{ solved_price_narrative }}</div>
+  {% endif %}
 
   {% if bottom_line %}
   <div class="pullquote">{{ bottom_line }}</div>

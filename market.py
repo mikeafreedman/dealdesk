@@ -2296,6 +2296,50 @@ def enrich_market_data(deal: DealData) -> DealData:
         else:
             logger.warning("Zoning fallback Prompt 3A failed — no structured zoning data")
 
+    # Address-only zoning fallback: both scrape AND district code unavailable.
+    # Ask the LLM to infer the likely zoning district and standards from the
+    # property address alone. Clearly marked as an inference — not authoritative.
+    if (not zoning_code_text and not deal.zoning.zoning_code
+            and addr.full_address and addr.city and addr.state):
+        logger.info(
+            "Zoning address-only fallback: inferring district from %s",
+            addr.full_address,
+        )
+        _addr_system = (
+            "You are a zoning code analyst with comprehensive knowledge of US\n"
+            "municipal zoning codes. Using only the property address, infer the\n"
+            "most likely zoning district for the parcel and return its\n"
+            "dimensional standards and permitted uses from your training\n"
+            "knowledge.\n\n"
+            "RULES:\n"
+            "- Prefer the MOST LIKELY district for that street/neighborhood.\n"
+            "- Return null for fields you are not confident about.\n"
+            "- Dimensions in feet. FAR as decimal. Percentages as decimals.\n"
+            "- Set source_mismatch=false and source_notes='LLM address-only\n"
+            "  inference — parcel lookup and municipal code scrape both\n"
+            "  unavailable; standards are inferred and must be verified against\n"
+            "  the current municipal code.'\n"
+            "Output ONLY valid JSON."
+        )
+        _addr_user = (
+            f"Property: {addr.full_address}\n"
+            f"Municipality: {addr.city}, {addr.state}\n\n"
+            "No parcel data, no scraped code text, and no explicit zoning\n"
+            "district code are available. Infer the most likely zoning district\n"
+            "for this address and return the schema below populated with the\n"
+            "district's typical standards:\n"
+            + _USER_3A.split("Return JSON:")[1].strip()
+        )
+        _addr_fb = _call_llm(MODEL_HAIKU, _addr_system, _addr_user)
+        if _addr_fb:
+            _apply_3a(_addr_fb, deal)
+            logger.info(
+                "Zoning address-only fallback complete — district=%s",
+                deal.zoning.zoning_code or "UNKNOWN",
+            )
+        else:
+            logger.warning("Zoning address-only fallback failed — no zoning data")
+
     # Prompt 3B — Buildable Capacity Analysis (Sonnet)
     logger.info("Running Prompt 3B — Buildable Capacity Analysis...")
     zoning_json = deal.zoning.model_dump_json(indent=2)

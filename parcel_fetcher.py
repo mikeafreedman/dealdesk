@@ -34,6 +34,7 @@ from typing import Optional
 import requests
 
 from models.models import DealData, DeedRecord, ParcelData
+from iasworld_fetcher import fetch_iasworld
 
 logger = logging.getLogger(__name__)
 
@@ -964,6 +965,19 @@ def _acris_name_signature(name_upper: str) -> set:
     return sig
 
 
+_IASWORLD_URL_RE = re.compile(
+    r"(propertyrecords\.|/pt/forms/|/pt/search/|iasworld)", re.IGNORECASE
+)
+
+
+def _is_iasworld_url(url: str) -> bool:
+    """Heuristic: does `url` look like a Tyler iasWorld property portal?
+    iasWorld apps live at /pt/ and most county deployments use a hostname
+    starting with "propertyrecords." (e.g. propertyrecords.montcopa.org).
+    """
+    return bool(_IASWORLD_URL_RE.search(url or ""))
+
+
 def _resolve_nyc_borough(addr) -> Optional[int]:
     """Return ACRIS borough code (1..5) from deal address, or None if unresolved.
     Prefers city match, falls back to county (for addresses where city is a
@@ -1308,6 +1322,18 @@ def fetch_parcel(deal: DealData) -> None:
     # since those jurisdictions already populate rich deed_history above.
     if state == "NY" and _resolve_nyc_borough(addr) is not None:
         _fetch_nyc_acris(deal, pd_obj, addr)
+
+    # TYLER iasWorld ENRICHMENT: scrape CAMA portal when the registry's
+    # assessor_url points at one. Covers Montgomery PA (propertyrecords.
+    # montcopa.org) and other PA counties using the same platform.
+    # Detected by URL hostname/path — iasWorld portals live at paths
+    # ending in "/pt/forms/" or hosts starting with "propertyrecords".
+    assessor = deal.provenance.field_sources.get("assessor_url") or ""
+    if assessor and _is_iasworld_url(assessor):
+        try:
+            fetch_iasworld(deal, pd_obj, addr, assessor)
+        except Exception as exc:
+            logger.warning("iasWorld fetch failed: %s", exc)
 
     # UNIVERSAL FALLBACK: synthesize one-row deed_history from last sale
     # when the primary source didn't populate a richer list. This means

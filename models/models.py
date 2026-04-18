@@ -485,6 +485,7 @@ class FinancialOutputs(BaseModel):
     sensitivity_axis_exit_cap:    Optional[List[float]] = None
     monte_carlo_results:     Optional[Dict[str, Any]] = None
     monte_carlo_narrative:   Optional[str] = None   # Prompt 5A output
+    price_solver_results:    Optional[Dict[str, Any]] = None   # MC-backed purchase-price solver
     pro_forma_years:         Optional[List[Dict[str, float]]] = None
     loan_balance_at_refi:    Optional[List[Optional[float]]] = None  # amortized balance at each refi event
     lease_events:            Optional[Dict[int, Dict[str, Any]]] = None  # {year: {commission, ti, downtime_loss, ...}}
