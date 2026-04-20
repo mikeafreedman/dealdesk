@@ -13,11 +13,15 @@
 {# ═══════════════════════════════════════════ #}
 <div class="cover-page">
   <div class="cover-top-bar">
-    <div>
-      <div class="cover-logo-text">DealDesk</div>
-      <div class="cover-logo-sub">CRE Underwriting</div>
-    </div>
+    <div></div>
     <div class="cover-badge">Confidential</div>
+  </div>
+
+  <div class="cover-hero">
+    {% if dealdesk_logo_uri %}
+    <img src="{{ dealdesk_logo_uri }}" alt="" class="cover-logo-hero">
+    {% endif %}
+    <div class="cover-report-title">Underwriting Report</div>
   </div>
 
   <div class="cover-body">
@@ -144,6 +148,20 @@
   </div>
   {% endif %}
 
+  {% if solved_price_display %}
+  <div class="opinion-of-value">
+    <div class="opinion-of-value-label">Opinion of Value</div>
+    <div class="opinion-of-value-amount">{{ solved_price_display }}</div>
+    <div class="opinion-of-value-sub">
+      Monte Carlo-indicated price to achieve a median LP IRR of
+      {{ solved_price_target_irr_pct or "15%" }}
+      ({{ solved_price_vs_base_pct }} {{ solved_price_direction }} the current
+      basis of ${{ "{:,.0f}".format(price_solver.base_purchase_price) }}).
+      Advisory only — verify via full deterministic underwrite at this price.
+    </div>
+  </div>
+  {% endif %}
+
   {% if deal_thesis %}
   <div class="subsection-title">Deal Thesis</div>
   <div class="narrative">{{ deal_thesis }}</div>
@@ -237,46 +255,19 @@
   <div class="map-container"><img src="{{ aerial_map_b64 }}" alt="Aerial Map"></div>
   {% endif %}
 
-  {% if neighborhood_map_b64 %}
-  <div class="subsection-title">Neighborhood Context</div>
-  <div class="map-container"><img src="{{ neighborhood_map_b64 }}" alt="Neighborhood Map"></div>
-  {% endif %}
+  {# Neighborhood context map + amenities table moved to Section 07
+     (Location & Market Overview) for better narrative flow. #}
 
-  {% if amenity_rows %}
-  <div class="subsection-title">Neighborhood Amenities</div>
-  <table class="data-table">
-    <tr>
-      <th>Category</th>
-      <th>Name</th>
-      <th class="right">Distance</th>
-      <th>Notes</th>
-    </tr>
-    {% for row in amenity_rows %}
-    <tr>
-      <td>{{ row.category }}</td>
-      <td>{{ row.name }}</td>
-      <td class="right">{{ row.distance }}</td>
-      <td>{{ row.notes }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% endif %}
-
-  {% if fema_map_b64 %}
+  {# FEMA flood map image removed per design — narrative and risk-factor
+     table render below without a map rendering. #}
+  {% if fema_flood_narrative %}
   <div class="subsection-title">FEMA Flood Zone</div>
-  <div class="map-container"><img src="{{ fema_map_b64 }}" alt="FEMA Map"></div>
+  <div class="narrative">{{ fema_flood_narrative }}</div>
   {% endif %}
 
-  {% if fema_flood_narrative %}<div class="narrative">{{ fema_flood_narrative }}</div>{% endif %}
-
-  {% if fema_flood_zone or fema_panel_number or is_opportunity_zone is not none %}
-  <table class="data-table tbl-2col">
-    <tr><th>Risk Factor</th><th>Status</th></tr>
-    {% if fema_flood_zone %}<tr><td>FEMA Flood Zone</td><td>{{ fema_flood_zone }}</td></tr>{% endif %}
-    {% if fema_panel_number %}<tr><td>FEMA Panel Number</td><td>{{ fema_panel_number }}</td></tr>{% endif %}
-    {% if is_opportunity_zone is not none %}<tr><td>Opportunity Zone</td><td>{{ "Yes" if is_opportunity_zone else "No" }}</td></tr>{% endif %}
-  </table>
-  {% endif %}
+  {# Risk Factor / Status table removed — the same fields are now surfaced
+     within Section 14 (Environmental & Climate) and the new Incentives
+     section. #}
 </div>
 {% endif %}
 
@@ -305,18 +296,50 @@
   <table class="data-table tbl-2col">
     <tr><th>Field</th><th>Value</th></tr>
     <tr><td>Address</td>         <td>{{ parcel_a_address }}</td></tr>
+    {% if validated_address and validated_address != parcel_a_address %}<tr><td>USPS-Validated Address</td><td>{{ validated_address }}</td></tr>{% endif %}
     {% if parcel_a_account  and parcel_a_account  != "N/A" %}<tr><td>Parcel ID (OPA/APN)</td><td>{{ parcel_a_account }}</td></tr>{% endif %}
     {% if parcel_a_owner    and parcel_a_owner    != "N/A" %}<tr><td>Owner of Record</td> <td>{{ parcel_a_owner }}</td></tr>{% endif %}
+    {% if parcel_owner_entity_type and parcel_owner_entity_type != "N/A" %}<tr><td>Owner Entity Type</td><td>{{ parcel_owner_entity_type }}</td></tr>{% endif %}
+    {% if parcel_taxpayer_mailing and parcel_taxpayer_mailing != "N/A" %}<tr><td>Taxpayer Mailing Address</td><td>{{ parcel_taxpayer_mailing }}</td></tr>{% endif %}
+    {% if parcel_owner_occupied_display %}<tr><td>Owner-Occupied</td><td>{{ parcel_owner_occupied_display }}</td></tr>{% endif %}
+    {% if parcel_years_owned_display %}<tr><td>Years Owned</td><td>{{ parcel_years_owned_display }}</td></tr>{% endif %}
+    {% if broker_name %}<tr><td>Listing Broker</td><td>{{ broker_name }}{% if broker_firm %} ({{ broker_firm }}){% endif %}</td></tr>{% endif %}
+    {% if broker_phone %}<tr><td>Broker Phone</td><td>{{ broker_phone }}</td></tr>{% endif %}
+    {% if broker_email %}<tr><td>Broker Email</td><td>{{ broker_email }}</td></tr>{% endif %}
     {% if parcel_a_zoning   and parcel_a_zoning   != "N/A" %}<tr><td>Zoning</td>          <td>{{ parcel_a_zoning }}</td></tr>{% endif %}
     {% if parcel_a_land_area    and parcel_a_land_area    != "N/A" %}<tr><td>Lot Area</td>        <td>{{ parcel_a_land_area }}</td></tr>{% endif %}
     {% if parcel_a_building_sf  and parcel_a_building_sf  != "N/A" %}<tr><td>Building SF</td>     <td>{{ parcel_a_building_sf }}</td></tr>{% endif %}
     {% if parcel_a_year_built   and parcel_a_year_built   != "N/A" %}<tr><td>Year Built</td>      <td>{{ parcel_a_year_built }}</td></tr>{% endif %}
+    {% if parcel_property_use_class %}<tr><td>Property Use Class</td><td>{{ parcel_property_use_class }}</td></tr>{% endif %}
     {% if parcel_a_assessed     and parcel_a_assessed     != "N/A" %}<tr><td>Assessed Value</td>  <td>{{ parcel_a_assessed }}</td></tr>{% endif %}
     {% if parcel_a_taxable_land and parcel_a_taxable_land != "N/A" %}<tr><td>Taxable Land</td>    <td>{{ parcel_a_taxable_land }}</td></tr>{% endif %}
     {% if parcel_a_taxable_bldg and parcel_a_taxable_bldg != "N/A" %}<tr><td>Taxable Building</td><td>{{ parcel_a_taxable_bldg }}</td></tr>{% endif %}
     {% if parcel_census_tract   and parcel_census_tract   != "N/A" %}<tr><td>Census Tract</td>    <td>{{ parcel_census_tract }}</td></tr>{% endif %}
     {% if parcel_fips           and parcel_fips           != "N/A" %}<tr><td>FIPS Code</td>       <td>{{ parcel_fips }}</td></tr>{% endif %}
+    {% if elevation_feet %}<tr><td>Elevation</td><td>{{ "%.1f"|format(elevation_feet) }} ft</td></tr>{% endif %}
   </table>
+  {% endif %}
+
+  {% if historical_designation or historic_district or historic_preservation_notes %}
+  <div class="subsection-title">Historical Status</div>
+  <table class="data-table tbl-2col">
+    {% if historical_designation %}<tr><td>Designation</td><td>{{ historical_designation }}</td></tr>{% endif %}
+    {% if historic_district %}<tr><td>Historic District</td><td>{{ historic_district }}</td></tr>{% endif %}
+    {% if historic_tax_credits_eligible is not none %}
+    <tr><td>Historic Tax Credits Eligible</td><td>{{ "Yes" if historic_tax_credits_eligible else "No" }}</td></tr>
+    {% endif %}
+  </table>
+  {% if historic_preservation_notes %}
+  <div class="narrative">{{ historic_preservation_notes }}</div>
+  {% endif %}
+  {% else %}
+  <div class="subsection-title">Historical Status</div>
+  <div class="source-note">
+    No historical designation of record for this parcel at the federal
+    (NRHP) or local level. Verification via a title-company historic
+    designation search is recommended prior to closing if any structural
+    alterations are planned.
+  </div>
   {% endif %}
 </div>
 {% endif %}
@@ -446,13 +469,12 @@
   {% if zoning_standards_rows %}
   <div class="subsection-title">Zoning Standards</div>
   <table class="data-table">
-    <tr><th>Parameter</th><th>Standard</th><th>Proposed</th><th>Code Section</th></tr>
+    <tr><th>Parameter</th><th>Standard</th><th>Proposed</th></tr>
     {% for row in zoning_standards_rows %}
     <tr>
       <td>{{ row.parameter }}</td>
       <td>{{ row.standard }}</td>
       <td>{{ row.proposed }}</td>
-      <td>{{ row.code_section }}</td>
     </tr>
     {% endfor %}
   </table>
@@ -464,7 +486,41 @@
   <div class="source-note">{{ zoning_standards_note }}</div>
   {% endif %}
 
-  {% if permitted_uses_description %}
+  {% if permitted_uses_by_right or permitted_uses_conditional or permitted_uses_special or permitted_uses_accessory %}
+  <div class="subsection-title">Permitted Uses</div>
+  {% if permitted_uses_by_right %}
+  <div class="permitted-uses-bucket">
+    <div class="permitted-uses-label">By Right</div>
+    <ul class="permitted-uses-list">
+      {% for u in permitted_uses_by_right %}<li>{{ u }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% if permitted_uses_conditional %}
+  <div class="permitted-uses-bucket">
+    <div class="permitted-uses-label">Conditional Uses</div>
+    <ul class="permitted-uses-list">
+      {% for u in permitted_uses_conditional %}<li>{{ u }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% if permitted_uses_special %}
+  <div class="permitted-uses-bucket">
+    <div class="permitted-uses-label">Special Exception</div>
+    <ul class="permitted-uses-list">
+      {% for u in permitted_uses_special %}<li>{{ u }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% if permitted_uses_accessory %}
+  <div class="permitted-uses-bucket">
+    <div class="permitted-uses-label">Accessory Uses</div>
+    <ul class="permitted-uses-list">
+      {% for u in permitted_uses_accessory %}<li>{{ u }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% elif permitted_uses_description %}
   <div class="subsection-title">Permitted Uses</div>
   <div class="narrative">{{ permitted_uses_description }}</div>
   {% endif %}
@@ -481,6 +537,7 @@
   <div class="callout"><strong>HBU Conclusion:</strong> {{ hbu_conclusion }}</div>
   {% endif %}
   {% endif %}
+
 </div>
 {% endif %}
 
@@ -498,6 +555,11 @@
   {% if location_overview_p1 %}<div class="narrative">{{ location_overview_p1 }}</div>{% endif %}
   {% if location_overview_p2 %}<div class="narrative">{{ location_overview_p2 }}</div>{% endif %}
 
+  {% if neighborhood_map_b64 %}
+  <div class="subsection-title">Neighborhood Context</div>
+  <div class="map-container"><img src="{{ neighborhood_map_b64 }}" alt="Neighborhood Map"></div>
+  {% endif %}
+
   {% if transportation_analysis %}
   <div class="subsection-title">Transportation &amp; Access</div>
   <div class="narrative">{{ transportation_analysis }}</div>
@@ -512,6 +574,26 @@
       <td>{{ row.route }}</td>
       <td>{{ row.distance }}</td>
       <td>{{ row.destination }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if amenity_rows %}
+  <div class="subsection-title">Neighborhood Amenities</div>
+  <table class="data-table">
+    <tr>
+      <th>Category</th>
+      <th>Name</th>
+      <th class="right">Distance</th>
+      <th>Notes</th>
+    </tr>
+    {% for row in amenity_rows %}
+    <tr>
+      <td>{{ row.category }}</td>
+      <td>{{ row.name }}</td>
+      <td class="right">{{ row.distance }}</td>
+      <td>{{ row.notes }}</td>
     </tr>
     {% endfor %}
   </table>
@@ -552,6 +634,15 @@
   </div>
   {% if neighborhood_trend_narrative %}
   <div class="narrative">{{ neighborhood_trend_narrative }}</div>
+  {% endif %}
+
+  {% if neighborhood_trend_bullets %}
+  <div class="subsection-title">Key Takeaways</div>
+  <ul class="takeaway-list">
+    {% for b in neighborhood_trend_bullets %}
+    <li>{{ b }}</li>
+    {% endfor %}
+  </ul>
   {% endif %}
 </div>
 {% endif %}
@@ -759,10 +850,11 @@
   <div class="narrative">{{ sale_comp_narrative }}</div>
   {% if sale_comp_rows %}
   <table class="data-table comp-table">
-    <tr><th>Address</th><th>Date</th><th class="right">Price</th><th class="right">$/SF</th><th class="right">$/Unit</th><th class="right">Cap Rate</th><th>Distance</th></tr>
+    <tr><th>Address</th><th>Type</th><th>Date</th><th class="right">Price</th><th class="right">$/SF</th><th class="right">$/Unit</th><th class="right">Cap Rate</th><th>Distance</th></tr>
     {% for row in sale_comp_rows %}
     <tr>
       <td>{{ row.address }}</td>
+      <td>{{ row.property_type or "" }}</td>
       <td>{{ row.sale_date or row.date or "" }}</td>
       <td class="right">{{ row.price or row.sale_price or "" }}</td>
       <td class="right">{{ row.price_per_sf }}</td>
@@ -914,6 +1006,45 @@
   {% if monte_carlo_narrative %}
   <div class="subsection-title">Monte Carlo Risk-Weighted Return</div>
   <div class="narrative">{{ monte_carlo_narrative }}</div>
+  {% endif %}
+
+  <div class="subsection-title">Incentives &amp; Abatements</div>
+  {% if incentives_narrative %}
+  <div class="narrative">{{ incentives_narrative }}</div>
+  {% endif %}
+  {% if incentives_rows %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Incentive</th>
+        <th>Source / Authority</th>
+        <th>Benefit</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in incentives_rows %}
+      <tr>
+        <td><strong>{{ row.incentive }}</strong></td>
+        <td>{{ row.source }}</td>
+        <td>{{ row.benefit }}</td>
+        <td>{{ row.status }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="source-note">
+    Incentive eligibility is advisory. Final confirmation requires review
+    by the applicable tax-credit syndicator, municipal economic development
+    office, or grant administrator before relying on any benefit in the
+    investment proforma.
+  </div>
+  {% else %}
+  <div class="source-note">
+    No identifiable federal, state, or local incentives flagged for this
+    property. Consider checking with the local economic development
+    authority for discretionary programs not captured in this review.
+  </div>
   {% endif %}
 </div>
 {% endif %}
@@ -1119,22 +1250,27 @@
   {% if due_diligence_overview %}<div class="narrative">{{ due_diligence_overview }}</div>{% endif %}
 
   {% if dd_flags %}
-  <div class="dd-flags">
+  <ol class="dd-flag-list">
     {% for flag in dd_flags %}
     {% set color = flag.color|upper %}
     {% set cls = 'fail' if color == 'RED' else ('watch' if color == 'AMBER' else 'pass') %}
-    <div class="dd-flag {{ cls }}">
-      <div class="dd-flag-badge">{{ color }}</div>
-      <div class="dd-flag-content">
-        <div class="dd-flag-title">{{ flag.title }}{% if flag.category %} <span style="color:#6B6460;font-weight:normal;">— {{ flag.category }}</span>{% endif %}</div>
-        <div class="dd-flag-detail">{{ flag.narrative }}</div>
-        {% if flag.remediation %}<div class="dd-flag-remed"><strong>Remediation:</strong> {{ flag.remediation }}</div>{% endif %}
+    <li class="dd-flag-item {{ cls }}">
+      <div class="dd-flag-heading">
+        <span class="dd-flag-status {{ cls }}">{{ color }}</span>
+        <span class="dd-flag-title">{{ flag.title }}</span>
+        {% if flag.category %}<span class="dd-flag-category">— {{ flag.category }}</span>{% endif %}
       </div>
-    </div>
+      <div class="dd-flag-body">{{ flag.narrative }}</div>
+      {% if flag.remediation %}
+      <div class="dd-flag-remediation">
+        <strong>Remediation —</strong> {{ flag.remediation }}
+      </div>
+      {% endif %}
+    </li>
     {% endfor %}
-  </div>
+  </ol>
   {% else %}
-  <div class="callout">No due diligence flags generated for this analysis.</div>
+  <p class="source-note">No due diligence flags generated for this analysis.</p>
   {% endif %}
 
   {% if pca_system_rows or pca_immediate_repair_rows or pca_overall_condition %}
@@ -1252,6 +1388,25 @@
     <div class="section-title">Project Timeline &amp; Milestones</div>
   </div>
   {% if timeline_narrative %}<div class="narrative">{{ timeline_narrative }}</div>{% endif %}
+
+  {% if gantt_phases %}
+  <div class="subsection-title">Project Schedule</div>
+  <div class="schedule-flow">
+    {% for phase in gantt_phases %}
+    <div class="schedule-step schedule-step-{{ phase.kind }}">
+      <div class="schedule-step-badge">{{ loop.index }}</div>
+      <div class="schedule-step-name">{{ phase.name }}</div>
+      <div class="schedule-step-duration">{{ phase.duration_label }}</div>
+      <div class="schedule-step-label">{{ phase.bar_label }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="source-note">
+    Schedule spans {{ gantt_total_months }} months from acquisition close
+    through projected exit, in sequence. Lease-up typically overlaps the
+    tail of construction where stabilization follows capex completion.
+  </div>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -1271,6 +1426,41 @@
     <div class="gonogo-verdict">{{ recommendation or "Pending" }}</div>
     {% if recommendation_one_line %}<div class="gonogo-rationale">{{ recommendation_one_line }}</div>{% endif %}
   </div>
+
+  {% if solved_price_display %}
+  <div class="opinion-of-value">
+    <div class="opinion-of-value-label">Opinion of Value — Underwrite-To Price</div>
+    <div class="opinion-of-value-amount">{{ solved_price_display }}</div>
+    <div class="opinion-of-value-sub">
+      Even under a {{ recommendation or "pending" }} verdict, the Monte Carlo
+      model indicates this is the price at which the deal clears a median
+      LP IRR of {{ solved_price_target_irr_pct or "15%" }}. Use as the
+      negotiation anchor: {{ solved_price_vs_base_pct }} {{ solved_price_direction }}
+      the {{ "$" + "{:,.0f}".format(price_solver.base_purchase_price) }} asking price.
+    </div>
+    <div class="opinion-of-value-method">
+      <div class="opinion-of-value-method-label">How this price was derived</div>
+      <div class="opinion-of-value-method-body">
+        The underwrite-to price is solved by binary-searching the purchase
+        price between 25% and 200% of the
+        {{ "$" + "{:,.0f}".format(price_solver.base_purchase_price) }} current
+        underwritten basis. At each candidate price, a 2,000-path Monte Carlo
+        simulation perturbs four market-sensitive inputs — rent growth
+        (σ ≈ 1.5%), exit cap rate (σ ≈ 1.0%, clipped 2–15%), vacancy
+        (σ ≈ 2.5%), and expense growth (σ ≈ 1.0%) — around their underwritten
+        means, while holding debt terms, amortization, hold period, capex
+        schedule, and the LP/GP waterfall fixed. LP IRR at each trial is
+        derived from project IRR plus the deterministic promote offset, which
+        is stable across the search range because the waterfall does not
+        depend on purchase price. The search converges within up to 15
+        iterations and a 20&nbsp;bps IRR tolerance on the price at which the
+        median LP IRR across the 2,000 paths equals the
+        {{ solved_price_target_irr_pct or "15%" }} target — the figure
+        reported above.
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   {% if recommendation_pullquote %}<div class="pullquote">{{ recommendation_pullquote }}</div>{% endif %}
   {% if recommendation_narrative_p1 %}<div class="narrative">{{ recommendation_narrative_p1 }}</div>{% endif %}
@@ -1319,9 +1509,17 @@
   {% endif %}
 
   <div class="subsection-title">Recommended Next Steps</div>
-  {% for step in [next_step_1, next_step_2, next_step_3, next_step_4, next_step_5, next_step_6] %}
-    {% if step %}<div class="callout">→ {{ step }}</div>{% endif %}
-  {% endfor %}
+  <ol class="next-steps-checklist">
+    {% for step in [next_step_1, next_step_2, next_step_3, next_step_4, next_step_5, next_step_6] %}
+      {% if step %}
+      <li>
+        <span class="checkbox" aria-hidden="true"></span>
+        <span class="step-number">{{ loop.index }}</span>
+        <span class="step-text">{{ step }}</span>
+      </li>
+      {% endif %}
+    {% endfor %}
+  </ol>
 </div>
 {% endif %}
 
@@ -1354,12 +1552,68 @@
 {# 22 — METHODOLOGY                             #}
 {# ═══════════════════════════════════════════ #}
 {% if show_s22 %}
-<div class="report-page">
-  <div class="section-title-block">
-    <div class="section-number" id="sect-22">Appendix A</div>
-    <div class="section-title">Data Sources &amp; Methodology</div>
+<div class="report-page appendix-page">
+  <div class="appendix-banner">
+    <div class="appendix-banner-label">Appendix A</div>
+    <div id="sect-22" class="appendix-banner-title">Data Sources &amp; Methodology</div>
   </div>
-  {% if methodology_notes %}<div class="narrative">{{ methodology_notes }}</div>{% endif %}
+  {% if methodology_notes %}
+  <div class="appendix-intro narrative">{{ methodology_notes }}</div>
+  {% endif %}
+
+  <div class="subsection-title">Data Sources</div>
+  <table class="data-table appendix-sources-table">
+    <thead>
+      <tr>
+        <th>Data Category</th>
+        <th>Source</th>
+        <th>Retrieval Method</th>
+        <th>Pull Date / Version</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Census tract / geography</td><td>U.S. Census Bureau Geocoder</td><td>REST API</td><td>{{ provenance.fred_pull_date or provenance.run_timestamp or report_date }}</td></tr>
+      <tr><td>Demographics (population, income, rent)</td><td>Census ACS 5-Year</td><td>Census API</td><td>{{ provenance.census_data_year or "2022" }}</td></tr>
+      <tr><td>Fair Market Rents</td><td>HUD FMR</td><td>HUD Data API</td><td>{{ provenance.fred_pull_date or report_date }}</td></tr>
+      <tr><td>Macro interest rates</td><td>Federal Reserve Economic Data (FRED)</td><td>FRED API</td><td>{{ provenance.fred_pull_date or report_date }}</td></tr>
+      <tr><td>Flood zone</td><td>FEMA National Flood Hazard Layer</td><td>ArcGIS REST /export</td><td>Live lookup</td></tr>
+      <tr><td>Opportunity Zone status</td><td>Treasury / HUD OZ list</td><td>CSV (24h cache)</td><td>{{ provenance.census_data_year or "2022" }}</td></tr>
+      <tr><td>Parcel / ownership records</td><td>Local assessor GIS (Philly OPA, DC OTR, NYC ACRIS, ArcGIS MapServers)</td><td>REST SQL / WMS</td><td>Live lookup</td></tr>
+      <tr><td>Zoning standards</td><td>Municipal code scrape / LLM training fallback</td><td>HTTP scrape + Sonnet</td><td>Live lookup</td></tr>
+      <tr><td>Environmental flags</td><td>EPA Envirofacts</td><td>EPA API</td><td>Live lookup</td></tr>
+      <tr><td>Maps &amp; aerial imagery</td><td>Google Aerial View, Static Maps, Street View</td><td>Google Cloud APIs</td><td>Live lookup</td></tr>
+      <tr><td>POIs &amp; amenities</td><td>Google Places API (New), OSM Overpass fallback</td><td>REST</td><td>Live lookup</td></tr>
+      <tr><td>Elevation</td><td>Google Maps Elevation API</td><td>REST</td><td>Live lookup</td></tr>
+      <tr><td>Narratives</td><td>Claude Sonnet 4.6 (Prompts 4-MASTER / 5A / 5B / 5D)</td><td>Anthropic API</td><td>{{ provenance.narrative_model or "claude-sonnet-4-6" }}</td></tr>
+      <tr><td>Document extraction</td><td>Claude Haiku 4.5 (Prompts 1A–1G)</td><td>Anthropic API + PyMuPDF</td><td>{{ provenance.extractor_model or "claude-haiku-4-5" }}</td></tr>
+    </tbody>
+  </table>
+
+  {% if provenance.documents_uploaded %}
+  <div class="subsection-title">Documents Uploaded</div>
+  <ul class="appendix-doc-list">
+    {% for d in provenance.documents_uploaded %}<li>{{ d }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if provenance.failed_sources %}
+  <div class="subsection-title">External Service Failures This Run</div>
+  <table class="data-table">
+    <thead><tr><th>Service</th><th>Stage</th><th>Reason</th></tr></thead>
+    <tbody>
+      {% for f in provenance.failed_sources %}
+      <tr><td>{{ f.service }}</td><td>{{ f.stage }}</td><td>{{ f.reason }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <div class="appendix-footer">
+    <div>Pipeline version: <strong>{{ provenance.pipeline_version or "1.0" }}</strong></div>
+    <div>Run timestamp: <strong>{{ provenance.run_timestamp or report_date }}</strong></div>
+    <div>Deal ID: <strong>{{ provenance.deal_id or deal_id }}</strong></div>
+    <div>Prepared by: <strong>{{ sponsor_name }}</strong></div>
+  </div>
 </div>
 {% endif %}
 

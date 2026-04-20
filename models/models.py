@@ -677,6 +677,9 @@ class ExtractedDocumentData(BaseModel):
     asking_price:           Optional[float] = None
     deal_source:            Optional[str]   = None
     broker_name:            Optional[str]   = None
+    broker_firm:            Optional[str]   = None
+    broker_phone:           Optional[str]   = None
+    broker_email:           Optional[str]   = None
     num_units_extracted:    Optional[int]   = None
     gba_sf_extracted:       Optional[float] = None
     lot_sf_extracted:       Optional[float] = None
@@ -1040,6 +1043,16 @@ class DealData(BaseModel):
     poi_summary:        Optional[Dict[str, int]]       = None
     amenity_narrative:  Optional[str]                  = None
     commercial_density: Optional[Dict[str, Any]]       = None
+
+    # Historical / landmark status (Section 04 or dedicated block)
+    historical_designation: Optional[str] = None   # "NRHP listed", "local landmark", etc.
+    historic_district:      Optional[str] = None   # name of district if applicable
+    historic_preservation_notes: Optional[str] = None
+    historic_tax_credits_eligible: Optional[bool] = None
+
+    # Available incentives (aggregated from multiple sources)
+    incentives_available:   Optional[List[Dict[str, Any]]] = None
+    incentives_narrative:   Optional[str] = None
 
     # Output file paths (set by main.py after generation)
     output_pdf_path:  Optional[str] = None

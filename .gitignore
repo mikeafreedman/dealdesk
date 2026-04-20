@@ -33,3 +33,12 @@ user_data/
 eb_export.py
 ~$*.docx
 cd*.docx
+
+# Backup / snapshot artifacts
+*.bak
+*_BACKUP_*.py
+
+# Runtime logs + generated page renders
+server_output.log
+pdf_pages/
+tmp/

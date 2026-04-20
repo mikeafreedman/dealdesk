@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -254,20 +255,152 @@ def _clear_rows(ws, start: int, end: int, cols: str) -> None:
             ws[f"{col}{row}"] = None
 
 
+_RESIDENTIAL_UNIT_TOKENS = ("studio", "efficiency", "1br", "2br", "3br", "4br", "bedroom", "bed")
+_COMMERCIAL_UNIT_TOKENS  = ("commercial", "office", "retail", "industrial", "warehouse", "flex")
+
+
+def _classify_unit(u: dict) -> str:
+    """Return 'residential' or 'commercial' for a single unit_mix entry.
+
+    Classification order (most specific first):
+      1. Explicit commercial markers — unit_type ∈ {commercial, office,
+         retail, industrial, warehouse, flex} or annual_rent_per_sf /
+         lease_type / tenant_name set.
+      2. Explicit residential markers — unit_type matches bedroom-count
+         convention (Studio, 1BR, 2BR, 3BR, 4BR+, N-bedroom).
+      3. Default: residential (the safer default since most rent-roll
+         extractions come from multifamily OMs).
+    """
+    if not isinstance(u, dict):
+        return "residential"
+
+    ut = (u.get("unit_type") or "").strip().lower()
+
+    # Commercial signals
+    if any(tok == ut for tok in _COMMERCIAL_UNIT_TOKENS):
+        return "commercial"
+    if u.get("annual_rent_per_sf") is not None:
+        return "commercial"
+    if u.get("lease_type"):
+        return "commercial"
+    if u.get("tenant_name"):
+        return "commercial"
+
+    # Residential signals
+    if any(tok in ut for tok in _RESIDENTIAL_UNIT_TOKENS):
+        return "residential"
+    if re.match(r"^\d+\s*(br|bd|bed)", ut):
+        return "residential"
+
+    return "residential"
+
+
+def _fmr_for_unit_type(deal: DealData, unit_type: str) -> float | None:
+    """HUD FMR lookup by bedroom convention. Returns None if no FMR available."""
+    md = deal.market_data
+    if md is None:
+        return None
+    ut = (unit_type or "").strip().lower()
+    attr = None
+    if "studio" in ut or "efficiency" in ut:
+        attr = "fmr_studio"
+    elif re.match(r"^(1\s*br|1\s*bed|1-bed)", ut):
+        attr = "fmr_1br"
+    elif re.match(r"^(2\s*br|2\s*bed|2-bed)", ut):
+        attr = "fmr_2br"
+    elif re.match(r"^(3\s*br|3\s*bed|3-bed)", ut):
+        attr = "fmr_3br"
+    elif re.match(r"^(4\s*br|4\s*bed|4-bed)", ut):
+        attr = "fmr_3br"
+    if attr is None:
+        return None
+    v = getattr(md, attr, None)
+    if v is None:
+        return None
+    try:
+        f = float(v)
+        return f if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _default_monthly_rent(deal: DealData, unit_type: str) -> float:
+    """Default rent = HUD FMR × renovation-tier multiplier.
+
+    Priority (caller must enforce upload/user-input first):
+      1. FMR for the unit's bedroom type × tier_multiplier
+      2. quality_adjusted_market_rent (already tier-adjusted)
+      3. Hardcoded $1,200 floor
+    """
+    a = deal.assumptions
+    tier = (getattr(a, "renovation_tier", None) or "light_cosmetic")
+    mult = RENOVATION_TIER_MULTIPLIERS.get(tier, 1.0)
+
+    fmr = _fmr_for_unit_type(deal, unit_type)
+    if fmr is not None:
+        return round(fmr * mult, 0)
+
+    qamr = a.quality_adjusted_market_rent or 1200
+    return round(float(qamr), 0)
+
+
+def _clear_residential_rows(ws) -> None:
+    """Zero/blank residential rows (6–25)."""
+    for row in range(_RES_START, _RES_END + 1):
+        for col in "BCHIJKLMN":
+            ws[f"{col}{row}"] = None
+        ws[f"D{row}"] = 0
+        ws[f"E{row}"] = 0
+
+
+def _clear_commercial_rows(ws) -> None:
+    """Zero/blank commercial rows (35–39)."""
+    for row in range(_COM_START, _COM_END + 1):
+        for col in "BCGHIJKLMNO":
+            ws[f"{col}{row}"] = None
+        ws[f"D{row}"] = 0
+        ws[f"E{row}"] = 0
+
+
 def _populate_rent_roll(ws, deal: DealData) -> None:
-    """Write unit-level or tenant-level data to the Rent Roll sheet."""
+    """Write unit-level / tenant-level data to the Rent Roll sheet.
+
+    Type-gated: residential rows (6–25) populate only when residential
+    units are present; commercial rows (35–39) populate only when
+    commercial tenants are present. Mixed-use deals populate both.
+    Empty sections are zeroed out so stale template defaults never leak.
+    """
     ext = deal.extracted_docs
     units = (ext.unit_mix or []) if ext else []
 
-    if _is_commercial_asset(deal):
-        _populate_rent_roll_commercial(ws, units, deal)
-    else:
-        _populate_rent_roll_residential(ws, units, deal)
+    residential_units = [u for u in units if _classify_unit(u) == "residential"]
+    commercial_units  = [u for u in units if _classify_unit(u) == "commercial"]
 
-    # ── Renovation summary cells (applies to both residential + commercial).
-    # Rows 27–30 are between residential (ends row 25) and commercial
-    # headers (row 34). Column P = label, Q = value. If these positions
-    # conflict with a template-side label, just relocate this helper.
+    # No classified units → fall back to asset-type hint so the summary
+    # row in the residential populator (gross_potential_rent ÷ num_units)
+    # still fires when extraction produced nothing.
+    if not residential_units and not commercial_units:
+        if _is_commercial_asset(deal):
+            commercial_units = units
+        else:
+            residential_units = units
+
+    logger.info(
+        "EXCEL Rent Roll dispatch — residential=%d units, commercial=%d tenants, "
+        "asset_type=%s",
+        len(residential_units), len(commercial_units), deal.asset_type.value,
+    )
+
+    if residential_units:
+        _populate_rent_roll_residential(ws, residential_units, deal)
+    else:
+        _clear_residential_rows(ws)
+
+    if commercial_units:
+        _populate_rent_roll_commercial(ws, commercial_units, deal)
+    else:
+        _clear_commercial_rows(ws)
+
     _write_renovation_summary(ws, deal)
 
 
@@ -329,7 +462,13 @@ def _populate_rent_roll_residential(ws, units: list, deal: DealData | None = Non
             else:
                 ws[f"D{row}"] = "N/A"
                 ws[f"F{row}"] = "N/A"
-            ws[f"E{row}"] = u.get("monthly_rent")
+            # Rent priority: uploaded monthly_rent → user_rent → FMR × tier
+            _rent = u.get("monthly_rent")
+            if not _rent:
+                _rent = u.get("user_rent")
+            if not _rent and deal is not None:
+                _rent = _default_monthly_rent(deal, u.get("unit_type") or "")
+            ws[f"E{row}"] = _rent
             # G (Annual Rent) is a formula; left intact
             ws[f"H{row}"] = _normalise_status(u.get("status"))
             ws[f"I{row}"] = u.get("lease_end")
@@ -348,31 +487,13 @@ def _populate_rent_roll_residential(ws, units: list, deal: DealData | None = Non
 
 
 def _populate_rent_roll_commercial(ws, units: list, deal: DealData) -> None:
-    """
-    For Office/Retail deals: zero out residential rows and populate
-    the commercial tenant section (rows 35–39).
-    """
-    # ── Clear residential rows — set values to 0/blank/Vacant ───
-    for row in range(_RES_START, _RES_END + 1):
-        ws[f"B{row}"] = None
-        ws[f"C{row}"] = None
-        ws[f"D{row}"] = 0
-        ws[f"E{row}"] = 0
-        # F and G are formulas — leave intact (they'll compute to 0)
-        ws[f"H{row}"] = "Vacant"
-        ws[f"I{row}"] = None
-        ws[f"J{row}"] = 0
+    """Populate the commercial tenant section (rows 35–39).
 
-    # ── Filter for commercial units ─────────────────────────────
-    commercial_units = [
-        u for u in units
-        if (u.get("unit_type") or "").lower() in ("commercial", "office", "retail", "other")
-        or u.get("annual_rent_per_sf") is not None
-        or u.get("lease_type") is not None
-    ]
-    # If no units explicitly tagged as commercial, treat all units as tenants
-    if not commercial_units:
-        commercial_units = units
+    Caller (_populate_rent_roll dispatcher) is responsible for:
+      - Pre-filtering `units` down to commercial tenants only
+      - Clearing residential rows when no residential units exist
+    """
+    commercial_units = units
 
     # ── Check if all commercial tenant rows are empty ───────────
     all_empty = all(
@@ -676,7 +797,21 @@ def _section_uses(a, fo=None) -> CellMap:
         a.const_reserve + a.gc_overhead
     )
     logger.info("EXCEL S&U total written (excl origination, closing_costs, mortgage_carry): %s", excel_total_uses)
-    return [
+
+    # Overwrite C89 with Python's authoritative total_uses value. The
+    # template formula at C89 historically summed SUM(C29:C31) +
+    # SUM(C34:C45) + SUM(C48:C51) + SUM(C54:C60) + SUM(C63:C67), which
+    # OMITS purchase_price (C17), transfer_tax (C19), and closing_costs
+    # (C20). That produced a ~$2K gap (closing_costs_fixed) plus missing
+    # any construction interest carry. Writing the value directly locks
+    # Total Uses to fo.total_uses so C91 (equity) and C84/C85 (GP/LP)
+    # match Python exactly.
+    c89_override = []
+    if fo is not None and getattr(fo, "total_uses", None):
+        c89_override = [("C89", float(fo.total_uses))]
+        logger.info("EXCEL S&U: C89 overwritten with Python total_uses=$%s",
+                    f"{fo.total_uses:,.2f}")
+    return c89_override + [
         # Acquisition
         ("C31", a.tenant_buyout),
         # Professional & Due Diligence

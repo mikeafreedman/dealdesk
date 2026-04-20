@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, List, Optional
 
 import anthropic
@@ -424,6 +425,9 @@ def _apply_1a(data: dict, deal: DealData) -> None:
     ext.asking_price          = data.get("asking_price")
     ext.deal_source           = _s(data.get("deal_source"))
     ext.broker_name           = _s(data.get("broker_name"))
+    ext.broker_firm           = _s(data.get("broker_firm"))
+    ext.broker_phone          = _s(data.get("broker_phone"))
+    ext.broker_email          = _s(data.get("broker_email"))
     ext.num_units_extracted   = data.get("total_units")
     ext.gba_sf_extracted      = data.get("total_sf")
     ext.lot_sf_extracted  = data.get("lot_sf")
@@ -1051,6 +1055,37 @@ def extract_documents(
             return 50
         return 1
 
+    # Address-match gate — refuse to apply 1A/1B/1C/1E from files whose
+    # OM describes a DIFFERENT property than the deal the user entered.
+    # Protects against stale uploads persisting in the frontend queue
+    # across sessions: a previous deal's OM shouldn't overwrite the new
+    # deal's rent roll, leases, or financials.
+    def _address_matches_deal(result: dict) -> bool:
+        deal_street = (deal.address.full_address or deal.address.street or "")
+        deal_street_lc = deal_street.lower()
+        if not deal_street_lc:
+            return True   # no deal address to check against — accept
+        m = re.match(r"^\s*(\d+)", deal_street_lc)
+        deal_num = m.group(1) if m else None
+        skip = {"s", "n", "e", "w", "ne", "nw", "se", "sw", "s.", "n.", "e.", "w.",
+                "st", "ave", "avenue", "road", "rd", "street", "blvd", "lane", "ln",
+                "drive", "dr", "way", "place", "pl", "court", "ct",
+                "philadelphia", "the", "of", "and", "apartments", "llc", "inc"}
+        deal_tokens = [t for t in re.findall(r"[a-z0-9]+", deal_street_lc)
+                       if t not in skip and len(t) >= 3]
+        om_addr = (result.get("full_address") or "").lower()
+        om_name = (result.get("property_name") or "").lower()
+        om_city = (result.get("city") or "").lower()
+        om_combined = " ".join([om_addr, om_name, om_city]).strip()
+        if not om_combined:
+            return True   # OM didn't return an address — can't disprove
+        if deal_num and re.search(rf"\b{deal_num}\b", om_combined):
+            return True
+        for t in deal_tokens:
+            if t in om_combined:
+                return True
+        return False
+
     # ── Pass 2: run each extractor in trust order ─────────────────────
     # 1A — OM (always run, starts with OM-classified files)
     for f in sorted(files, key=lambda x: _rank_for("1A", x), reverse=True):
@@ -1060,14 +1095,32 @@ def extract_documents(
             if not result:
                 logger.warning("EXTRACTOR [1A]: no result for '%s'", f["path"])
                 continue
+            # Address-match gate: if this OM is about a different property,
+            # mark the file foreign and skip all downstream apply steps.
+            if not _address_matches_deal(result):
+                f["foreign"] = True
+                logger.warning(
+                    "EXTRACTOR [1A]: SKIPPING foreign OM '%s' — extracted "
+                    "property='%s' address='%s' does not match deal address '%s'. "
+                    "Upload queue likely contained a stale file from a prior session.",
+                    f["path"],
+                    (result.get("property_name") or "")[:40],
+                    (result.get("full_address") or "")[:60],
+                    deal.address.full_address or deal.address.street,
+                )
+                continue
             _apply_1a(result, deal)
             _merge_extraction(ext, result, source="1A", file=f["path"])
             logger.info("EXTRACTOR [1A]: complete for '%s'", f["path"])
         except Exception as exc:
             logger.warning("EXTRACTOR [1A]: failed for '%s': %s", f["path"], exc)
 
-    # 1B — Rent Roll
+    # 1B — Rent Roll. Foreign files (OM about a different property) are
+    # skipped entirely so a stale upload can't contaminate the rent roll.
     for f in sorted(files, key=lambda x: _rank_for("1B", x), reverse=True):
+        if f.get("foreign"):
+            logger.info("EXTRACTOR [1B]: skipping foreign file '%s'", f["path"])
+            continue
         try:
             user_msg = USER_1B.format(rent_roll_text=f["md"])
             result = _call_haiku(SYSTEM_1B, user_msg)
@@ -1081,8 +1134,11 @@ def extract_documents(
         except Exception as exc:
             logger.warning("EXTRACTOR [1B]: failed for '%s': %s", f["path"], exc)
 
-    # 1C — T-12
+    # 1C — T-12 (foreign-skip)
     for f in sorted(files, key=lambda x: _rank_for("1C", x), reverse=True):
+        if f.get("foreign"):
+            logger.info("EXTRACTOR [1C]: skipping foreign file '%s'", f["path"])
+            continue
         try:
             user_msg = USER_1C.format(financial_statement_text=f["md"])
             result = _call_haiku(SYSTEM_1C, user_msg)
@@ -1097,8 +1153,9 @@ def extract_documents(
 
     def _files_tagged(types_set: set) -> list:
         return [f for f in files
-                if set(f["classification"].get("doc_types_present") or []) & types_set
-                or f["classification"].get("primary_type") in types_set]
+                if not f.get("foreign")   # drop OMs that mismatch the deal
+                and (set(f["classification"].get("doc_types_present") or []) & types_set
+                     or f["classification"].get("primary_type") in types_set)]
 
     # 1D — Environmental (gated on classification)
     env_candidates = _files_tagged({"environmental"})

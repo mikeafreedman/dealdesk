@@ -41,7 +41,7 @@ body {
   font-family: var(--font);
   background: var(--white);
   color: var(--dark-walnut);
-  font-size: 10pt;
+  font-size: 14pt;
   line-height: 1.55;
   text-align: justify;
   -webkit-print-color-adjust: exact;
@@ -72,6 +72,427 @@ body {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+.cover-logo-img {
+  height: 40px;
+  width: auto;
+  display: block;
+  object-fit: contain;
+}
+
+/* ── COVER HERO (logo + report title, centered, predominant) ──────────── */
+/* Sits on the same dark-walnut body color — no break, so the logo and
+   "Underwriting Report" read as part of the body, not a separate band. */
+.cover-hero {
+  padding: 48px 52px 40px;
+  text-align: center;
+  background: var(--dark-walnut);
+}
+.cover-logo-hero {
+  display: block;
+  margin: 0 auto 32px;
+  /* Grown from the prior 320px into the small amount of vertical slack that
+     cover-body's flex:1 leaves at the bottom of the page — larger values
+     push the meta-grid or footer onto a second page. */
+  height: 360px;
+  width: auto;
+  /* Keep the logo inside 1" page margins on letter (8.5"×11"). */
+  max-width: calc(8.5in - 2in);    /* 6.5in */
+  max-height: calc(11in - 2in);    /* 9in  */
+  object-fit: contain;
+}
+.cover-logo-text-hero {
+  font-size: 56pt;
+  font-weight: 600;
+  color: var(--parchment);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  margin-bottom: 20px;
+}
+.cover-report-title {
+  font-size: 26pt;
+  font-weight: 400;
+  color: var(--parchment);
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  margin-top: 14px;
+  opacity: 0.92;
+}
+
+/* ── APPENDIX PAGE (Data Sources & Methodology) ───────────────────────── */
+.appendix-page {
+  /* subtle off-white tint distinguishes the appendix from body content */
+  background: #FAF6EB;
+}
+.appendix-banner {
+  border-top: 4px solid var(--sage-deep);
+  border-bottom: 1px solid var(--sage-light);
+  padding: 14px 0 12px;
+  margin-bottom: 18px;
+  background: var(--parchment);
+}
+.appendix-banner-label {
+  font-size: 8pt;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--sage-deep);
+  margin-bottom: 4px;
+}
+.appendix-banner-title {
+  font-size: 22pt;
+  font-weight: 600;
+  color: var(--dark-walnut);
+  letter-spacing: -0.01em;
+}
+.appendix-intro {
+  font-size: 12pt;
+  color: var(--earth);
+  font-style: italic;
+  margin-bottom: 18px;
+}
+.appendix-sources-table {
+  font-size: 10pt;
+}
+.appendix-sources-table th {
+  font-size: 9pt;
+}
+.appendix-doc-list {
+  font-size: 12pt;
+  margin: 4px 0 16px 20px;
+  color: var(--dark-walnut);
+}
+.appendix-footer {
+  margin-top: 30px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sage-light);
+  display: flex;
+  justify-content: space-between;
+  font-size: 10pt;
+  color: var(--earth);
+  letter-spacing: 0.03em;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+}
+
+/* ── PROJECT SCHEDULE (Section 18) ────────────────────────────────────── */
+.schedule-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0 18px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.schedule-step {
+  flex: 1 1 0;
+  min-width: 110px;
+  position: relative;
+  background: var(--white);
+  border: 1px solid var(--sage-light);
+  border-top: 4px solid var(--sage-deep);
+  border-radius: 4px;
+  padding: 10px 12px 12px;
+  text-align: center;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+/* Chevron connector between consecutive steps (hidden on last + on wrap) */
+.schedule-step + .schedule-step::before {
+  content: "▸";
+  position: absolute;
+  left: -11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--sage-deep);
+  font-size: 14pt;
+  line-height: 1;
+  pointer-events: none;
+}
+.schedule-step-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--sage-deep);
+  color: var(--white);
+  font-size: 9pt;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.schedule-step-name {
+  font-size: 10.5pt;
+  font-weight: 700;
+  color: var(--dark-walnut);
+  line-height: 1.15;
+}
+.schedule-step-duration {
+  font-size: 9pt;
+  font-weight: 600;
+  color: var(--sage-deep);
+  margin-top: 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.schedule-step-label {
+  font-size: 8.5pt;
+  color: var(--earth);
+  margin-top: 4px;
+  font-style: italic;
+}
+/* Phase-kind accents on the top border + badge */
+.schedule-step-acquisition  { border-top-color: var(--dark-walnut); }
+.schedule-step-acquisition  .schedule-step-badge { background: var(--dark-walnut); }
+.schedule-step-construction { border-top-color: var(--earth-mid, #8B6914); }
+.schedule-step-construction .schedule-step-badge { background: var(--earth-mid, #8B6914); }
+.schedule-step-leaseup      { border-top-color: var(--sage); }
+.schedule-step-leaseup      .schedule-step-badge { background: var(--sage); }
+.schedule-step-stabilized   { border-top-color: var(--sage-deep); }
+.schedule-step-stabilized   .schedule-step-badge { background: var(--sage-deep); }
+.schedule-step-refi         { border-top-color: #8B2020; }
+.schedule-step-refi         .schedule-step-badge { background: #8B2020; }
+.schedule-step-exit         { border-top-color: var(--dark-walnut); }
+.schedule-step-exit         .schedule-step-badge { background: var(--dark-walnut); }
+
+/* ── NEXT STEPS CHECKLIST (Section 20) ────────────────────────────────── */
+/* Looks like an actionable punch list. Hollow checkbox on the left, a
+   small numbered badge, then the step text — same palette as the
+   takeaway-list but with a distinct checkbox affordance. */
+.next-steps-checklist {
+  list-style: none;
+  padding: 0;
+  margin: 10pt 0 20pt 0;
+  counter-reset: stepctr;
+}
+.next-steps-checklist li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12pt;
+  padding: 10pt 14pt 10pt 14pt;
+  margin-bottom: 6pt;
+  background: var(--parchment);
+  border-left: 3pt solid var(--sage-deep);
+  border-radius: 3px;
+  page-break-inside: avoid;
+  line-height: 1.5;
+}
+.next-steps-checklist .checkbox {
+  flex-shrink: 0;
+  width: 16pt;
+  height: 16pt;
+  border: 1.8pt solid var(--sage-deep);
+  border-radius: 3px;
+  background: var(--white);
+  margin-top: 2pt;
+  box-shadow: inset 0 0 0 2px var(--white);
+}
+.next-steps-checklist .step-number {
+  flex-shrink: 0;
+  font-size: 10pt;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--sage-deep);
+  text-transform: uppercase;
+  padding-top: 3pt;
+  min-width: 32pt;
+}
+.next-steps-checklist .step-number::before {
+  content: "#";
+  opacity: 0.6;
+  margin-right: 1pt;
+}
+.next-steps-checklist .step-text {
+  flex: 1;
+  font-size: 12pt;
+  color: var(--dark-walnut);
+}
+
+/* ── DD FLAG TEXT LIST (Section 16) ───────────────────────────────────── */
+/* Plain numbered list — replaces the full-width graphic cards with a
+   quieter, text-first presentation. Color appears only on the small
+   status badge so the list reads as continuous prose. */
+.dd-flag-list {
+  list-style: none;
+  padding: 0;
+  margin: 10pt 0 18pt 0;
+  counter-reset: ddctr;
+}
+.dd-flag-item {
+  padding: 10pt 0 10pt 0;
+  margin: 0;
+  border-bottom: 1px solid var(--sage-light);
+  page-break-inside: avoid;
+  counter-increment: ddctr;
+}
+.dd-flag-item:last-child { border-bottom: none; }
+.dd-flag-item::before {
+  content: counter(ddctr) ".";
+  display: inline-block;
+  width: 22pt;
+  color: var(--earth-mid);
+  font-weight: 700;
+  vertical-align: top;
+}
+.dd-flag-heading {
+  display: inline;
+}
+.dd-flag-item .dd-flag-status {
+  display: inline-block;
+  font-size: 8.5pt;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 2pt 8pt;
+  margin-right: 8pt;
+  border-radius: 3px;
+  color: var(--white);
+  vertical-align: middle;
+  line-height: 1.3;
+}
+.dd-flag-item.pass  .dd-flag-status { background: #3B8A4F; }
+.dd-flag-item.watch .dd-flag-status { background: #C77D1F; }
+.dd-flag-item.fail  .dd-flag-status { background: #B22222; }
+.dd-flag-item .dd-flag-title {
+  font-weight: 700;
+  font-size: 12.5pt;
+  color: var(--dark-walnut);
+}
+.dd-flag-item .dd-flag-category {
+  color: var(--earth);
+  font-weight: 400;
+  font-size: 11.5pt;
+  margin-left: 4pt;
+}
+.dd-flag-item .dd-flag-body {
+  margin: 6pt 0 4pt 22pt;
+  font-size: 12pt;
+  color: var(--dark-walnut);
+  line-height: 1.55;
+}
+.dd-flag-item .dd-flag-remediation {
+  margin: 4pt 0 0 22pt;
+  font-size: 11pt;
+  color: var(--dark-walnut);
+  line-height: 1.5;
+}
+.dd-flag-item .dd-flag-remediation strong {
+  color: var(--sage-deep);
+  letter-spacing: 0.04em;
+}
+
+/* ── KEY TAKEAWAY BULLETS (neighborhood trends, etc.) ──────────────────── */
+.takeaway-list {
+  list-style: none;
+  padding: 0;
+  margin: 10pt 0 18pt 0;
+}
+.takeaway-list li {
+  position: relative;
+  padding: 8pt 12pt 8pt 36pt;
+  margin-bottom: 6pt;
+  background: var(--parchment);
+  border-left: 3pt solid var(--sage-deep);
+  border-radius: 3px;
+  font-size: 12pt;
+  line-height: 1.5;
+  color: var(--dark-walnut);
+  page-break-inside: avoid;
+}
+.takeaway-list li::before {
+  content: "▸";
+  position: absolute;
+  left: 14pt;
+  top: 8pt;
+  color: var(--sage-deep);
+  font-weight: 700;
+  font-size: 13pt;
+  line-height: 1.5;
+}
+
+/* ── PERMITTED USES (Section 06) ──────────────────────────────────────── */
+.permitted-uses-bucket {
+  margin: 10px 0 14px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.permitted-uses-label {
+  font-size: 11pt;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sage-deep);
+  margin-bottom: 4px;
+}
+.permitted-uses-list {
+  list-style: disc outside;
+  margin: 0 0 0 24px;
+  padding: 0;
+  columns: 2;
+  column-gap: 24px;
+}
+.permitted-uses-list li {
+  font-size: 12pt;
+  line-height: 1.35;
+  color: var(--dark-walnut);
+  break-inside: avoid;
+  margin-bottom: 2px;
+}
+
+/* ── OPINION OF VALUE (Exec Summary + Recommendation) ──────────────────── */
+.opinion-of-value {
+  margin: 24px 0 20px;
+  padding: 18px 22px;
+  background: var(--parchment);
+  border-left: 5px solid var(--sage-deep);
+  border-radius: 4px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+  text-align: left;
+}
+.opinion-of-value-label {
+  font-size: 11pt;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: var(--sage-deep);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.opinion-of-value-amount {
+  font-size: 34pt;
+  font-weight: 600;
+  color: var(--dark-walnut);
+  line-height: 1.0;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.opinion-of-value-sub {
+  margin-top: 10px;
+  font-size: 11.5pt;
+  line-height: 1.45;
+  color: var(--earth);
+  font-style: italic;
+  max-width: 640px;
+}
+.opinion-of-value-method {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--sage);
+  max-width: 640px;
+}
+.opinion-of-value-method-label {
+  font-size: 9pt;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--sage-deep);
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+.opinion-of-value-method-body {
+  font-size: 10pt;
+  line-height: 1.45;
+  color: var(--dark-walnut);
+}
 .cover-logo-sub {
   font-size: 8pt;
   color: var(--sage-light);
@@ -80,7 +501,7 @@ body {
   margin-top: 2px;
 }
 .cover-badge {
-  font-size: 8pt;
+  font-size: 10pt;
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -91,31 +512,35 @@ body {
 }
 .cover-body {
   flex: 1;
-  padding: 64px 52px 40px;
+  padding: 40px 52px 40px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
 }
 .cover-strategy-tag {
-  font-size: 8pt;
+  font-size: 11pt;
   font-weight: 700;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--earth-light);
-  margin-bottom: 18px;
+  margin-bottom: 12px;
+  text-align: center;
 }
 .cover-address {
-  font-size: 28pt;
+  font-size: 52pt;
   font-weight: 600;
   color: var(--parchment);
-  line-height: 1.15;
-  margin-bottom: 8px;
-  text-align: left;
+  line-height: 1.08;
+  margin-bottom: 10px;
+  text-align: center;
+  letter-spacing: -0.01em;
 }
 .cover-city {
-  font-size: 14pt;
+  font-size: 26pt;
   color: var(--sage-light);
-  margin-bottom: 40px;
+  margin-bottom: 48px;
+  text-align: center;
+  font-weight: 400;
 }
 .cover-meta-grid {
   display: grid;
@@ -127,7 +552,7 @@ body {
 }
 .cover-meta-item {}
 .cover-meta-label {
-  font-size: 7pt;
+  font-size: 10pt;
   font-weight: 700;
   letter-spacing: 0.2em;
   text-transform: uppercase;
@@ -135,7 +560,7 @@ body {
   margin-bottom: 5px;
 }
 .cover-meta-value {
-  font-size: 14pt;
+  font-size: 15pt;
   font-weight: 600;
   color: var(--parchment);
   text-align: left;
@@ -170,7 +595,7 @@ body {
 }
 .toc-header,
 .toc-title-block {
-  font-size: 8pt;
+  font-size: 10pt;
   font-weight: 700;
   letter-spacing: 0.22em;
   text-transform: uppercase;
@@ -183,17 +608,17 @@ body {
   display: flex;
   align-items: baseline;
   padding: 4px 0;
-  font-size: 10pt;
+  font-size: 20pt;
   line-height: 1.2;
   color: var(--dark-walnut);
   border-bottom: none;     /* removes the inter-row rules */
   text-decoration: none;   /* suppress anchor underline in PDF */
 }
 .toc-num {
-  font-size: 8pt;
+  font-size: 20pt;
   font-weight: 700;
   color: var(--sage-deep);
-  width: 30px;
+  width: 42px;
   flex-shrink: 0;
 }
 .toc-title {
@@ -205,7 +630,7 @@ body {
    drops the content. Only renders at PDF print time. */
 .toc-entry::after {
   content: target-counter(attr(href url), page);
-  font-size: 9.5pt;
+  font-size: 20pt;
   color: var(--dark-walnut);
   font-weight: 600;
   min-width: 28px;
@@ -266,7 +691,7 @@ body {
   margin-bottom: 4px;
 }
 .section-title {
-  font-size: 18pt;
+  font-size: 24pt;
   font-weight: 600;
   color: var(--parchment);
   line-height: 1.1;
@@ -279,7 +704,7 @@ body {
   background: var(--parchment);
   padding: 14px 20px;
   margin: 20px 0;
-  font-size: 11pt;
+  font-size: 16pt;
   font-style: italic;
   color: var(--earth-mid);
   line-height: 1.5;
@@ -317,7 +742,7 @@ body {
   break-inside: avoid;
 }
 .kpi-label {
-  font-size: 7pt;
+  font-size: 9pt;
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -325,7 +750,7 @@ body {
   margin-bottom: 7px;
 }
 .kpi-value {
-  font-size: 20pt;
+  font-size: 24pt;
   font-weight: 600;
   color: var(--dark-walnut);
   line-height: 1;
@@ -336,7 +761,7 @@ body {
 .kpi-value.watch { color: var(--watch); }
 .kpi-value.fail  { color: var(--fail); }
 .kpi-sub {
-  font-size: 8pt;
+  font-size: 10pt;
   color: var(--earth);
 }
 
@@ -347,14 +772,14 @@ body {
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 9.5pt;
+  font-size: 12pt;
   margin: 14px 0;
   table-layout: auto;
 }
 thead th {
   background: var(--dark-walnut);
   color: var(--parchment);
-  font-size: 8pt;
+  font-size: 10.5pt;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -420,7 +845,7 @@ table.tbl-2col td.right { font-variant-numeric: tabular-nums; }
 /* DD checklist: 4 columns (Category, Item, Status, Owner). */
 table.dd-checklist-table {
     table-layout: auto;
-    font-size: 8pt;
+    font-size: 10pt;
 }
 table.dd-checklist-table th,
 table.dd-checklist-table td {
@@ -438,7 +863,7 @@ table.dd-checklist-table td.dd-status {
     font-weight: 700;
     letter-spacing: 0.02em;
     white-space: nowrap;
-    font-size: 7.5pt;
+    font-size: 9pt;
 }
 table.dd-checklist-table td.dd-status-complete    { color: #1d6b3f; }
 table.dd-checklist-table td.dd-status-in-progress { color: #a16207; }
@@ -451,7 +876,7 @@ table.dd-checklist-table td.dd-status-na          { color: #6b6b6b; }
    the tenant column produces a far more legible row. */
 table.rent-roll-table {
     table-layout: auto;
-    font-size: 7.5pt;
+    font-size: 9pt;
     letter-spacing: -0.01em;
 }
 table.rent-roll-table th,
@@ -475,7 +900,7 @@ table.rent-roll-table td:nth-child(9) { text-align: center; }
    "Total Monthly Rent" header on a single line. */
 table.unit-mix-table {
     table-layout: auto;
-    font-size: 8.5pt;
+    font-size: 10pt;
 }
 table.unit-mix-table th,
 table.unit-mix-table td {
@@ -487,7 +912,7 @@ table.unit-mix-table td {
 /* Pro-forma: 11 columns on Letter — narrow year columns shrink to content. */
 table.proforma-table {
     table-layout: auto;
-    font-size: 6.5pt;
+    font-size: 7.5pt;
     letter-spacing: -0.01em;
 }
 table.proforma-table th,
@@ -508,7 +933,7 @@ table.proforma-table td:first-child {
    Auto layout so property addresses can wrap and numeric columns stay tight. */
 table.comp-table {
     table-layout: auto;
-    font-size: 8.5pt;
+    font-size: 10pt;
 }
 table.comp-table th,
 table.comp-table td {
@@ -524,7 +949,7 @@ table.comp-table td:not(:first-child) { white-space: nowrap; }
 /* Deed transfers & title exceptions: 5-6 cols, one free-wrap summary col. */
 table.deed-table, table.exception-table {
     table-layout: auto;
-    font-size: 8.5pt;
+    font-size: 10pt;
 }
 table.deed-table th, table.deed-table td,
 table.exception-table th, table.exception-table td {
@@ -593,37 +1018,90 @@ tr.total-row td {
 .dd-flags {
   display: flex;
   flex-direction: column;
-  gap: 8pt;
-  margin: 10pt 0;
+  gap: 14pt;
+  margin: 14pt 0;
 }
+/* Clean white card with a thick colored left accent and a subtle shadow.
+   White body = better contrast; detail text now renders dark-walnut on
+   white instead of earth on a tinted background, so it's easily legible. */
 .dd-flag {
   display: flex;
-  align-items: flex-start;
-  gap: 10pt;
-  padding: 10pt;
-  border-left: 4pt solid;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  border: 1pt solid var(--sage-light);
+  border-left: 6pt solid;
+  border-radius: 5px;
+  background: var(--white);
   page-break-inside: avoid;
+  overflow: hidden;
 }
-.dd-flag.pass  { border-color: var(--pass);  background: #F0F5F0; }
-.dd-flag.watch { border-color: var(--watch); background: #FAF5EE; }
-.dd-flag.fail  { border-color: var(--fail);  background: #FDF0F0; }
+.dd-flag.pass  { border-left-color: #3B8A4F; }
+.dd-flag.watch { border-left-color: #C77D1F; }
+.dd-flag.fail  { border-left-color: #B22222; }
+
+/* Badge pill — higher contrast, larger, properly padded */
 .dd-flag-badge {
-  font-size: 7pt;
-  font-weight: bold;
+  flex-shrink: 0;
+  font-size: 9pt;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: 3pt 7pt;
-  color: white;
+  letter-spacing: 0.12em;
+  padding: 14pt 14pt;
+  color: var(--white);
   white-space: nowrap;
-  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  min-width: 74pt;
+  justify-content: center;
+  text-align: center;
+  line-height: 1;
 }
-.dd-flag.pass  .dd-flag-badge { background: var(--sage-deep); }
-.dd-flag.watch .dd-flag-badge { background: var(--watch); }
-.dd-flag.fail  .dd-flag-badge { background: var(--fail); }
-.dd-flag-content { flex: 1; }
-.dd-flag-title   { font-weight: bold; font-size: 9.5pt; margin-bottom: 3pt; }
-.dd-flag-detail  { font-size: 8.5pt; color: var(--earth); line-height: 1.45; }
-.dd-flag-remed   { font-size: 8.5pt; color: var(--dark-walnut); margin-top: 4pt; }
+.dd-flag.pass  .dd-flag-badge { background: #3B8A4F; }
+.dd-flag.watch .dd-flag-badge { background: #C77D1F; }
+.dd-flag.fail  .dd-flag-badge { background: #B22222; }
+
+/* Content column — generous padding, clear typography hierarchy */
+.dd-flag-content {
+  flex: 1;
+  padding: 14pt 18pt 14pt 18pt;
+  min-width: 0;
+}
+.dd-flag-title {
+  font-weight: 700;
+  font-size: 13pt;
+  color: var(--dark-walnut);
+  line-height: 1.25;
+  margin-bottom: 6pt;
+  letter-spacing: -0.005em;
+}
+.dd-flag-title span { font-weight: 400; }
+.dd-flag-detail {
+  font-size: 11.5pt;
+  color: var(--dark-walnut);
+  line-height: 1.55;
+  margin-bottom: 8pt;
+  font-weight: 400;
+}
+/* Remediation row — visually distinct via a muted top rule + label color */
+.dd-flag-remed {
+  font-size: 11pt;
+  color: var(--dark-walnut);
+  line-height: 1.55;
+  margin-top: 8pt;
+  padding-top: 8pt;
+  border-top: 1px dashed var(--sage-light);
+}
+.dd-flag-remed strong {
+  display: inline-block;
+  color: var(--sage-deep);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 9pt;
+  margin-right: 6pt;
+  vertical-align: baseline;
+}
 
 /* ── SECTION BODY TEXT ──────────────────────────────────── */
 p {
@@ -634,14 +1112,14 @@ p {
   text-align: justify;
 }
 .narrative {
-  font-size: 10pt;
+  font-size: 14pt;
   line-height: 1.6;
   color: var(--dark-walnut);
   margin-bottom: 12px;
   text-align: justify;
 }
 h3 {
-  font-size: 11pt;
+  font-size: 15pt;
   font-weight: 700;
   color: var(--earth-mid);
   margin: 18px 0 8px;
@@ -649,7 +1127,7 @@ h3 {
   border-bottom: 1px solid var(--sage-light);
 }
 h4, .subsection-title {
-  font-size: 9.5pt;
+  font-size: 13pt;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -767,7 +1245,7 @@ h4, .subsection-title {
 }
 .figure-caption {
   margin: 4px 0 0 0;
-  font-size: 8pt;
+  font-size: 10pt;
   color: var(--earth);
   font-style: italic;
   letter-spacing: 0.02em;
@@ -824,11 +1302,11 @@ h4, .subsection-title {
 .gonogo-box.go { border-color: var(--sage-deep); background: #F6FAF6; }
 .gonogo-box.nogo { border-color: var(--fail); background: #FDF6F6; }
 .gonogo-box.conditional { border-color: var(--earth-mid); background: #FAF5EE; }
-.gonogo-verdict { font-size: 22pt; font-weight: 700; letter-spacing: 0.06em; margin-bottom: 6px; text-transform: uppercase; }
+.gonogo-verdict { font-size: 26pt; font-weight: 700; letter-spacing: 0.06em; margin-bottom: 6px; text-transform: uppercase; }
 .gonogo-box.go .gonogo-verdict { color: var(--sage-deep); }
 .gonogo-box.nogo .gonogo-verdict { color: var(--fail); }
 .gonogo-box.conditional .gonogo-verdict { color: var(--earth-mid); }
-.gonogo-rationale { font-size: 10pt; color: var(--dark-walnut); line-height: 1.5; font-style: italic; max-width: 460pt; margin: 0 auto; }
+.gonogo-rationale { font-size: 12pt; color: var(--dark-walnut); line-height: 1.5; font-style: italic; max-width: 460pt; margin: 0 auto; }
 
 /* ── SENSITIVITY MATRIX CELLS ───────────────────────────── */
 .sensitivity-table {
@@ -872,7 +1350,7 @@ h4, .subsection-title {
   border-radius: 4px;
   padding: 14px 18px;
   margin: 16px 0;
-  font-size: 10pt;
+  font-size: 12pt;
   color: var(--dark-walnut);
   page-break-inside: avoid;
 }
@@ -881,7 +1359,7 @@ h4, .subsection-title {
 .callout.pending { border-left-color: var(--sage); background: var(--parchment); font-style: italic; color: var(--earth); }
 
 .source-note {
-  font-size: 7.5pt;
+  font-size: 10pt;
   color: var(--earth);
   font-style: italic;
   margin-top: 4pt;

@@ -405,19 +405,44 @@ def _fetch_phl_deed_history(pd_obj: ParcelData, parcel_number: str,
     def _as_str(v):
         return str(v) if v is not None else None
 
+    # Log the actual column names of the first row once so we can audit
+    # field-name drift in the Carto rtt_summary dataset.
+    if rows:
+        sample_keys = sorted(list(rows[0].keys()))[:20]
+        logger.info("DEED HISTORY (PHL) columns sample: %s", sample_keys)
+
     for r in rows:
+        # Philly rtt_summary column naming (verified from actual response):
+        #   cash_consideration, adjusted_cash_consideration,
+        #   adjusted_total_consideration, adjusted_other_consideration.
+        # Prefer total then cash; fall back across aliases so any future
+        # rename doesn't silently zero the column.
+        _consid = _safe_float(
+            r.get("adjusted_total_consideration")
+            or r.get("total_consideration")
+            or r.get("cash_consideration")
+            or r.get("adjusted_cash_consideration")
+            or r.get("consideration")
+            or r.get("consideration_amount")
+            or r.get("consideration_amt")
+            or r.get("sale_price")
+        )
         pd_obj.deed_history.append(DeedRecord(
-            recording_date=_as_str(r.get("recording_date") or r.get("document_date")),
+            recording_date=_as_str(
+                r.get("receipt_date")
+                or r.get("recording_date")
+                or r.get("document_date")
+            ),
             document_type=_as_str(r.get("document_type")),
             grantor=_as_str(r.get("grantors") or r.get("grantor")),
             grantee=_as_str(r.get("grantees") or r.get("grantee")),
-            consideration_amount=_safe_float(
-                r.get("consideration_amount") or r.get("consideration_amt")
-            ),
+            consideration_amount=_consid,
             document_id=_as_str(r.get("document_id")),
         ))
-    logger.info("DEED HISTORY (PHL): %d records pulled for parcel %s",
-                len(rows), acct)
+    logger.info("DEED HISTORY (PHL): %d records pulled for parcel %s "
+                "(considerations populated: %d)",
+                len(rows), acct,
+                sum(1 for d in pd_obj.deed_history if d.consideration_amount))
 
 
 def _fetch_dc_dcgis(deal: DealData, pd_obj: ParcelData, addr) -> None:

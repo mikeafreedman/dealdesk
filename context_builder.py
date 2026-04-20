@@ -701,6 +701,15 @@ def build_context(deal: DealData) -> dict:
     ctx["sponsor_name"] = deal.sponsor_name or "DealDesk"
     ctx["sponsor_description"] = deal.sponsor_description
 
+    # DealDesk logo (base64 data URI, loaded once from templates/dealdesk_logo.txt)
+    try:
+        from pathlib import Path as _P
+        logo_path = _P(__file__).resolve().parent / "templates" / "dealdesk_logo.txt"
+        if logo_path.exists():
+            ctx["dealdesk_logo_uri"] = logo_path.read_text(encoding="utf-8").strip()
+    except Exception as _exc:
+        logger.debug("DealDesk logo load failed: %s", _exc)
+
     # Property basics — title-case the address for display
     ctx["property_name"] = ext.property_name or _tc_full_addr
     ctx["full_address"] = _tc_full_addr
@@ -715,6 +724,75 @@ def build_context(deal: DealData) -> dict:
     ctx["poi_summary"]       = getattr(deal, "poi_summary", {}) or {}
     ctx["commercial_density"] = getattr(deal, "commercial_density", {}) or {}
     ctx["nearby_pois"]       = getattr(deal, "nearby_pois", []) or []
+
+    # ── Section 08 key takeaways — bullet summaries ─────────────────────
+    # Derived from market_data + commercial_density + POI summary. Each
+    # bullet is data-driven so the reader can scan the trend call-outs
+    # without re-reading the narrative.
+    _md = deal.market_data
+    _bullets = []
+    if _md:
+        if _md.population_3mi:
+            _pop = _md.population_3mi
+            if _pop >= 250_000:
+                _bullets.append(f"Dense population base — {_pop:,} residents within 3 miles (urban core density).")
+            elif _pop >= 100_000:
+                _bullets.append(f"Substantial population base — {_pop:,} residents within 3 miles.")
+            elif _pop >= 25_000:
+                _bullets.append(f"Moderate population base — {_pop:,} residents within 3 miles.")
+            else:
+                _bullets.append(f"Thin population base — {_pop:,} residents within 3 miles (suburban / exurban profile).")
+        if _md.median_hh_income_3mi:
+            _inc = _md.median_hh_income_3mi
+            _natl_med = 75_000   # approx US median HH income
+            _delta = (_inc - _natl_med) / _natl_med
+            _cmp = (
+                "well above" if _delta > 0.25 else
+                "above"      if _delta > 0.10 else
+                "near"       if abs(_delta) <= 0.10 else
+                "below"      if _delta > -0.25 else
+                "well below"
+            )
+            _bullets.append(
+                f"Median household income ${_inc:,.0f} (3-mile) — {_cmp} the ~$75K US median."
+            )
+        if _md.pct_renter_occ_3mi is not None:
+            _r = _md.pct_renter_occ_3mi
+            _renter_label = (
+                "renter-dominated" if _r > 0.60 else
+                "balanced tenure"  if 0.40 <= _r <= 0.60 else
+                "owner-dominated"
+            )
+            _bullets.append(
+                f"{_r * 100:.0f}% renter-occupied households in the 3-mile ring — {_renter_label} tenure mix."
+            )
+        if _md.unemployment_rate:
+            _u = _md.unemployment_rate * 100 if _md.unemployment_rate < 1 else _md.unemployment_rate
+            _bullets.append(f"Submarket unemployment rate ≈ {_u:.1f}%.")
+    # Commercial density bullet from Places API
+    _cd = getattr(deal, "commercial_density", None) or {}
+    if _cd.get("density_label"):
+        _bullets.append(
+            f"Amenity density: {_cd['density_label']} ({_cd.get('total_amenities', 0)} POIs within 1 mile — "
+            f"{_cd.get('food_and_beverage', 0)} F&B, {_cd.get('transit_access_score', 0)} transit stops, "
+            f"{_cd.get('grocery_count', 0)} grocery, {_cd.get('school_count', 0)} schools)."
+        )
+    # OZ / flood-zone bullets
+    if ctx.get("is_opportunity_zone"):
+        _bullets.append("Property tract is a federally-designated Opportunity Zone — capital-gains incentives apply.")
+    if _md and _md.fema_flood_zone:
+        _zone = str(_md.fema_flood_zone).upper()
+        if _zone.startswith(("A", "V")):
+            _bullets.append(
+                f"Located within FEMA Special Flood Hazard Area (Zone {_md.fema_flood_zone}) — "
+                f"flood insurance required and loading applied to P&C premium."
+            )
+        else:
+            _bullets.append(
+                f"FEMA Zone {_md.fema_flood_zone} — outside the Special Flood Hazard Area (no mandatory flood insurance)."
+            )
+    ctx["neighborhood_trend_bullets"] = _bullets
+    logger.info("SECTION 08: %d neighborhood-trend bullet takeaways built", len(_bullets))
     ctx["asset_type"] = deal.asset_type.value
     ctx["investment_strategy"] = deal.investment_strategy.value
     ctx["asking_price"] = f"${deal.assumptions.purchase_price:,.0f}" if deal.assumptions.purchase_price else "Not disclosed"
@@ -768,6 +846,99 @@ def build_context(deal: DealData) -> dict:
     # not computed" signal; None previously caused narrative hallucination.
     ctx["sensitivity_matrix"] = fo.sensitivity_matrix or []
     ctx["pro_forma_years"] = fo.pro_forma_years or []
+
+    # ── Gantt chart phases for Section 18 ───────────────────────────
+    _const_m  = int(getattr(a, "const_period_months", 0) or 0)
+    _leaseup_m = int(getattr(a, "lease_up_months", 1) or 1) * max(1, (a.num_units or 1) // 4)
+    _hold_m   = int((a.hold_period or 10) * 12)
+    _total_m  = max(_hold_m, _const_m + _leaseup_m + 12)
+    ctx["gantt_total_months"] = _total_m
+
+    def _pct(month: int) -> float:
+        return round(100.0 * month / _total_m, 2) if _total_m else 0.0
+
+    _gantt_phases = []
+    # Acquisition (spike at month 0)
+    _gantt_phases.append({
+        "name": "Acquisition / Closing",
+        "duration_label": "Month 0",
+        "start_pct": 0,
+        "width_pct": max(1.5, _pct(1)),
+        "kind":     "acquisition",
+        "bar_label": "Close",
+    })
+    # Construction / renovation (when applicable)
+    if _const_m > 0:
+        _gantt_phases.append({
+            "name": "Construction / Renovation",
+            "duration_label": f"{_const_m} mo",
+            "start_pct": _pct(0),
+            "width_pct": max(1.5, _pct(_const_m)),
+            "kind":     "construction",
+            "bar_label": f"{_const_m}-month capex",
+        })
+    # Lease-up
+    _leaseup_start = _const_m if _const_m > 0 else 0
+    if _leaseup_m > 0:
+        _gantt_phases.append({
+            "name": "Lease-Up",
+            "duration_label": f"~{_leaseup_m} mo",
+            "start_pct": _pct(_leaseup_start),
+            "width_pct": max(1.5, _pct(_leaseup_m)),
+            "kind":     "leaseup",
+            "bar_label": "Units to market",
+        })
+    # Stabilized operations — from end of leaseup to first refi (or exit)
+    _stab_start = _leaseup_start + _leaseup_m
+    _first_refi_m = None
+    for rev in (a.refi_events or []):
+        if getattr(rev, "active", False) and getattr(rev, "year", 0):
+            _first_refi_m = int(rev.year) * 12
+            break
+    _stab_end = _first_refi_m if _first_refi_m and _first_refi_m < _hold_m else _hold_m
+    if _stab_end > _stab_start:
+        _gantt_phases.append({
+            "name": "Stabilized Operations",
+            "duration_label": f"{_stab_end - _stab_start} mo",
+            "start_pct": _pct(_stab_start),
+            "width_pct": max(1.5, _pct(_stab_end - _stab_start)),
+            "kind":     "stabilized",
+            "bar_label": "Hold",
+        })
+    # Refi events
+    for idx, rev in enumerate(a.refi_events or []):
+        if not getattr(rev, "active", False):
+            continue
+        _m = int(getattr(rev, "year", 0)) * 12
+        if _m <= 0 or _m > _total_m:
+            continue
+        _gantt_phases.append({
+            "name": f"Refinance #{idx + 1}",
+            "duration_label": f"Year {rev.year}",
+            "start_pct": _pct(_m),
+            "width_pct": max(1.2, _pct(1)),
+            "kind":     "refi",
+            "bar_label": f"Refi Y{rev.year}",
+        })
+    # Exit
+    _gantt_phases.append({
+        "name": "Disposition / Exit",
+        "duration_label": f"Month {_hold_m}",
+        "start_pct": _pct(_hold_m - 1),
+        "width_pct": max(1.5, _pct(1)),
+        "kind":     "exit",
+        "bar_label": "Sale",
+    })
+    ctx["gantt_phases"] = _gantt_phases
+
+    # Month markers along the top axis — annual ticks + half-years for
+    # schedules ≤ 3 years
+    _tick_step = 12 if _total_m > 36 else 6
+    ctx["gantt_month_markers"] = [
+        {"month": m, "pct": _pct(m)}
+        for m in range(0, _total_m + 1, _tick_step)
+    ]
+    logger.info("GANTT: %d phases across %d months", len(_gantt_phases), _total_m)
 
     # Insurance
     ctx["insurance_narrative_p1"] = ins.insurance_narrative_p1 or ""
@@ -974,6 +1145,7 @@ def build_context(deal: DealData) -> dict:
     for c in (deal.comps.sale_comps or []):
         sale_rows.append({
             "address":       c.address or "",
+            "property_type": c.asset_type or "",
             "sf":            f"{c.sq_ft:,}" if c.sq_ft else "",
             "units":         str(c.num_units) if c.num_units else "",
             "sale_price":    f"${c.sale_price:,.0f}" if c.sale_price else "",
@@ -1052,6 +1224,42 @@ def build_context(deal: DealData) -> dict:
     logger.info("ZONING STANDARDS: %d / %d rows populated (source_verified=%s)",
                 _populated, len(ctx["zoning_standards_rows"]),
                 bool(z.source_verified))
+    # Permitted Uses — split the flat list into rendering buckets so the
+    # template can group "By Right / Conditional / Special / Accessory".
+    # Splitting logic: LLM may label each use inline ("X (conditional)") or
+    # return separate list fields (permitted_uses_by_right etc.). We
+    # normalize both shapes here.
+    def _split_uses(raw_list):
+        by_right, conditional, special, accessory = [], [], [], []
+        for u in (raw_list or []):
+            if not isinstance(u, str):
+                continue
+            s = u.strip()
+            if not s:
+                continue
+            low = s.lower()
+            if ("special exception" in low or "by special" in low):
+                # strip the marker so the bullet reads cleanly
+                special.append(re.sub(r"\s*\(.*?\)\s*$", "", s))
+            elif ("conditional" in low or "by conditional" in low):
+                conditional.append(re.sub(r"\s*\(.*?\)\s*$", "", s))
+            elif ("accessory" in low):
+                accessory.append(re.sub(r"\s*\(.*?\)\s*$", "", s))
+            else:
+                by_right.append(s)
+        return by_right, conditional, special, accessory
+
+    _by_right, _cond, _spec, _acc = _split_uses(z.permitted_uses)
+    # Additionally pick up explicitly-bucketed lists from _apply_3a if the
+    # LLM returned them.
+    if z.conditional_uses:
+        _cond = list({*(_cond or []), *(z.conditional_uses or [])})
+
+    ctx["permitted_uses_by_right"]    = _by_right
+    ctx["permitted_uses_conditional"] = _cond
+    ctx["permitted_uses_special"]     = _spec
+    ctx["permitted_uses_accessory"]   = _acc
+    # Keep the flat description for any legacy consumers
     ctx["permitted_uses_description"] = (
         ", ".join(z.permitted_uses) if z.permitted_uses else ""
     )
@@ -1180,6 +1388,68 @@ def build_context(deal: DealData) -> dict:
     ctx["cpi_yoy"]         = f"{md.cpi_yoy:.2%}"         if md.cpi_yoy         else "N/A"
 
     # ── Opportunity zone flag ─────────────────────────────────────
+    # Derive incentives_rows: start from any LLM-populated incentives list,
+    # then add algorithmic entries based on what the pipeline has already
+    # confirmed (OZ flag, flood zone for IRA §45L, historic designation).
+    _inc_rows = []
+    _is_oz = deal.provenance.field_sources.get("opportunity_zone", "False") == "True"
+    if _is_oz:
+        _inc_rows.append({
+            "incentive": "Opportunity Zone",
+            "source":    "Federal (Treasury / IRS §1400Z-2)",
+            "benefit":   "Capital-gains deferral + 10-year step-up in basis on the QOF investment.",
+            "status":    "Eligible — tract confirmed on HUD OZ list",
+        })
+    if deal.historical_designation:
+        _inc_rows.append({
+            "incentive": "Historic Tax Credits",
+            "source":    "Federal §47 (20%) + state-level HTC where available",
+            "benefit":   "Up to 20% federal + 20-30% state tax credit on qualified rehab expenditures.",
+            "status":    (f"Likely eligible — property listed as {deal.historical_designation}"
+                          if deal.historic_tax_credits_eligible
+                          else f"Screening required — property has status: {deal.historical_designation}"),
+        })
+    _md_here = deal.market_data
+    if _md_here and (_md_here.fema_flood_zone or "").upper().startswith(("A", "V")):
+        _inc_rows.append({
+            "incentive": "FEMA Hazard Mitigation Grant",
+            "source":    "Federal (FEMA HMA / Stafford Act)",
+            "benefit":   "Cost-share funding for flood-resilience capex (elevation, wet/dry floodproofing).",
+            "status":    f"Candidate — property in SFHA Zone {_md_here.fema_flood_zone}",
+        })
+    _strategy = (deal.investment_strategy.value or "").lower()
+    if "value" in _strategy or "ground" in _strategy or "development" in _strategy:
+        _inc_rows.append({
+            "incentive": "State/Local Tax Abatement",
+            "source":    f"Local jurisdiction — {deal.address.city or 'municipality'}",
+            "benefit":   "Typically 5-10 year graduated abatement on improvement-value assessment (e.g. Phila. 10-Year Tax Abatement for renovations).",
+            "status":    "Verify eligibility with local assessor prior to permit pull",
+        })
+    if (deal.asset_type.value or "").lower() in ("multifamily", "mixed-use"):
+        _inc_rows.append({
+            "incentive": "LIHTC (4% / 9% Affordable Housing)",
+            "source":    "State Housing Finance Agency",
+            "benefit":   "Dollar-for-dollar federal tax credit over 10 years for income-restricted units.",
+            "status":    "Optional — requires LP restructuring to tap",
+        })
+    # Merge any explicitly-set incentives from the deal
+    if deal.incentives_available:
+        _inc_rows.extend([{
+            "incentive": i.get("name") or i.get("incentive") or "",
+            "source":    i.get("source") or i.get("program") or "",
+            "benefit":   i.get("benefit") or i.get("description") or "",
+            "status":    i.get("status") or "",
+        } for i in deal.incentives_available if isinstance(i, dict)])
+    ctx["incentives_rows"] = _inc_rows
+    ctx["incentives_narrative"] = deal.incentives_narrative or ""
+    logger.info("INCENTIVES CTX: %d incentives identified", len(_inc_rows))
+
+    # Historical status context
+    ctx["historical_designation"] = deal.historical_designation or ""
+    ctx["historic_district"]      = deal.historic_district or ""
+    ctx["historic_preservation_notes"] = deal.historic_preservation_notes or ""
+    ctx["historic_tax_credits_eligible"] = deal.historic_tax_credits_eligible
+
     ctx["is_opportunity_zone"] = (
         deal.provenance.field_sources.get("opportunity_zone", "False") == "True"
     )
@@ -1546,6 +1816,26 @@ def build_context(deal: DealData) -> dict:
     ctx["parcel_a_stories"]      = "N/A"
     ctx["parcel_a_category"]     = "N/A"
 
+    # Extended owner / contact fields (Section 04 Parcel & Improvement table)
+    ctx["parcel_owner_entity_type"]  = _p_str(pd_.ownership_entity_type if pd_ else None)
+    ctx["parcel_taxpayer_mailing"]   = _p_str(pd_.taxpayer_mailing_address if pd_ else None)
+    _oo = pd_.owner_occupied if pd_ else None
+    ctx["parcel_owner_occupied_display"] = (
+        "Yes" if _oo is True else ("No" if _oo is False else "")
+    )
+    _yo = pd_.years_owned if pd_ else None
+    ctx["parcel_years_owned_display"] = (
+        f"{_yo:.1f} years" if _yo else ""
+    )
+    ctx["parcel_property_use_class"] = _p_str(pd_.property_use_class if pd_ else None) if pd_ and pd_.property_use_class else ""
+
+    # Broker / listing-agent contact from OM extraction (1A)
+    _ext = deal.extracted_docs
+    ctx["broker_name"]  = (_ext.broker_name  or "") if _ext else ""
+    ctx["broker_firm"]  = (_ext.broker_firm  or "") if _ext else ""
+    ctx["broker_phone"] = (_ext.broker_phone or "") if _ext else ""
+    ctx["broker_email"] = (_ext.broker_email or "") if _ext else ""
+
     # Parcel B is not in the current data model — always blank.
     ctx["parcel_b_address"]    = ""
     ctx["parcel_b_account"]    = "N/A"
@@ -1730,6 +2020,24 @@ def build_context(deal: DealData) -> dict:
             _assessment_rows.append({
                 "label": "Assessed / Purchase Price",
                 "value": f"{_ratio:.1%}",
+            })
+    # Annual property tax: use the parcel-record billed amount if the
+    # portal exposed it, else the underwriting re_taxes assumption (which
+    # is derived from assessed value × effective tax rate via expense_pricing).
+    _annual_tax = (
+        (pd_.annual_tax_billed if pd_ else None)
+        or a.re_taxes
+    )
+    if _annual_tax and _annual_tax > 0:
+        _assessment_rows.append({
+            "label": "Annual Property Tax",
+            "value": f"${_annual_tax:,.0f}",
+        })
+        if _assessed and _annual_tax:
+            _eff_rate = _annual_tax / _assessed
+            _assessment_rows.append({
+                "label": "Effective Tax Rate",
+                "value": f"{_eff_rate:.3%}",
             })
     ctx["assessment_rows"] = _assessment_rows
     logger.info(
@@ -2000,6 +2308,7 @@ def build_context(deal: DealData) -> dict:
     for sc in _sorted_sales[:8]:
         _sale_rows.append({
             "address":        sc.address or "N/A",
+            "property_type":  sc.asset_type or "",
             "sale_date":      sc.sale_date or "N/A",
             "price":          _fmt_price(sc.sale_price),
             "price_per_sf":   _fmt_price(sc.price_per_sf),

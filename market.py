@@ -39,6 +39,7 @@ import pandas as pd
 import requests
 
 from config import (
+    GOOGLE_MAPS_API_KEY,
     MODEL_HAIKU,
     MODEL_SONNET,
     MUNICIPAL_REGISTRY_CSV,
@@ -1153,17 +1154,32 @@ def _fetch_hud_fmr(deal: DealData) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 _FEMA_ENDPOINTS = [
+    # Primary: public NFHL MapServer layer 28 (Flood Hazard Zones) /query.
+    # Matches the endpoint map_builder uses for /export. Occasionally
+    # returns ConnectionReset under load — retry up to 3 times before
+    # falling through.
     ("hazards-arcgis",
      "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query"),
+    # Fallback: MSC NFHL_Prod mirror.
     ("msc-fallback",
      "https://msc.fema.gov/arcgis/rest/services/NFHL_Prod/NFHLREST_Admin/MapServer/28/query"),
 ]
+
+# Last-resort: /identify on the working /export base URL.
+_FEMA_IDENTIFY_URL = (
+    "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/identify"
+)
 
 
 def _fetch_fema_flood_zone(deal, lat: float, lng: float) -> Optional[str]:
     """Query FEMA NFHL for the flood zone at (lat, lng).
 
-    Tries the updated hazards.fema.gov ArcGIS path first, falls back to MSC.
+    Cascade:
+      1. hazards-arcgis /MapServer/28/query  (with 3 retries for ConnectionReset)
+      2. msc-fallback  /MapServer/28/query  (with 3 retries)
+      3. /MapServer/identify on the same service (different path — works when
+         /28/query is intermittently failing under rate-limit)
+
     Writes results to deal.market_data and returns the zone string (or None).
     """
     if lat is None or lng is None:
@@ -1180,38 +1196,98 @@ def _fetch_fema_flood_zone(deal, lat: float, lng: float) -> Optional[str]:
         "f": "json",
     }
 
+    def _try_query(label, url, max_attempts=3):
+        """GET with retry on transient errors."""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.get(url, params=params, timeout=_REQUEST_TIMEOUT)
+                if resp.status_code == 404:
+                    return None, "404"
+                resp.raise_for_status()
+                return resp.json(), None
+            except requests.exceptions.ConnectionError as exc:
+                logger.info("FEMA %s: ConnectionError attempt %d/%d (%s)",
+                            label, attempt, max_attempts, exc)
+                if attempt < max_attempts:
+                    time.sleep(1.5 * attempt)
+                    continue
+                return None, f"connection:{exc}"
+            except Exception as exc:
+                return None, str(exc)
+        return None, "exhausted"
+
     for label, url in _FEMA_ENDPOINTS:
-        try:
-            resp = requests.get(url, params=params, timeout=_REQUEST_TIMEOUT)
-            if resp.status_code == 404:
-                logger.warning("FEMA %s: 404 at %s", label, url)
-                continue
-            resp.raise_for_status()
-            features = resp.json().get("features", [])
-            if not features:
-                logger.info("FEMA %s: no flood zone features at (%.4f, %.4f)",
-                            label, lat, lng)
-                return None
-            attrs = features[0].get("attributes", {}) or {}
-            zone = attrs.get("FLD_ZONE")
-            md = deal.market_data
-            md.fema_flood_zone = zone or md.fema_flood_zone
-            sfha = attrs.get("SFHA_TF")
-            if sfha is not None and hasattr(md, "fema_sfha"):
-                md.fema_sfha = sfha
-            deal.provenance.field_sources["fema_flood"] = (
-                f"fema_{label}_{datetime.utcnow().strftime('%Y-%m-%d')}"
-            )
-            logger.info("FEMA %s: zone=%s, sfha=%s subty=%s",
-                        label, zone, sfha, attrs.get("ZONE_SUBTY"))
-            return zone
-        except Exception as exc:
-            logger.warning("FEMA %s fetch failed (%.4f, %.4f): %s",
-                           label, lat, lng, exc)
+        data, err = _try_query(label, url)
+        if err:
+            logger.warning("FEMA %s failed (%.4f, %.4f): %s", label, lat, lng, err)
             continue
+        features = (data or {}).get("features", []) or []
+        if not features:
+            logger.info("FEMA %s: no flood zone features at (%.4f, %.4f) — "
+                        "property is likely in Zone X (minimal flood risk)",
+                        label, lat, lng)
+            # Explicit: outside any mapped SFHA polygon → Zone X by FEMA
+            # convention. Record that rather than leaving null.
+            md = deal.market_data
+            md.fema_flood_zone = "X"
+            deal.provenance.field_sources["fema_flood"] = (
+                f"fema_{label}_no_sfha_intersect"
+            )
+            return "X"
+        attrs = features[0].get("attributes", {}) or {}
+        zone = attrs.get("FLD_ZONE")
+        md = deal.market_data
+        md.fema_flood_zone = zone or md.fema_flood_zone
+        sfha = attrs.get("SFHA_TF")
+        if sfha is not None and hasattr(md, "fema_sfha"):
+            md.fema_sfha = sfha
+        deal.provenance.field_sources["fema_flood"] = (
+            f"fema_{label}_{datetime.utcnow().strftime('%Y-%m-%d')}"
+        )
+        logger.info("FEMA %s: zone=%s, sfha=%s subty=%s",
+                    label, zone, sfha, attrs.get("ZONE_SUBTY"))
+        return zone
+
+    # Final resort: /identify endpoint on the MapServer. Different code path,
+    # different rate-limit bucket; often succeeds when /query is failing.
+    try:
+        identify_params = {
+            "geometry":     f"{lng},{lat}",
+            "geometryType": "esriGeometryPoint",
+            "sr":           "4326",
+            "layers":       "visible:28",
+            "tolerance":    "2",
+            "mapExtent":    f"{lng-0.01},{lat-0.01},{lng+0.01},{lat+0.01}",
+            "imageDisplay": "400,400,96",
+            "returnGeometry": "false",
+            "f":            "json",
+        }
+        resp = requests.get(_FEMA_IDENTIFY_URL, params=identify_params,
+                            timeout=_REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", []) or []
+        if results:
+            attrs = (results[0] or {}).get("attributes", {}) or {}
+            # /identify returns a mixed-case attribute set; normalize.
+            zone = (attrs.get("FLD_ZONE") or attrs.get("Fld Zone")
+                    or attrs.get("Flood Zone") or attrs.get("FLOODZONE"))
+            if zone:
+                deal.market_data.fema_flood_zone = zone
+                deal.provenance.field_sources["fema_flood"] = (
+                    f"fema_identify_{datetime.utcnow().strftime('%Y-%m-%d')}"
+                )
+                logger.info("FEMA identify: zone=%s", zone)
+                return zone
+        logger.info("FEMA identify: no intersecting features at (%.4f, %.4f) — "
+                    "defaulting to Zone X", lat, lng)
+        deal.market_data.fema_flood_zone = "X"
+        return "X"
+    except Exception as exc:
+        logger.warning("FEMA identify fallback failed: %s", exc)
 
     logger.warning(
-        "FEMA: all endpoints failed for (%.4f, %.4f) — zone set to 'Not Determined'",
+        "FEMA: all endpoints failed for (%.4f, %.4f) — zone left unset",
         lat, lng,
     )
     return None
@@ -2640,6 +2716,13 @@ def enrich_market_data(deal: DealData) -> DealData:
             "- When the code permits ranges based on lot size / use, return\n"
             "  the BASE (as-of-right) value for the LOWEST lot size of the\n"
             "  district, not the most-constraining outlier.\n"
+            "- When the district is a MIXED-USE district (CMX, IRMX, RMX,\n"
+            "  etc.) and standards vary by proposed use, use the PROPOSED\n"
+            "  USE supplied in the user message to scope the values. Never\n"
+            "  return null when a use-scoped value is known — report the\n"
+            "  value for the user's proposed use. If the user did not\n"
+            "  specify a use, return the values for the BROADEST permitted\n"
+            "  residential use.\n"
             "- For Philadelphia RM-1 specifically (Phila. Zoning Code §14-701):\n"
             "    max_height_ft=38, max_stories=3, min_lot_area_sf=1440\n"
             "    (per dwelling unit), max_lot_coverage_pct=0.60 (60% max\n"
@@ -2653,6 +2736,45 @@ def enrich_market_data(deal: DealData) -> DealData:
             "    min_lot_area_sf=1440, min_lot_width_ft=16,\n"
             "    max_lot_coverage_pct=0.75, front_setback_ft=0,\n"
             "    rear_setback_ft=9, side_setback_ft=0.\n"
+            "- Philadelphia CMX-1 (Neighborhood Commercial Mixed-Use, §14-703):\n"
+            "    max_height_ft=38, max_stories=3, min_lot_area_sf=1440\n"
+            "    (residential uses) or null (commercial uses ≤ 2,000 SF),\n"
+            "    max_lot_coverage_pct=0.75, max_far=2.0,\n"
+            "    front_setback_ft=0, rear_setback_ft=9, side_setback_ft=0.\n"
+            "- Philadelphia CMX-2 (§14-703): max_height_ft=38, max_stories=3,\n"
+            "    min_lot_area_sf=1440 (residential), max_lot_coverage_pct=0.75,\n"
+            "    max_far=2.0, front_setback_ft=0, rear_setback_ft=9,\n"
+            "    side_setback_ft=0.\n"
+            "- Philadelphia CMX-2.5 (§14-703): max_height_ft=55, max_stories=4,\n"
+            "    min_lot_area_sf=1440 (residential), max_lot_coverage_pct=0.75,\n"
+            "    max_far=2.5, front_setback_ft=0, rear_setback_ft=9,\n"
+            "    side_setback_ft=0.\n"
+            "- Philadelphia CMX-3 (§14-703): max_height_ft=55, max_stories=4,\n"
+            "    min_lot_area_sf=1440 (residential), max_lot_coverage_pct=0.75,\n"
+            "    max_far=3.0, front_setback_ft=0, rear_setback_ft=9,\n"
+            "    side_setback_ft=0.\n"
+            "- Philadelphia CMX-4 (§14-703): max_height_ft=85, max_stories=6,\n"
+            "    min_lot_area_sf=1440 (residential), max_lot_coverage_pct=0.75,\n"
+            "    max_far=5.0, front_setback_ft=0, rear_setback_ft=9,\n"
+            "    side_setback_ft=0.\n"
+            "- Philadelphia CMX-5 (§14-703): max_height_ft=null (no cap;\n"
+            "    bonus-based), max_stories=null, min_lot_area_sf=1440\n"
+            "    (residential), max_lot_coverage_pct=0.75, max_far=5.0 (base;\n"
+            "    up to 12.0 w/ FAR bonuses), front_setback_ft=0,\n"
+            "    rear_setback_ft=9, side_setback_ft=0.\n"
+            "- Philadelphia IRMX (Industrial Residential Mixed-Use, §14-704):\n"
+            "    max_height_ft=38, max_stories=3, min_lot_area_sf=1440,\n"
+            "    max_lot_coverage_pct=0.75, max_far=2.0, front_setback_ft=0,\n"
+            "    rear_setback_ft=9, side_setback_ft=0.\n"
+            "- Philadelphia IMX: same as IRMX except max_far=3.0.\n"
+            "- Philadelphia I-1 (Light Industrial, §14-704): max_height_ft=58,\n"
+            "    max_stories=null, min_lot_area_sf=null, max_lot_coverage_pct=0.75,\n"
+            "    max_far=3.0, front_setback_ft=0, rear_setback_ft=0,\n"
+            "    side_setback_ft=0.\n"
+            "- Philadelphia I-2 (Medium Industrial): max_height_ft=58,\n"
+            "    max_stories=null, min_lot_area_sf=null, max_lot_coverage_pct=0.80,\n"
+            "    max_far=5.0, front_setback_ft=0, rear_setback_ft=0,\n"
+            "    side_setback_ft=0.\n"
             "- Dimensions in feet. FAR as decimal (e.g. 1.5). Percentages\n"
             "  as decimals (0.45 for 45%). min_parking_spaces_per_unit may\n"
             "  be fractional.\n"
@@ -2662,14 +2784,19 @@ def enrich_market_data(deal: DealData) -> DealData:
             "  municipal code prior to reliance.'\n"
             "Output ONLY valid JSON."
         )
+        _proposed_use = deal.asset_type.value if deal.asset_type else "unknown"
         _fallback_user = (
             f"Property: {addr.full_address}\n"
             f"Municipality: {zcity}, {zstate}\n"
             f"Zoning district code (as shown on parcel records): {zcode}\n"
-            f"Canonical code for lookup: {_zcode_norm}\n\n"
+            f"Canonical code for lookup: {_zcode_norm}\n"
+            f"Proposed use (asset type): {_proposed_use}\n\n"
             "Return the dimensional standards for THIS district in THIS\n"
-            "municipality. Do not fill in values from a similarly-named\n"
-            "district in another city.\n\n"
+            "municipality, SCOPED TO THE PROPOSED USE above (when the\n"
+            "district is mixed-use and different uses yield different\n"
+            "standards, return the values that apply to the proposed use\n"
+            "and note the scoping in extraction_notes). Do not fill in\n"
+            "values from a similarly-named district in another city.\n\n"
             + _USER_3A.split("Return JSON:")[1].strip()
         )
         _fallback = _call_llm(MODEL_SONNET, _fallback_system, _fallback_user)
@@ -2717,14 +2844,63 @@ def enrich_market_data(deal: DealData) -> DealData:
                 zcity, zcode, _populated,
             )
             if _empty:
-                # A null from Sonnet's first pass is deliberate: it means
-                # the district genuinely has no standard for that dimension
-                # (e.g. RM-1 in Philly has no FAR cap and no coverage cap).
-                # Forcing a gap-fill here caused Sonnet to invent values,
-                # polluting the report. Respect the null.
-                logger.info("Zoning fallback: %d fields left null (district "
-                            "genuinely has no standard): %s",
-                            len(_empty), _empty)
+                # Targeted gap-fill: re-ask Sonnet for the specific null
+                # fields, this time explicitly naming each missing field
+                # and scoping to the proposed use. Sonnet is instructed
+                # to return null ONLY when the district genuinely has no
+                # standard for that dimension under the proposed use;
+                # otherwise the authoritative value must be supplied.
+                logger.info("Zoning fallback gap-fill: %d fields still null → "
+                            "targeted follow-up for %s", len(_empty), _empty)
+                _gap_system = (
+                    "You are a zoning code analyst. The user will name a\n"
+                    "specific municipality, zoning district, and proposed\n"
+                    "use, plus a short list of dimensional fields that a\n"
+                    "prior pass returned as null. Return a JSON object\n"
+                    "whose keys are ONLY those fields and whose values are\n"
+                    "the authoritative dimensional values for that district\n"
+                    "+ use, drawn from the current municipal code.\n\n"
+                    "RULES:\n"
+                    "- Return null ONLY when the district genuinely has no\n"
+                    "  standard for that dimension under the proposed use.\n"
+                    "- If a standard applies but varies by sub-use, return\n"
+                    "  the BASE (as-of-right) value for the PROPOSED use.\n"
+                    "- Dimensions in feet. FAR as decimal. Percentages as\n"
+                    "  decimals (0.75 for 75%).\n"
+                    "- Output ONLY valid JSON with no prose outside the\n"
+                    "  JSON object."
+                )
+                _gap_user = (
+                    f"Municipality: {zcity}, {zstate}\n"
+                    f"Zoning district code: {_zcode_norm}\n"
+                    f"Proposed use (asset type): {_proposed_use}\n\n"
+                    f"Fields still null from the first pass: {_empty}\n\n"
+                    "Return a JSON object with exactly these keys, populated\n"
+                    "with the authoritative value for this district under\n"
+                    "the proposed use. Null is acceptable only if the\n"
+                    "district has no standard for that dimension."
+                )
+                _gap = _call_llm(MODEL_SONNET, _gap_system, _gap_user)
+                if _gap:
+                    logger.info("Zoning fallback gap-fill RAW response: %s", _gap)
+                    # Only apply keys that (a) were requested and (b) are
+                    # non-null in the gap-fill response. Preserves the
+                    # original null when the district genuinely has no
+                    # standard.
+                    _filtered = {k: v for k, v in _gap.items()
+                                 if k in _empty and v is not None and v != ""}
+                    if _filtered:
+                        _apply_3a(_filtered, deal)
+                        logger.info(
+                            "Zoning fallback gap-fill populated %d fields: %s",
+                            len(_filtered), list(_filtered.keys()),
+                        )
+                    else:
+                        logger.info("Zoning fallback gap-fill: no new values "
+                                    "(district has no standard for these "
+                                    "dimensions under %s use)", _proposed_use)
+                else:
+                    logger.warning("Zoning fallback gap-fill call failed")
         else:
             logger.warning("Zoning fallback Prompt 3A failed — no structured zoning data")
 

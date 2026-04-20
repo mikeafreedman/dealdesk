@@ -321,9 +321,13 @@ def _fetch_aerial_view_still(lat: float, lon: float) -> Optional[bytes]:
 
 
 def build_aerial_map(deal) -> Optional[bytes]:
-    """Figure 3.1 — aerial location map.
+    """Figure 3.1 — aerial / satellite location map.
 
-    Priority: Aerial View API → Static Maps satellite zoom 18 → OSM tiles.
+    Framed to a ~30-minute driving radius (~20–25 mi) for regional context.
+    Aerial View API is skipped — it only returns building-level stills and
+    cannot zoom out to a regional frame.
+
+    Priority: Static Maps satellite zoom 10 → OSM tiles.
     Always returns PNG bytes or None."""
     lat, lon = deal.address.latitude, deal.address.longitude
     if not _lat_lon_valid(lat, lon):
@@ -332,18 +336,12 @@ def build_aerial_map(deal) -> Optional[bytes]:
 
     logger.info("Aerial map: building for lat=%.5f lon=%.5f", lat, lon)
 
-    # Priority 1 — Google Aerial View API
-    aerial_bytes = _fetch_aerial_view_still(lat, lon)
-    if aerial_bytes:
-        logger.info("Aerial map: using Aerial View API still")
-        return aerial_bytes
-
-    # Priority 2 — Maps Static API satellite
+    # Priority 1 — Maps Static API satellite at regional zoom (~30-min drive)
     if GOOGLE_MAPS_API_KEY:
         try:
             params = {
                 "center":  f"{lat},{lon}",
-                "zoom":    "18",
+                "zoom":    "10",
                 "size":    f"{MAP_WIDTH}x{MAP_HEIGHT}",
                 "maptype": "satellite",
                 "scale":   "2",
@@ -356,14 +354,14 @@ def build_aerial_map(deal) -> Optional[bytes]:
                 timeout=TIMEOUT,
             )
             r.raise_for_status()
-            logger.info("Aerial map: using Maps Static API satellite view")
+            logger.info("Aerial map: using Maps Static API satellite view (zoom 10)")
             return r.content
         except Exception as exc:
             logger.warning("Maps Static aerial fallback failed: %s", exc)
 
-    # Priority 3 — OSM tile stitching (zoom 17, denser area coverage)
+    # Priority 2 — OSM tile stitching at matching regional zoom
     logger.info("Aerial map: falling back to OSM tile stitching")
-    return _stitch_osm_tiles(lat, lon, zoom=17, grid=3)
+    return _stitch_osm_tiles(lat, lon, zoom=10, grid=3)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

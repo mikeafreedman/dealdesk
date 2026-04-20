@@ -773,6 +773,21 @@ async def underwrite(req: UnderwriteRequest, request: Request):
                 fin_path = saved_path
         logger.info("MAIN: %d file(s) queued for extraction", len(all_uploaded_paths))
 
+        # Sanity check: multiple files of the same type usually means the
+        # frontend upload queue carried a stale file from a prior session.
+        # Warn loudly so the log reviewer can correlate with an address-match
+        # filter skip downstream in the extractor.
+        _type_counts: dict = {}
+        for uf in req.uploaded_files:
+            _type_counts[uf.type] = _type_counts.get(uf.type, 0) + 1
+        for _t, _n in _type_counts.items():
+            if _n > 1:
+                logger.warning(
+                    "MAIN: %d files of type=%s queued — extractor will "
+                    "reject any whose OM address doesn't match the deal.",
+                    _n, _t,
+                )
+
         # Merge frontend rent roll rows into extracted_docs.unit_mix. Every
         # numeric parse is wrapped with _safe_num so a stray letter in a SF
         # or rent cell doesn't 500 the whole request — the bad row is

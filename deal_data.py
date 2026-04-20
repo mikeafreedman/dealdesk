@@ -501,7 +501,43 @@ def _synthesize_rent_roll(deal: DealData) -> None:
 
     # ── Gate: only run if no units were extracted ─────────────────────
     if ext.unit_mix and len(ext.unit_mix) > 0:
-        logger.info("SYNTH RENT ROLL: unit_mix already populated (%d units) — skipping",
+        # Even when units exist, backfill a pro-forma rent on any unit
+        # whose monthly_rent and market_rent are both 0/None but has a
+        # usable SF. This covers vacant commercial space in a broker OM
+        # that lists square footage but no in-place rent.
+        psf_samples = [
+            float(c.asking_rent_per_sf) for c in
+            ((deal.comps.commercial_comps if deal.comps else []) or [])
+            if c.asking_rent_per_sf
+        ] if deal.comps else []
+        psf_annual = (sum(psf_samples) / len(psf_samples)) if psf_samples else 20.0
+        filled = 0
+        for u in ext.unit_mix:
+            if not isinstance(u, dict):
+                continue
+            try:
+                mr = float(u.get("monthly_rent") or 0)
+                mkt = float(u.get("market_rent") or 0)
+                sf = float(u.get("sf") or 0)
+            except (TypeError, ValueError):
+                continue
+            if mr == 0 and mkt == 0 and sf > 0:
+                proforma_monthly = round(sf * psf_annual / 12.0, 2)
+                u["market_rent"] = proforma_monthly
+                u["market_rent_sf"] = psf_annual / 12.0
+                u["notes"] = (
+                    (u.get("notes") or "")
+                    + f" | Pro-forma rent synthesised at ${psf_annual:.2f}/SF/yr "
+                    f"(market comp average)"
+                ).strip(" |")
+                filled += 1
+        if filled:
+            logger.info(
+                "SYNTH RENT ROLL: backfilled %d unit(s) with pro-forma rent "
+                "@ $%.2f/SF/yr market PSF",
+                filled, psf_annual,
+            )
+        logger.info("SYNTH RENT ROLL: unit_mix already populated (%d units) — skipping synth",
                     len(ext.unit_mix))
         return
 
@@ -564,6 +600,12 @@ def _synthesize_rent_roll(deal: DealData) -> None:
         "4BR+": None,
     }
 
+    # Renovation-tier multiplier is applied to FMR-sourced defaults only.
+    # Comp-sourced rents already reflect post-renovation market quality.
+    from models.models import RENOVATION_TIER_MULTIPLIERS
+    _tier = (getattr(deal.assumptions, "renovation_tier", None) or "light_cosmetic")
+    _tier_mult = RENOVATION_TIER_MULTIPLIERS.get(_tier, 1.0)
+
     # From extracted rent comps (if any)
     comps = deal.comps.rent_comps if deal.comps else []
     for comp in comps:
@@ -574,7 +616,9 @@ def _synthesize_rent_roll(deal: DealData) -> None:
 
     # Fill missing tiers from HUD FMR data. Some jurisdictions return
     # non-numeric strings ("Data Not Available"); _hud_to_float silently
-    # skips those rather than crashing the rent synth.
+    # skips those rather than crashing the rent synth. FMR values are
+    # multiplied by the renovation-tier factor (light=0.90, heavy=1.00,
+    # new_construction=1.15) before being stored as the market rent.
     def _hud_to_float(v):
         if v is None or v == "":
             return None
@@ -591,7 +635,7 @@ def _synthesize_rent_roll(deal: DealData) -> None:
         if market_rents[tier_key] is None:
             f = _hud_to_float(getattr(md, fmr_attr, None))
             if f is not None and f > 0:
-                market_rents[tier_key] = f
+                market_rents[tier_key] = round(f * _tier_mult, 0)
 
     # Fill any remaining None values by interpolation from what we have
     filled = {k: v for k, v in market_rents.items() if v is not None}

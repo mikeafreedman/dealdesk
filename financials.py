@@ -938,6 +938,7 @@ def _build_proforma(deal: DealData, insurance: float,
         _stab = stab_factors[min(_yr - 1, len(stab_factors) - 1)]
         if _stab != 1.0:
             _egi = _egi * _stab
+            _opex = _year_expenses(_egi, _yr, a, insurance)
             _noi = _egi - _opex
         projected_noi_by_year.append(_noi)
     logger.info("PROJECTED NOI: %s",
@@ -945,11 +946,17 @@ def _build_proforma(deal: DealData, insurance: float,
 
     for yr in range(1, hold + 1):
         gpr, egi, opex, noi = _year_noi(gpr1, yr, a, insurance)
-        # Apply stabilization ramp to revenue (opex unchanged — conservative)
+        # Apply stabilization ramp to revenue AND to revenue-driven opex
+        # components (management fee). This matches the Excel template's
+        # Pro Forma B30 = B17 * mgmt_pct where B17 is already stabilized.
+        # Previously opex was held at full value during stab < 1.0 which
+        # inflated Year-1 negative NOI by the management fee delta
+        # (produced a ~$10K diff vs. the Excel Pro Forma sheet).
         stab = stab_factors[min(yr - 1, len(stab_factors) - 1)]
         if stab != 1.0:
             gpr = gpr * stab
             egi = egi * stab
+            opex = _year_expenses(egi, yr, a, insurance)
             noi = egi - opex
 
         # Debt service
@@ -2108,12 +2115,10 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
     gba = a.gba_sf or (deal.parcel_data.building_sf if deal.parcel_data else None)
 
     # ── Public-data tax & insurance estimates (all asset types) ─────────
-    # Always compute the estimates; override the existing value only when
-    # the user hasn't supplied one (value is 0 or matches the stock model
-    # default). User-supplied values are preserved and logged against the
-    # estimate for audit.
-    _DEFAULT_RE_TAXES  = 45000.0
-    _DEFAULT_INSURANCE = 18000.0
+    # Priority: assessed-value × local effective tax rate is always the
+    # authoritative number; user-entered re_taxes is preserved as a prior
+    # estimate for audit but overridden when the public-data value is
+    # available. Same logic for insurance (TIV × rate × catastrophe loading).
     try:
         from expense_pricing import (
             estimate_property_taxes,
@@ -2122,37 +2127,41 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
         _tax_est = estimate_property_taxes(deal)
         if _tax_est:
             _tax_val, _tax_src = _tax_est
-            if a.re_taxes in (0.0, _DEFAULT_RE_TAXES):
+            _prior = a.re_taxes
+            a.re_taxes = _tax_val
+            if _prior and _prior not in (0.0, _tax_val):
                 logger.info(
-                    "PUBLIC DATA: re_taxes %s → $%s (%s)",
-                    f"${a.re_taxes:,.0f}", f"{_tax_val:,.0f}", _tax_src,
+                    "PUBLIC DATA: re_taxes user=$%s → overridden to $%s (%s)",
+                    f"{_prior:,.0f}", f"{_tax_val:,.0f}", _tax_src,
                 )
-                a.re_taxes = _tax_val
             else:
                 logger.info(
-                    "PUBLIC DATA: user re_taxes=$%s retained (estimate: $%s, %s)",
-                    f"{a.re_taxes:,.0f}", f"{_tax_val:,.0f}", _tax_src,
+                    "PUBLIC DATA: re_taxes ← $%s (%s)",
+                    f"{_tax_val:,.0f}", _tax_src,
                 )
         else:
             logger.info("PUBLIC DATA: no basis to estimate re_taxes "
-                        "(no parcel assessed value or purchase price)")
+                        "(no parcel assessed value or purchase price); "
+                        "user-entered value retained")
 
         _ins_est = estimate_property_insurance(deal)
         if _ins_est:
             _ins_val, _ins_src = _ins_est
-            if a.insurance in (0.0, _DEFAULT_INSURANCE):
+            _prior_ins = a.insurance
+            a.insurance = _ins_val
+            if _prior_ins and _prior_ins not in (0.0, _ins_val):
                 logger.info(
-                    "PUBLIC DATA: insurance %s → $%s (%s)",
-                    f"${a.insurance:,.0f}", f"{_ins_val:,.0f}", _ins_src,
+                    "PUBLIC DATA: insurance user=$%s → overridden to $%s (%s)",
+                    f"{_prior_ins:,.0f}", f"{_ins_val:,.0f}", _ins_src,
                 )
-                a.insurance = _ins_val
             else:
                 logger.info(
-                    "PUBLIC DATA: user insurance=$%s retained (estimate: $%s, %s)",
-                    f"{a.insurance:,.0f}", f"{_ins_val:,.0f}", _ins_src,
+                    "PUBLIC DATA: insurance ← $%s (%s)",
+                    f"{_ins_val:,.0f}", _ins_src,
                 )
         else:
-            logger.info("PUBLIC DATA: no GBA — cannot estimate insurance")
+            logger.info("PUBLIC DATA: no GBA — cannot estimate insurance; "
+                        "user-entered value retained")
     except Exception as exc:
         logger.warning("PUBLIC DATA estimator failed (non-fatal): %s", exc)
 
