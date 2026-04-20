@@ -174,6 +174,30 @@ def _fmt(val, fallback: str = "Not available") -> str:
     return str(val)
 
 
+def _summarize_phase_esa(deal: DealData) -> str:
+    """Summarize environmental findings from the 1D extractor for Prompt 4B.
+    When an ESA has been uploaded and extracted, pull phase1 status, RECs,
+    vapor intrusion flag, and Phase II recommendation into a single line."""
+    ext = deal.extracted_docs
+    if not ext or not ext.phase1_status:
+        return "No Phase I/II ESA on file"
+    parts = [f"Phase I status: {ext.phase1_status}"]
+    if ext.phase1_date:
+        parts.append(f"dated {ext.phase1_date}")
+    if ext.phase1_consultant:
+        parts.append(f"consultant {ext.phase1_consultant}")
+    if ext.recognized_environmental_conditions:
+        parts.append(f"{len(ext.recognized_environmental_conditions)} REC(s): "
+                     + "; ".join(ext.recognized_environmental_conditions[:3]))
+    if ext.historical_recognized_conditions:
+        parts.append(f"{len(ext.historical_recognized_conditions)} HREC(s)")
+    if ext.vapor_intrusion_flag:
+        parts.append("vapor intrusion flagged")
+    if ext.phase2_recommended:
+        parts.append("Phase II recommended")
+    return ". ".join(parts)
+
+
 def _total_project_cost(deal: DealData) -> float:
     """Estimate total project cost for the insurance prompt.
 
@@ -247,9 +271,9 @@ def analyze_insurance(deal: DealData) -> DealData:
         first_street_fire=_fmt(md.first_street_fire, "N/A"),
         first_street_heat=_fmt(md.first_street_heat, "N/A"),
         first_street_wind=_fmt(md.first_street_wind, "N/A"),
-        phase_esa_summary="No Phase I/II ESA on file",  # TODO: pull from DealData.extracted_docs when Phase I/II upload is added to frontend
+        phase_esa_summary=_summarize_phase_esa(deal),
         const_period_months=_fmt(const_months, "null"),
-        current_insurance_info="Not available",  # TODO: pull from DealData.extracted_docs when Phase I/II upload is added to frontend
+        current_insurance_info="Not available",  # TODO: pull when insurance declarations upload is added to frontend
     )
 
     result = _call_sonnet(_SYSTEM_4B, user_msg)

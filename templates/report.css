@@ -181,12 +181,13 @@ body {
 }
 .toc-entry {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   padding: 4px 0;
   font-size: 10pt;
   line-height: 1.2;
   color: var(--dark-walnut);
-  border-bottom: none;    /* removes the inter-row rules */
+  border-bottom: none;     /* removes the inter-row rules */
+  text-decoration: none;   /* suppress anchor underline in PDF */
 }
 .toc-num {
   font-size: 8pt;
@@ -195,13 +196,23 @@ body {
   width: 30px;
   flex-shrink: 0;
 }
-.toc-title { flex: 1; padding: 0 10px; }
-.toc-page-num {
-  font-size: 9pt;
-  color: var(--earth);
+.toc-title {
+  flex: 1;
+  padding: 0 10px;
+}
+/* Page number at the right edge. The `url` type-cast on attr() is required
+   for Chromium's target-counter() to resolve — without it, Chromium silently
+   drops the content. Only renders at PDF print time. */
+.toc-entry::after {
+  content: target-counter(attr(href url), page);
+  font-size: 9.5pt;
+  color: var(--dark-walnut);
   font-weight: 600;
-  width: 28px;
+  min-width: 28px;
   text-align: right;
+  flex-shrink: 0;
+  padding-left: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── REPORT PAGES ───────────────────────────────────────── */
@@ -330,12 +341,15 @@ body {
 }
 
 /* ── TABLES ─────────────────────────────────────────────── */
+/* Default: auto layout. Column widths size to content, which is far more
+   legible than forced-equal columns (old fixed layout was crushing text
+   and over-allocating to numeric IDs). Specialized tables override below. */
 table {
   width: 100%;
   border-collapse: collapse;
   font-size: 9.5pt;
   margin: 14px 0;
-  table-layout: fixed;       /* equal column widths; long text cannot push cells */
+  table-layout: auto;
 }
 thead th {
   background: var(--dark-walnut);
@@ -344,10 +358,10 @@ thead th {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  padding: 9px 12px;
+  padding: 8px 10px;
   text-align: left;
   vertical-align: middle;
-  word-wrap: break-word;
+  white-space: nowrap;
 }
 thead th:first-child { border-radius: 3px 0 0 0; }
 thead th:last-child  { border-radius: 0 3px 0 0; }
@@ -355,23 +369,55 @@ tbody tr:nth-child(even) td { background: var(--parchment); }
 tbody tr:nth-child(odd)  td { background: var(--white); }
 tbody tr:hover td { background: rgba(178,201,180,0.25); }
 td {
-  padding: 7px 12px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--sage-light);
   color: var(--dark-walnut);
-  vertical-align: middle;    /* was top — centers text across uneven cell heights */
-  word-wrap: break-word;     /* prevents overflow with fixed layout */
+  vertical-align: middle;
   text-align: left;
+  word-break: break-word;
 }
-td:first-child { font-weight: 400; }   /* was 500 — bold was shifting widths */
+td:first-child { font-weight: 400; }
 
-/* Two-column lookup tables (parcel data, FEMA risk factor, etc.) */
+/* Right-align both header and cell for any column flagged numeric.
+   Tabular numerals lock digits to a consistent width so columns of
+   currency / percentages / multiples line up cleanly. */
+td.right, th.right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
+td.center, th.center { text-align: center; }
+
+/* Any numeric-only table cell benefits from tabular numerals even when
+   not explicitly tagged .right (e.g. dates, IDs). Applies to td inside
+   tables that have numeric-heavy content. */
+table.proforma-table td,
+table.rent-roll-table td,
+table.unit-mix-table td,
+table.dd-checklist-table td.dd-status {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Two-column key/value lookup tables (parcel data, ownership, risk, etc.) */
+table.tbl-2col {
+  table-layout: fixed;
+}
 table.tbl-2col td:first-child,
-table.tbl-2col th:first-child { width: 45%; }
+table.tbl-2col th:first-child {
+  width: 42%;
+  font-weight: 600;
+  color: var(--earth-mid);
+}
 table.tbl-2col td:last-child,
-table.tbl-2col th:last-child  { width: 55%; }
+table.tbl-2col th:last-child  { width: 58%; }
+/* When a tbl-2col row has a right-aligned value (common for currency),
+   keep the label left-aligned — only the value should right-align. */
+table.tbl-2col td:last-child[style*="text-align:right"],
+table.tbl-2col td.right { font-variant-numeric: tabular-nums; }
 
-/* DD checklist: 4 columns. Auto layout + smaller font keeps ~35 rows on one
-   page, with a status pill for quick visual scan. */
+/* DD checklist: 4 columns (Category, Item, Status, Owner). */
 table.dd-checklist-table {
     table-layout: auto;
     font-size: 8pt;
@@ -381,6 +427,12 @@ table.dd-checklist-table td {
     padding: 4pt 8pt;
     vertical-align: middle;
 }
+table.dd-checklist-table th:nth-child(1),
+table.dd-checklist-table td:nth-child(1) { width: 15%; font-weight: 600; }
+table.dd-checklist-table th:nth-child(3),
+table.dd-checklist-table td:nth-child(3) { width: 12%; text-align: center; }
+table.dd-checklist-table th:nth-child(4),
+table.dd-checklist-table td:nth-child(4) { width: 20%; }
 table.dd-checklist-table td.dd-status {
     text-align: center;
     font-weight: 700;
@@ -432,8 +484,7 @@ table.unit-mix-table td {
     vertical-align: middle;
 }
 
-/* Pro-forma: 11 columns on Letter. Override generic table-layout:fixed so
-   narrow year columns can shrink to content; shrink font to fit. */
+/* Pro-forma: 11 columns on Letter — narrow year columns shrink to content. */
 table.proforma-table {
     table-layout: auto;
     font-size: 6.5pt;
@@ -449,14 +500,53 @@ table.proforma-table th:first-child,
 table.proforma-table td:first-child {
     text-align: left;
     white-space: normal;
-    font-weight: 400;
+    font-weight: 600;
+    min-width: 90pt;
 }
+
+/* Comparables tables (rent / commercial / sale comps) — typical 5-7 cols.
+   Auto layout so property addresses can wrap and numeric columns stay tight. */
+table.comp-table {
+    table-layout: auto;
+    font-size: 8.5pt;
+}
+table.comp-table th,
+table.comp-table td {
+    padding: 5pt 8pt;
+    vertical-align: middle;
+}
+/* Property/address column wraps, everything else nowrap */
+table.comp-table th:first-child,
+table.comp-table td:first-child { white-space: normal; word-break: break-word; min-width: 120pt; }
+table.comp-table th:not(:first-child),
+table.comp-table td:not(:first-child) { white-space: nowrap; }
+
+/* Deed transfers & title exceptions: 5-6 cols, one free-wrap summary col. */
+table.deed-table, table.exception-table {
+    table-layout: auto;
+    font-size: 8.5pt;
+}
+table.deed-table th, table.deed-table td,
+table.exception-table th, table.exception-table td {
+    padding: 5pt 8pt;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+/* Grantor/grantee (deed) + summary (exception) columns wrap */
+table.deed-table td:nth-child(3),
+table.deed-table td:nth-child(4),
+table.exception-table td:last-child {
+    white-space: normal;
+    word-break: break-word;
+    min-width: 120pt;
+}
+
 tfoot td {
   background: var(--sage-light);
   font-weight: 700;
   color: var(--dark-walnut);
   border-top: 2px solid var(--sage-deep);
-  padding: 9px 12px;
+  padding: 8px 10px;
 }
 
 /* Sub-header rows within table body */
@@ -564,8 +654,11 @@ h4, .subsection-title {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--sage-deep);
-  margin: 14px 0 6px;
+  margin: 22px 0 8px;
 }
+/* Extra breathing room before the first subsection in a section so the
+   aerial map / photo grid / etc. isn't tight against the intro narrative. */
+.narrative + .subsection-title { margin-top: 26px; }
 
 /* ── PAGE FOOTER ────────────────────────────────────────── */
 .page-footer {
@@ -636,8 +729,11 @@ h4, .subsection-title {
   margin: 12pt 0;
 }
 .photo-grid.hero { grid-template-columns: 1fr; }
-.narrative + .photo-grid { margin-top: 0; }
-.narrative:has(+ .photo-grid) { margin-bottom: 0; }
+/* Match spacing convention used by subsection-title + other images: give
+   the photo grid breathing room after a narrative block so it doesn't sit
+   tight against the intro paragraph. */
+.narrative + .photo-grid { margin-top: 26px; }
+.narrative + .photo-grid.hero { margin-top: 26px; }
 .photo-cell img {
   width: 100%;
   height: auto;

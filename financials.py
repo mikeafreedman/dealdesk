@@ -312,9 +312,19 @@ def _compute_sources_uses(deal: DealData) -> dict:
                 total_uses, initial_loan)
     logger.info("CTX: equity_gap=%.2f, gp_equity=%.2f, lp_equity=%.2f",
                 total_equity, gp_equity, lp_equity)
+    _gap = total_sources - total_uses
     logger.info("S&U check: Uses=%s, Sources=%s, Gap=%s",
                 f"{total_uses:,.0f}", f"{total_sources:,.0f}",
-                f"{total_sources - total_uses:,.0f}")
+                f"{_gap:,.0f}")
+    # Sanity: S&U must balance. A gap of more than $1 indicates a formula
+    # mismatch between the Python engine and the Excel template — surface
+    # it as a warning so reviewers know the model is out of balance.
+    if abs(_gap) > 1.0:
+        logger.warning(
+            "S&U BALANCE: sources-uses gap=$%.2f exceeds $1 tolerance — "
+            "verify that non_equity_sources + total_equity = total_uses.",
+            _gap,
+        )
 
     return {
         "total_uses":                  total_uses,
@@ -366,9 +376,18 @@ def _gpr_yr1(deal: DealData) -> float:
             )
             return gpr
 
-    # Last fallback: assumptions-based estimate
+    # Last fallback: assumptions-based estimate. Use the extracted doc's
+    # avg_rent_per_unit when present (it's populated by Prompt 1B from rent
+    # rolls and ends up synthesised to the quality_adjusted_market_rent
+    # assumption via deal_data._compute_market_rents). `monthly_rent_per_unit`
+    # was the old attribute name and was removed from FinancialAssumptions;
+    # calling getattr on it always returned None, silently zeroing GPR.
     num_units = deal.assumptions.num_units or 0
-    avg_rent = getattr(deal.assumptions, 'monthly_rent_per_unit', None) or 0
+    avg_rent = (
+        (deal.extracted_docs.avg_rent_per_unit if deal.extracted_docs else None)
+        or getattr(deal.assumptions, 'quality_adjusted_market_rent', None)
+        or 0
+    )
     if num_units > 0 and avg_rent > 0:
         gpr = num_units * avg_rent * 12
         logger.info(f"GPR: from assumptions ({num_units} units × ${avg_rent}/mo) = ${gpr:,.0f}/yr")
@@ -1078,7 +1097,7 @@ def _build_proforma(deal: DealData, insurance: float,
             "year": yr,
             # Stabilization ramp factor for this year (0.0 during construction,
             # → 1.0 once the property is fully stabilized). Stored per year so
-            # downstream consumers (word_builder income summary) don't need to
+            # downstream consumers (context_builder income summary) don't need to
             # re-derive it from _get_stabilization_factors.
             "stabilization_factor": round(float(stab), 4),
             "gpr": round(gpr, 2),
@@ -1213,19 +1232,24 @@ def _project_cashflows(proforma: List[dict], exit_info: dict,
 
 
 def _safe_irr(cashflows) -> Optional[float]:
+    # Non-convergence is expected behavior for scenarios with all-negative or
+    # strongly-front-loaded cash flows (common in sensitivity / MC sweeps for
+    # distressed or negative-NOI deals). Downgrade to DEBUG so the report
+    # pipeline doesn't spam dozens of identical WARNINGs per run; callers
+    # still get a None back which they can log once at the aggregate level.
     try:
         val = npf.irr(cashflows)
         if val is None or (isinstance(val, float) and (math.isnan(val) or math.isinf(val))):
             all_neg = all(cf <= 0 for cf in cashflows)
-            logger.warning(
+            logger.debug(
                 "IRR solver did not converge — %s (cf[0]=%.0f, sum=%.0f)",
                 "all cash flows negative" if all_neg else "no real solution",
                 cashflows[0], sum(cashflows))
             return None
         return float(val)
     except Exception as exc:
-        logger.warning("IRR solver exception: %s (cf[0]=%.0f, sum=%.0f)",
-                       exc, cashflows[0], sum(cashflows))
+        logger.debug("IRR solver exception: %s (cf[0]=%.0f, sum=%.0f)",
+                     exc, cashflows[0], sum(cashflows))
         return None
 
 
@@ -2290,12 +2314,10 @@ def run_financials(deal: DealData) -> DealData:
                     yr: sum(s["annual_gpr"].get(yr, 0) for s in _unit_schedules)
                     for yr in range(1, _hold + 1)
                 }
-                logger.warning(
+                logger.debug(
                     "UNIT CASHFLOW SCHEDULE built (%d units, tier=%s) — "
-                    "NOT yet wired into pro-forma GPR. "
-                    "Insertion target: financials.py:791 (_build_proforma "
-                    "_year_noi call) + Monte Carlo/sensitivity "
-                    "gpr_yr1 consumers (~line 1489). Alt annual GPR: %s",
+                    "diagnostic only; not wired into pro-forma GPR. "
+                    "Alt annual GPR: %s",
                     len(_unit_schedules),
                     getattr(a, "renovation_tier", "?"),
                     {k: f"${v:,.0f}" for k, v in _alt_gpr_by_yr.items()},

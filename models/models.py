@@ -412,11 +412,16 @@ class FinancialAssumptions(BaseModel):
     origination_fee_pct: float = 0.01
     io_period_months:    int   = 0
 
-    # §6–8 Refinancing events — List[RefiEvent], max 3
+    # §6–8 Refinancing events — List[RefiEvent], max 3. Each defaults to
+    # inactive with appraised_value=0 so it's clear the slot hasn't been
+    # configured. The Excel / financials code skips inactive refis.
+    # Appraised values must be set explicitly per deal; the prior
+    # hardcoded $3.2M / $3.8M defaults were misleading on deals that
+    # accidentally flipped active=True without updating the value.
     refi_events: List[RefiEvent] = Field(default_factory=lambda: [
-        RefiEvent(active=False, year=5,  appraised_value=3200000, cap_rate=0.07, ltv=0.70, rate=0.060, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=0),
-        RefiEvent(active=False, year=8,  appraised_value=3800000, cap_rate=0.07, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=0),
-        RefiEvent(active=False, year=0,  appraised_value=0,       cap_rate=0.07, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.00, closing_costs=0),
+        RefiEvent(active=False, year=5, appraised_value=0, cap_rate=0.07, ltv=0.70, rate=0.060, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=0),
+        RefiEvent(active=False, year=8, appraised_value=0, cap_rate=0.07, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.01, closing_costs=0),
+        RefiEvent(active=False, year=0, appraised_value=0, cap_rate=0.07, ltv=0.65, rate=0.055, amort_years=30, loan_term=10, orig_fee_pct=0.01, prepay_pct=0.00, closing_costs=0),
     ])
 
     # §8 Income
@@ -509,6 +514,37 @@ class FinancialAssumptions(BaseModel):
     def max_three_refis(self) -> 'FinancialAssumptions':
         if len(self.refi_events) > 3:
             raise ValueError("Maximum 3 refinancing events allowed.")
+        return self
+
+    @model_validator(mode='after')
+    def validate_ranges(self) -> 'FinancialAssumptions':
+        """Clamp nonsensical values with a warning rather than crashing.
+        Preserves the pipeline's ability to process rough user input
+        while flagging obviously-wrong numbers."""
+        import logging as _lg
+        _log = _lg.getLogger("models.assumptions")
+        warnings_raised = []
+        if self.hold_period < 1 or self.hold_period > 30:
+            warnings_raised.append(f"hold_period={self.hold_period}yr (expected 1–30)")
+            self.hold_period = max(1, min(self.hold_period or 10, 30))
+        if self.ltv_pct < 0 or self.ltv_pct > 1.10:
+            warnings_raised.append(f"ltv_pct={self.ltv_pct:.2%} (expected 0–110%)")
+            self.ltv_pct = max(0.0, min(self.ltv_pct, 1.10))
+        if self.interest_rate < 0 or self.interest_rate > 0.30:
+            warnings_raised.append(f"interest_rate={self.interest_rate:.2%} (expected 0–30%)")
+            self.interest_rate = max(0.0, min(self.interest_rate, 0.30))
+        if self.vacancy_rate < 0 or self.vacancy_rate > 0.50:
+            warnings_raised.append(f"vacancy_rate={self.vacancy_rate:.2%} (expected 0–50%)")
+            self.vacancy_rate = max(0.0, min(self.vacancy_rate, 0.50))
+        if self.exit_cap_rate < 0.02 or self.exit_cap_rate > 0.20:
+            warnings_raised.append(f"exit_cap_rate={self.exit_cap_rate:.2%} (expected 2–20%)")
+            self.exit_cap_rate = max(0.02, min(self.exit_cap_rate, 0.20))
+        if self.purchase_price < 0:
+            warnings_raised.append(f"purchase_price={self.purchase_price} (negative)")
+            self.purchase_price = 0.0
+        if warnings_raised:
+            _log.warning("FinancialAssumptions: range validation adjusted %d field(s): %s",
+                         len(warnings_raised), "; ".join(warnings_raised))
         return self
 
 
@@ -610,9 +646,20 @@ class CompsData(BaseModel):
 
     @model_validator(mode='after')
     def enforce_caps(self) -> 'CompsData':
-        self.rent_comps       = self.rent_comps[:8]
-        self.commercial_comps = self.commercial_comps[:5]
-        self.sale_comps       = self.sale_comps[:5]
+        import logging as _lg
+        _log = _lg.getLogger("models.comps")
+        if len(self.rent_comps) > 8:
+            _log.warning("CompsData: truncating rent_comps from %d to 8",
+                         len(self.rent_comps))
+            self.rent_comps = self.rent_comps[:8]
+        if len(self.commercial_comps) > 5:
+            _log.warning("CompsData: truncating commercial_comps from %d to 5",
+                         len(self.commercial_comps))
+            self.commercial_comps = self.commercial_comps[:5]
+        if len(self.sale_comps) > 5:
+            _log.warning("CompsData: truncating sale_comps from %d to 5",
+                         len(self.sale_comps))
+            self.sale_comps = self.sale_comps[:5]
         return self
 
 
@@ -842,6 +889,10 @@ class ProvenanceLog(BaseModel):
     documents_uploaded: List[str]   = Field(default_factory=list)
     api_costs_estimated: Optional[float] = None
     field_sources:      Dict[str, str] = Field(default_factory=dict)
+    # Pipeline health: external-service failures logged by each fetcher.
+    # Each entry: {service, stage, reason}. When the count gets past ~3,
+    # the report renders a "data quality degraded" banner.
+    failed_sources:     List[Dict[str, Any]] = Field(default_factory=list)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -859,7 +910,8 @@ class DealData(BaseModel):
         risk.py         → populates insurance (Prompt 4B)
         financials.py   → populates financial_outputs, monte_carlo
         excel_builder.py → reads assumptions + financial_outputs
-        word_builder.py  → reads all fields; generates PDF report
+        context_builder.py → builds Jinja render context; narratives via Sonnet
+        report_builder.py → HTML→PDF via Jinja + Playwright headless Chromium
 
     Excel template routing:
         strategy=stabilized_hold → Hold_Template_v3.xlsx

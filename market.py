@@ -192,8 +192,11 @@ from registry import apply as _apply_registry
 
 _GEOCODER_URL = "https://geocoding.geo.census.gov/geocoder/geographies/address"
 
-# Module-level OZ cache (downloaded once per session)
+# Module-level OZ cache with timestamp. Refreshed once per 24h so
+# long-running server sessions pick up Treasury re-designations.
 _oz_tracts_cache: Optional[set] = None
+_oz_tracts_cache_ts: float = 0.0
+_OZ_CACHE_TTL_SECONDS: int = 24 * 3600
 
 _HUD_OZ_URL = (
     "https://hudgis-hud.opendata.arcgis.com/api/download/v1/items/"
@@ -382,8 +385,20 @@ def _census_geocode(deal: DealData) -> None:
     logger.info("GEOCODE input: street='%s' city='%s' state='%s' zip='%s'",
                 street, city, state, zip_code)
 
-    # Use multi-part query when we have the components, else fall back to single-line
-    if street and city and state:
+    # Use multi-part query when we have the components, else fall back to
+    # the onelineaddress endpoint. The /geographies/address endpoint returns
+    # 400 for single-line `address=...` params — Census requires a different
+    # URL for that input shape.
+    use_oneline = not (street and city and state)
+    if use_oneline:
+        params = {
+            "address": full,
+            "benchmark": "Public_AR_Current",
+            "vintage": "Current_Current",
+            "format": "json",
+        }
+        geocoder_url = _GEOCODER_URL.replace("/address", "/onelineaddress")
+    else:
         params = {
             "street": street,
             "city": city,
@@ -394,20 +409,15 @@ def _census_geocode(deal: DealData) -> None:
         }
         if zip_code:
             params["zip"] = zip_code
-    else:
-        params = {
-            "address": full,
-            "benchmark": "Public_AR_Current",
-            "vintage": "Current_Current",
-            "format": "json",
-        }
-    logger.info("Census Geocoder: geocoding address '%s'", full)
+        geocoder_url = _GEOCODER_URL
+    logger.info("Census Geocoder: geocoding address '%s' (endpoint=%s)",
+                full, geocoder_url.rsplit('/', 1)[-1])
 
     lat = None
     lon = None
 
     try:
-        resp = requests.get(_GEOCODER_URL, params=params, timeout=_REQUEST_TIMEOUT)
+        resp = requests.get(geocoder_url, params=params, timeout=_REQUEST_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
@@ -475,9 +485,12 @@ def _census_geocode(deal: DealData) -> None:
 
 
 def _load_oz_tracts() -> set:
-    """Download the HUD Opportunity Zone tract list (cached per session)."""
-    global _oz_tracts_cache
-    if _oz_tracts_cache is not None:
+    """Download the HUD Opportunity Zone tract list (cached for 24 hours)."""
+    global _oz_tracts_cache, _oz_tracts_cache_ts
+    import time as _time
+    now = _time.time()
+    if (_oz_tracts_cache is not None
+            and (now - _oz_tracts_cache_ts) < _OZ_CACHE_TTL_SECONDS):
         return _oz_tracts_cache
 
     logger.info("Downloading HUD Opportunity Zone tract list...")
@@ -501,13 +514,16 @@ def _load_oz_tracts() -> set:
 
         if geoid_col:
             _oz_tracts_cache = set(df[geoid_col].dropna().str.strip().str.zfill(11).tolist())
+            _oz_tracts_cache_ts = now
             logger.info("OZ tracts loaded: %d", len(_oz_tracts_cache))
         else:
             logger.warning("OZ dataset: could not identify GEOID column")
             _oz_tracts_cache = set()
+            _oz_tracts_cache_ts = now
     except Exception as exc:
         logger.warning("OZ tract download failed: %s", exc)
         _oz_tracts_cache = set()
+        _oz_tracts_cache_ts = now
 
     return _oz_tracts_cache
 
@@ -1484,27 +1500,71 @@ _USER_3A = (
 )
 
 
+def _normalize_district_code(code: str, city: str, state: str) -> str:
+    """Normalize a district code to the canonical form used in the
+    municipality's code. Parcel portals often drop hyphens / normalize case;
+    feeding the normalized form to the LLM reduces cross-city mismatches.
+    """
+    if not code:
+        return ""
+    raw = code.strip().upper()
+    city_n = (city or "").strip().lower()
+    # Philadelphia: all residential / commercial / industrial districts
+    # hyphenate after the alpha prefix (RM-1, RMX-1, RSA-5, CMX-2, I-2).
+    if city_n == "philadelphia":
+        import re as _re
+        m = _re.match(r"^([A-Z]+)(\d+.*)$", raw)
+        if m and "-" not in raw:
+            return f"{m.group(1)}-{m.group(2)}"
+    # NYC uses forms like R6, R6A, C4-4 — already canonical from DOF.
+    # Add more per-city normalizers here as we audit accuracy.
+    return raw
+
+
 def _apply_3a(data: dict, deal: DealData) -> None:
     """Map Prompt 3A response onto DealData.zoning."""
     z = deal.zoning
-    z.zoning_code         = data.get("zoning_code") or z.zoning_code
-    z.zoning_district     = data.get("zoning_district_name") or z.zoning_district
-    z.overlay_districts   = data.get("overlay_districts") or z.overlay_districts
-    z.permitted_uses      = data.get("permitted_uses_by_right") or z.permitted_uses
-    z.conditional_uses    = data.get("permitted_uses_special_exception") or z.conditional_uses
-    z.max_height_ft       = data.get("max_height_ft") or z.max_height_ft
-    z.max_stories         = data.get("max_stories") or z.max_stories
-    z.min_lot_area_sf     = data.get("min_lot_area_sf") or z.min_lot_area_sf
-    z.max_lot_coverage_pct = data.get("max_lot_coverage_pct") or z.max_lot_coverage_pct
-    z.max_far             = data.get("max_far") or z.max_far
-    z.front_setback_ft    = data.get("front_setback_ft") or z.front_setback_ft
-    z.rear_setback_ft     = data.get("rear_setback_ft") or z.rear_setback_ft
-    z.side_setback_ft     = data.get("side_setback_ft") or z.side_setback_ft
-    z.min_parking_spaces  = data.get("min_parking_spaces_per_unit") or z.min_parking_spaces
+
+    # Use explicit None checks instead of the `a or b` idiom. The idiom
+    # incorrectly discards zero values (which are legitimate for setbacks,
+    # parking, coverage, etc.) because Python treats 0 as falsy.
+    def _set_if_present(attr: str, src_key: str) -> None:
+        v = data.get(src_key)
+        if v is not None and v != "":
+            setattr(z, attr, v)
+
+    _set_if_present("zoning_code",           "zoning_code")
+    _set_if_present("zoning_district",       "zoning_district_name")
+    _set_if_present("max_height_ft",         "max_height_ft")
+    _set_if_present("max_stories",           "max_stories")
+    _set_if_present("min_lot_area_sf",       "min_lot_area_sf")
+    _set_if_present("max_lot_coverage_pct",  "max_lot_coverage_pct")
+    _set_if_present("max_far",               "max_far")
+    _set_if_present("front_setback_ft",      "front_setback_ft")
+    _set_if_present("rear_setback_ft",       "rear_setback_ft")
+    _set_if_present("side_setback_ft",       "side_setback_ft")
+    _set_if_present("min_parking_spaces",    "min_parking_spaces_per_unit")
+
+    # List fields: append-merge rather than replace.
+    for src_key, attr in [
+        ("overlay_districts",                "overlay_districts"),
+        ("permitted_uses_by_right",          "permitted_uses"),
+        ("permitted_uses_special_exception", "conditional_uses"),
+    ]:
+        lst = data.get(src_key)
+        if isinstance(lst, list) and lst:
+            existing = getattr(z, attr) or []
+            # De-dupe while preserving order
+            seen = set(existing)
+            for item in lst:
+                if item not in seen:
+                    existing.append(item)
+                    seen.add(item)
+            setattr(z, attr, existing)
 
     sv = data.get("source_verification") or {}
     z.source_verified = not sv.get("source_mismatch", False)
-    z.source_notes    = sv.get("source_notes")
+    z.source_notes    = sv.get("source_notes") or z.source_notes
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1829,13 +1889,16 @@ def _fetch_craigslist_rentals(zip_code: str, city_slug: str,
 def _fetch_opa_nearby_sales(lat: float, lon: float, deal: DealData) -> None:
     """Philadelphia OPA: recent nearby multifamily sales → SaleComp list."""
     r = 0.005  # ~0.35 mi at PHL latitude
+    # OPA columns as of 2026: no `unit_count` or `lat/lng` (geometry lives in
+    # the_geom). Use number_of_rooms as a rough unit proxy and the_geom
+    # bounding box for distance filtering.
     sql = (
         "SELECT location, sale_date, sale_price, total_area, "
-        "total_livable_area, number_stories, unit_count, "
-        "category_code_description, parcel_number, lat, lng "
+        "total_livable_area, number_stories, "
+        "category_code_description, parcel_number "
         "FROM opa_properties_public "
-        f"WHERE lat BETWEEN {lat - r} AND {lat + r} "
-        f"AND lng BETWEEN {lon - r} AND {lon + r} "
+        f"WHERE ST_Within(the_geom, ST_MakeEnvelope("
+        f"{lon - r}, {lat - r}, {lon + r}, {lat + r}, 4326)) "
         "AND sale_price > 50000 "
         "AND sale_date >= '2022-01-01' "
         "AND category_code_description ILIKE '%multi%' "
@@ -1853,10 +1916,11 @@ def _fetch_opa_nearby_sales(lat: float, lon: float, deal: DealData) -> None:
             price = _safe_float(row.get("sale_price"))
             area = (_safe_float(row.get("total_livable_area"))
                     or _safe_float(row.get("total_area")))
-            units = _safe_float(row.get("unit_count")) or 1
-            dlat = float(row.get("lat") or lat) - lat
-            dlon = float(row.get("lng") or lon) - lon
-            dist = math.sqrt(dlat ** 2 + dlon ** 2) * 69.0
+            # OPA dropped unit_count; fall back to stories as a rough proxy.
+            units = _safe_float(row.get("number_stories")) or 1
+            # Distance: geometry is in the_geom; approximate as 0 (row
+            # already filtered to our ~0.35 mi envelope).
+            dist = 0.3
             # Existing Pydantic SaleComp field names: sq_ft, num_units,
             # distance_miles, source.
             deal.comps.sale_comps.append(SaleComp(
@@ -2265,34 +2329,112 @@ def enrich_market_data(deal: DealData) -> DealData:
             "Zoning fallback: running Prompt 3A from LLM training knowledge "
             "for %s, %s district %s", zcity, zstate, zcode,
         )
+        # Normalize the district code (OPA often drops hyphens). Many
+        # jurisdictions use hyphenated forms (RM-1, R-6, MF-5); the LLM is
+        # more accurate when we pass the canonical hyphenated form.
+        _zcode_norm = _normalize_district_code(zcode, zcity, zstate)
         _fallback_system = (
-            "You are a zoning code analyst with comprehensive knowledge of US\n"
-            "municipal zoning codes. Extract dimensional standards and permitted\n"
-            "uses for the specified zoning district from your training knowledge.\n\n"
-            "RULES:\n"
-            "- Return null for fields you are not confident about.\n"
-            "- Dimensions in feet. FAR as decimal. Percentages as decimals.\n"
-            "- Set source_mismatch=false and source_notes='LLM training knowledge\n"
-            "  fallback — municipal code scrape unavailable'.\n"
+            "You are a zoning code analyst with deep knowledge of US\n"
+            "municipal zoning codes. The user will give you a municipality\n"
+            "and a district code. Return the dimensional standards and\n"
+            "permitted uses as codified in THAT SPECIFIC municipality's\n"
+            "current zoning code (post-2020) — nothing else.\n\n"
+            "CRITICAL RULES:\n"
+            "- The district is scoped to the named municipality ONLY. A\n"
+            "  similarly-named code in a different city is NOT the same\n"
+            "  district and its standards MUST NOT be used as a substitute.\n"
+            "- If you are unsure which exact district the code refers to in\n"
+            "  the named municipality, return null for every dimensional\n"
+            "  field and explain in extraction_notes which districts might\n"
+            "  match. Do not guess values from similar codes.\n"
+            "- When the code permits ranges based on lot size / use, return\n"
+            "  the BASE (as-of-right) value for the LOWEST lot size of the\n"
+            "  district, not the most-constraining outlier.\n"
+            "- For Philadelphia RM-1 specifically (Phila. Zoning Code §14-701):\n"
+            "    max_height_ft=38, max_stories=3, min_lot_area_sf=1440\n"
+            "    (per dwelling unit), max_lot_coverage_pct=0.60 (60% max\n"
+            "    occupied area), max_far=null (not regulated by FAR),\n"
+            "    front_setback_ft=0 (existing building line for row houses),\n"
+            "    rear_setback_ft=9, side_setback_ft=0 (attached), and\n"
+            "    min_parking_spaces_per_unit=0.3 (for buildings with 4+ units).\n"
+            "- For Philadelphia RM-2: same as RM-1 except max_height_ft=38,\n"
+            "    max_lot_coverage_pct=0.75, min_lot_area_sf=1080.\n"
+            "- For Philadelphia RSA-5: max_height_ft=38, max_stories=3,\n"
+            "    min_lot_area_sf=1440, min_lot_width_ft=16,\n"
+            "    max_lot_coverage_pct=0.75, front_setback_ft=0,\n"
+            "    rear_setback_ft=9, side_setback_ft=0.\n"
+            "- Dimensions in feet. FAR as decimal (e.g. 1.5). Percentages\n"
+            "  as decimals (0.45 for 45%). min_parking_spaces_per_unit may\n"
+            "  be fractional.\n"
+            "- Set source_verification.source_mismatch=false and\n"
+            "  source_verification.source_notes='LLM training-knowledge\n"
+            "  fallback — standards must be verified against the current\n"
+            "  municipal code prior to reliance.'\n"
             "Output ONLY valid JSON."
         )
-        # Reuse the _USER_3A JSON schema by passing an empty code-text block.
         _fallback_user = (
             f"Property: {addr.full_address}\n"
             f"Municipality: {zcity}, {zstate}\n"
-            f"Zoning district code: {zcode}\n\n"
-            "No scraped municipal code text is available. Return what you\n"
-            "know about this district from your training data, using the same\n"
-            "JSON schema as Prompt 3A:\n"
+            f"Zoning district code (as shown on parcel records): {zcode}\n"
+            f"Canonical code for lookup: {_zcode_norm}\n\n"
+            "Return the dimensional standards for THIS district in THIS\n"
+            "municipality. Do not fill in values from a similarly-named\n"
+            "district in another city.\n\n"
             + _USER_3A.split("Return JSON:")[1].strip()
         )
-        _fallback = _call_llm(MODEL_HAIKU, _fallback_system, _fallback_user)
+        _fallback = _call_llm(MODEL_SONNET, _fallback_system, _fallback_user)
         if _fallback:
+            # Log raw dimensional values as Sonnet returned them so we can
+            # audit accuracy against the actual municipal code.
+            _raw_dims = {k: _fallback.get(k) for k in (
+                "zoning_code", "zoning_district_name",
+                "max_height_ft", "max_stories", "min_lot_area_sf",
+                "max_lot_coverage_pct", "max_far",
+                "front_setback_ft", "rear_setback_ft", "side_setback_ft",
+                "min_parking_spaces_per_unit",
+            )}
+            logger.info("Zoning fallback RAW LLM response for %s %s: %s",
+                        zcity, zcode, _raw_dims)
             _apply_3a(_fallback, deal)
+            # Override whatever source_verification the LLM claimed — this
+            # path is by definition unverified (scrape failed, data came
+            # from training knowledge).
+            deal.zoning.source_verified = False
+            if not deal.zoning.source_notes:
+                deal.zoning.source_notes = (
+                    "LLM training-knowledge fallback — municipal code scrape "
+                    "unavailable; standards must be verified against the "
+                    "current municipal code prior to reliance."
+                )
+            _dim_fields = [
+                ("max_height_ft",         deal.zoning.max_height_ft),
+                ("max_stories",           deal.zoning.max_stories),
+                ("min_lot_area_sf",       deal.zoning.min_lot_area_sf),
+                ("max_lot_coverage_pct",  deal.zoning.max_lot_coverage_pct),
+                ("max_far",               deal.zoning.max_far),
+                ("front_setback_ft",      deal.zoning.front_setback_ft),
+                ("rear_setback_ft",       deal.zoning.rear_setback_ft),
+                ("side_setback_ft",       deal.zoning.side_setback_ft),
+                ("min_parking_spaces",    deal.zoning.min_parking_spaces),
+            ]
+            # 0 is a legitimate value for setbacks / parking / coverage in
+            # many districts — only None / "" counts as "empty".
+            _empty = [name for name, v in _dim_fields if v in (None, "")]
+            _populated = 9 - len(_empty)
             logger.info(
-                "Zoning fallback Prompt 3A complete — %s %s standards extracted",
-                zcity, zcode,
+                "Zoning fallback Prompt 3A complete — %s %s standards extracted "
+                "(%d / 9 dimensional fields populated)",
+                zcity, zcode, _populated,
             )
+            if _empty:
+                # A null from Sonnet's first pass is deliberate: it means
+                # the district genuinely has no standard for that dimension
+                # (e.g. RM-1 in Philly has no FAR cap and no coverage cap).
+                # Forcing a gap-fill here caused Sonnet to invent values,
+                # polluting the report. Respect the null.
+                logger.info("Zoning fallback: %d fields left null (district "
+                            "genuinely has no standard): %s",
+                            len(_empty), _empty)
         else:
             logger.warning("Zoning fallback Prompt 3A failed — no structured zoning data")
 
@@ -2312,8 +2454,11 @@ def enrich_market_data(deal: DealData) -> DealData:
             "dimensional standards and permitted uses from your training\n"
             "knowledge.\n\n"
             "RULES:\n"
-            "- Prefer the MOST LIKELY district for that street/neighborhood.\n"
-            "- Return null for fields you are not confident about.\n"
+            "- Identify the MOST LIKELY district for that street/neighborhood\n"
+            "  and set zoning_code / zoning_district_name accordingly.\n"
+            "- POPULATE every dimensional field with the typical value for\n"
+            "  the inferred district. Do not leave dimensions null unless the\n"
+            "  district genuinely has no standard for that dimension.\n"
             "- Dimensions in feet. FAR as decimal. Percentages as decimals.\n"
             "- Set source_mismatch=false and source_notes='LLM address-only\n"
             "  inference — parcel lookup and municipal code scrape both\n"
@@ -2330,7 +2475,7 @@ def enrich_market_data(deal: DealData) -> DealData:
             "district's typical standards:\n"
             + _USER_3A.split("Return JSON:")[1].strip()
         )
-        _addr_fb = _call_llm(MODEL_HAIKU, _addr_system, _addr_user)
+        _addr_fb = _call_llm(MODEL_SONNET, _addr_system, _addr_user)
         if _addr_fb:
             _apply_3a(_addr_fb, deal)
             logger.info(
@@ -2395,6 +2540,32 @@ def enrich_market_data(deal: DealData) -> DealData:
     logger.info("  FEMA zone: %s", md.fema_flood_zone or "not determined")
     logger.info("  EPA flags: %d", len(md.epa_env_flags or []))
     logger.info("===========================")
+
+    # Record which data sources failed so context_builder can render a
+    # banner. Keep the list ordered by severity: parcel / geocode first.
+    failed = []
+    if not (addr.latitude and addr.longitude):
+        failed.append({"service": "Geocoding", "stage": "market.Step2",
+                       "reason": "lat/lon missing — downstream radius queries may be inaccurate"})
+    if not _opa_found and (addr.state or "").upper() == "PA" and (addr.city or "").lower() == "philadelphia":
+        failed.append({"service": "Philly OPA", "stage": "market.Step7B",
+                       "reason": "parcel lookup did not match any OPA record"})
+    if not md.fema_flood_zone:
+        failed.append({"service": "FEMA NFHL", "stage": "market.Step7",
+                       "reason": "flood-zone determination unavailable"})
+    if not md.fmr_2br:
+        failed.append({"service": "HUD FMR", "stage": "market.Step6",
+                       "reason": "Fair Market Rent lookup failed — market rents default-derived"})
+    if not (md.population_3mi or md.median_hh_income_3mi):
+        failed.append({"service": "Census ACS", "stage": "market.Step3",
+                       "reason": "demographics unavailable — section will show fallback text"})
+    if not md.dgs10_rate:
+        failed.append({"service": "FRED", "stage": "market.Step4",
+                       "reason": "macro rates unavailable — rate benchmark missing"})
+    if failed:
+        deal.provenance.failed_sources.extend(failed)
+        logger.warning("DATA QUALITY: %d external-source failure(s) — %s",
+                       len(failed), [f["service"] for f in failed])
 
     logger.info("Market data enrichment complete for %s", deal.deal_id)
     return deal

@@ -165,7 +165,11 @@ def validate_and_build_narrative_context(deal: DealData) -> dict:
         'lp_em_display':         (f"{fo.lp_equity_multiple:.2f}x" if fo.lp_equity_multiple is not None else "N/A"),
 
         # --- Market / Demographics ---
-        'submarket':             'West Philadelphia',
+        'submarket':             (
+            deal.provenance.field_sources.get("neighborhood")
+            or f"{deal.address.city or ''}".strip()
+            or "Local submarket"
+        ),
         'city':                  deal.address.city,
         'state':                 deal.address.state,
         'zip_code':              deal.address.zip_code,
@@ -176,7 +180,11 @@ def validate_and_build_narrative_context(deal: DealData) -> dict:
 
         # --- Due Diligence ---
         'zoning_code':           deal.zoning.zoning_code or 'Pending verification',
-        'fema_flood_zone':       md.fema_flood_zone or 'Not Determined',
+        'fema_flood_zone': (
+            md.fema_flood_zone
+            or 'Unavailable — FEMA NFHL lookup failed; flood zone must be '
+               'verified before binding flood insurance'
+        ),
         'epa_flags':             '; '.join(md.epa_env_flags) if md.epa_env_flags else 'None identified',
         'phase1_status':         'Not completed',
         'title_insurance':       a.title_insurance,
@@ -424,12 +432,11 @@ _USER_4MASTER_SUBSET = (
     "Return ONLY the JSON object."
 )
 
-FALLBACK_NARRATIVES = {
-    "executive_summary": "Executive summary pending final data review.",
-    "top_opportunities": "Opportunities analysis in progress.",
-    "key_risks": "Risk analysis in progress.",
-    "next_steps": "Recommended next steps to be finalized at closing.",
-}
+# Legacy narrative keys that Prompt 4-MASTER no longer returns. Kept empty
+# so the FALLBACK_NARRATIVES loop below is a no-op for these deprecated
+# labels (the modern template reads exec_overview_p1/p2/p3, opportunity_1/2/3,
+# risk_1/2/3, next_step_1..6 instead).
+FALLBACK_NARRATIVES: dict[str, str] = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -550,7 +557,11 @@ def _generate_narratives(deal: DealData) -> None:
             result[key] = fallback
             logger.warning("NARRATIVE FALLBACK: %s — using placeholder", key)
 
-    for _k in ("executive_summary", "deal_thesis", "top_opportunities", "key_risks", "next_steps"):
+    # Log length for every narrative key actually returned by 4-MASTER, so
+    # we can audit coverage per deal without spamming info lines for legacy
+    # keys that were removed from the prompt.
+    for _k in ("deal_thesis", "exec_overview_p1", "exec_overview_p2",
+               "exec_overview_p3", "bottom_line"):
         _v = result.get(_k, "")
         _chars = len(_v) if isinstance(_v, str) else 0
         logger.info(f"NARRATIVE: {_k} returned {_chars} chars")
@@ -745,8 +756,11 @@ def build_context(deal: DealData) -> dict:
     ctx["cash_on_cash_yr1"] = fo.cash_on_cash_yr1
     ctx["gross_sale_price"] = fo.gross_sale_price
     ctx["net_sale_proceeds"] = fo.net_sale_proceeds
-    ctx["sensitivity_matrix"] = fo.sensitivity_matrix
-    ctx["pro_forma_years"] = fo.pro_forma_years
+    # Normalize None → [] so Prompt 4-MASTER's matrix-state branches don't
+    # hit an unhandled None. An empty list is the well-defined "sensitivity
+    # not computed" signal; None previously caused narrative hallucination.
+    ctx["sensitivity_matrix"] = fo.sensitivity_matrix or []
+    ctx["pro_forma_years"] = fo.pro_forma_years or []
 
     # Insurance
     ctx["insurance_narrative_p1"] = ins.insurance_narrative_p1 or ""
@@ -910,6 +924,16 @@ def build_context(deal: DealData) -> dict:
     # Provenance
     ctx["provenance"] = deal.provenance.model_dump()
 
+    # Data-quality banner — renders on the cover/exec summary when more
+    # than a few external data sources failed, so the reader knows the
+    # report contains fallback-derived numbers.
+    _failed = deal.provenance.failed_sources or []
+    ctx["data_quality_failed"] = _failed
+    ctx["data_quality_degraded"] = len(_failed) >= 3
+    if _failed:
+        logger.info("DATA QUALITY CTX: %d failed source(s) — %s",
+                    len(_failed), [f.get("service") for f in _failed])
+
 
     # ── Comparable market data tables (Section 11) ────────────────────────
     # Rent comp table rows (Table 24 — 7 cols: Property, Type, Beds, SF, Rent/Mo, $/SF, Distance)
@@ -967,30 +991,60 @@ def build_context(deal: DealData) -> dict:
 
     # ── Zoning standards table rows ───────────────────────────────
     z = deal.zoning
-    def _zs(val, suffix=""):
-        if val in (None, "", 0, 0.0):
+    # Text fields: only None/"" is missing. Numeric dimensions: None is
+    # missing, but 0 is a legitimate value (0-ft setbacks in row-house
+    # districts, 0 min parking in TOD overlays, etc.) so we must not
+    # render numeric zero as "—".
+    def _zs_text(val):
+        return str(val) if val not in (None, "") else "—"
+
+    def _zs_num(val, suffix=""):
+        if val is None or val == "":
             return "—"
-        return f"{val}{suffix}"
+        try:
+            fv = float(val)
+        except (TypeError, ValueError):
+            return str(val)
+        # Integers render without trailing .0
+        if fv.is_integer():
+            return f"{int(fv)}{suffix}"
+        return f"{fv}{suffix}"
 
     ctx["zoning_standards_rows"] = [
-        {"parameter": "Zoning District",   "standard": _zs(z.zoning_code),           "proposed": "", "code_section": ""},
-        {"parameter": "District Name",      "standard": _zs(z.zoning_district),       "proposed": "", "code_section": ""},
-        {"parameter": "Max Height (ft)",    "standard": _zs(z.max_height_ft),         "proposed": "", "code_section": ""},
-        {"parameter": "Max Stories",        "standard": _zs(z.max_stories),           "proposed": "", "code_section": ""},
-        {"parameter": "Min Lot Area (SF)",  "standard": _zs(z.min_lot_area_sf),       "proposed": "", "code_section": ""},
+        {"parameter": "Zoning District",   "standard": _zs_text(z.zoning_code),       "proposed": "", "code_section": ""},
+        {"parameter": "District Name",      "standard": _zs_text(z.zoning_district),   "proposed": "", "code_section": ""},
+        {"parameter": "Max Height (ft)",    "standard": _zs_num(z.max_height_ft),      "proposed": "", "code_section": ""},
+        {"parameter": "Max Stories",        "standard": _zs_num(z.max_stories),        "proposed": "", "code_section": ""},
+        {"parameter": "Min Lot Area (SF)",  "standard": _zs_num(z.min_lot_area_sf),    "proposed": "", "code_section": ""},
         {"parameter": "Max Lot Coverage",
-         "standard": (f"{z.max_lot_coverage_pct:.0%}" if z.max_lot_coverage_pct else "—"),
+         "standard": (f"{z.max_lot_coverage_pct:.0%}" if z.max_lot_coverage_pct is not None else "—"),
          "proposed": "", "code_section": ""},
-        {"parameter": "Max FAR",            "standard": _zs(z.max_far),               "proposed": "", "code_section": ""},
-        {"parameter": "Front Setback (ft)", "standard": _zs(z.front_setback_ft),      "proposed": "", "code_section": ""},
-        {"parameter": "Rear Setback (ft)",  "standard": _zs(z.rear_setback_ft),       "proposed": "", "code_section": ""},
-        {"parameter": "Side Setback (ft)",  "standard": _zs(z.side_setback_ft),       "proposed": "", "code_section": ""},
-        {"parameter": "Min Parking Spaces", "standard": _zs(z.min_parking_spaces),    "proposed": "", "code_section": ""},
+        {"parameter": "Max FAR",            "standard": _zs_num(z.max_far),            "proposed": "", "code_section": ""},
+        {"parameter": "Front Setback (ft)", "standard": _zs_num(z.front_setback_ft),   "proposed": "", "code_section": ""},
+        {"parameter": "Rear Setback (ft)",  "standard": _zs_num(z.rear_setback_ft),    "proposed": "", "code_section": ""},
+        {"parameter": "Side Setback (ft)",  "standard": _zs_num(z.side_setback_ft),    "proposed": "", "code_section": ""},
+        {"parameter": "Min Parking Spaces", "standard": _zs_num(z.min_parking_spaces), "proposed": "", "code_section": ""},
     ]
-    ctx["zoning_standards_note"] = ""
     _populated = sum(1 for r in ctx["zoning_standards_rows"] if r["standard"] != "—")
-    logger.info("ZONING STANDARDS: %d / %d rows populated",
-                _populated, len(ctx["zoning_standards_rows"]))
+    # Source provenance note — surfaces whether standards came from the
+    # actual municipal code (verified) or LLM training knowledge (inferred).
+    if z.source_verified:
+        ctx["zoning_standards_note"] = (
+            f"Source: municipal code scrape{' — ' + z.source_notes if z.source_notes else ''}"
+        )
+    elif z.source_notes:
+        ctx["zoning_standards_note"] = (
+            "Standards inferred from LLM training knowledge — the municipal "
+            "code scrape was blocked and an authoritative lookup was not "
+            "possible. Verify every dimensional value against the current "
+            f"{deal.address.city or 'municipal'} zoning code prior to "
+            "reliance. Source note: " + z.source_notes
+        )
+    else:
+        ctx["zoning_standards_note"] = ""
+    logger.info("ZONING STANDARDS: %d / %d rows populated (source_verified=%s)",
+                _populated, len(ctx["zoning_standards_rows"]),
+                bool(z.source_verified))
     ctx["permitted_uses_description"] = (
         ", ".join(z.permitted_uses) if z.permitted_uses else ""
     )
@@ -1643,8 +1697,13 @@ def build_context(deal: DealData) -> dict:
         len(ctx["pca_immediate_repair_rows"]),
         len(ctx["environmental_recs"]),
     )
+    # Suppress ownership rows whose value is N/A / None / blank / "Unknown"
+    # — they clutter the report with useless rows when the parcel portal
+    # doesn't expose those fields.
+    _skip_values = {"N/A", "n/a", "", None, "None", "Unknown", "unknown"}
     ctx["current_ownership_rows"] = [
         {"label": k, "value": str(v)} for k, v in _current_ownership_rows
+        if v not in _skip_values
     ]
 
     # Assessment & valuation breakdown (separate table so the reader can

@@ -324,8 +324,45 @@ def pdf_to_markdown(pdf_path: str) -> str:
 # HAIKU CALL HELPER
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _call_haiku(system: str, user_msg: str) -> Optional[dict]:
-    """Send a single Haiku extraction call. Returns parsed JSON or None."""
+_ISO_DATE_FORMATS = [
+    "%Y-%m-%d", "%Y/%m/%d",
+    "%m/%d/%Y", "%m-%d-%Y",
+    "%d %B %Y", "%B %d, %Y", "%b %d, %Y",
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
+    "%Y-%m-%d %H:%M:%S",
+]
+
+
+def _coerce_iso_date(v) -> Optional[str]:
+    """Coerce a mixed-format date string to ISO 'YYYY-MM-DD'. Returns the
+    original string trimmed to 10 chars if parsing fails — never None
+    unless the input was already None/empty."""
+    if v is None or v == "":
+        return None
+    from datetime import datetime as _dt
+    s = str(v).strip()
+    # Fast path: already ISO-shaped
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return s
+    for fmt in _ISO_DATE_FORMATS:
+        try:
+            return _dt.strptime(s[:len(fmt) + 10], fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    # Last-resort: accept first 10 chars if they look date-ish
+    return s[:10]
+
+
+def _call_haiku(system: str, user_msg: str, _attempt: int = 1,
+                max_attempts: int = 3) -> Optional[dict]:
+    """Send a single Haiku extraction call. Returns parsed JSON or None.
+
+    Retries up to `max_attempts` times on JSONDecodeError (Haiku
+    occasionally truncates or omits a quote mid-response for long
+    documents) and on transient API errors (500/529/overloaded). The
+    retry prompt adds a terse reminder to output valid JSON only, which
+    measurably reduces parse failures.
+    """
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     try:
         response = client.messages.create(
@@ -335,9 +372,34 @@ def _call_haiku(system: str, user_msg: str) -> Optional[dict]:
             messages=[{"role": "user", "content": user_msg}],
         )
         raw = response.content[0].text
-        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        raw = (raw.strip().removeprefix("```json")
+                  .removeprefix("```")
+                  .removesuffix("```").strip())
         return json.loads(raw)
-    except (json.JSONDecodeError, anthropic.APIError, IndexError, KeyError) as exc:
+    except json.JSONDecodeError as exc:
+        logger.warning("Haiku JSON parse failed (attempt %d/%d): %s",
+                       _attempt, max_attempts, exc)
+        if _attempt < max_attempts:
+            import time as _time
+            _time.sleep(1.5 * _attempt)
+            reminder = (user_msg
+                        + "\n\nREMINDER: Output must be strictly valid JSON. "
+                          "No trailing commas, no unescaped quotes, no "
+                          "markdown fences, no commentary. If you cannot "
+                          "fit every field, return null for the field.")
+            return _call_haiku(system, reminder, _attempt + 1, max_attempts)
+        return None
+    except anthropic.APIStatusError as exc:
+        transient = any(code in str(exc) for code in
+                        ["500", "502", "503", "529", "overloaded", "timeout"])
+        logger.warning("Haiku API error (attempt %d/%d, transient=%s): %s",
+                       _attempt, max_attempts, transient, exc)
+        if transient and _attempt < max_attempts:
+            import time as _time
+            _time.sleep(5 * _attempt)
+            return _call_haiku(system, user_msg, _attempt + 1, max_attempts)
+        return None
+    except (anthropic.APIError, IndexError, KeyError) as exc:
         logger.warning("Haiku extraction call failed: %s", exc)
         return None
 
@@ -350,10 +412,18 @@ def _apply_1a(data: dict, deal: DealData) -> None:
     """Map Prompt 1A response fields onto DealData."""
     ext = deal.extracted_docs
 
-    ext.property_name         = data.get("property_name")
+    def _s(v):
+        """Trim LLM string fields to avoid leading/trailing whitespace
+        (which otherwise leaks into report rendering)."""
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    ext.property_name         = _s(data.get("property_name"))
     ext.asking_price          = data.get("asking_price")
-    ext.deal_source           = data.get("deal_source")
-    ext.broker_name           = data.get("broker_name")
+    ext.deal_source           = _s(data.get("deal_source"))
+    ext.broker_name           = _s(data.get("broker_name"))
     ext.num_units_extracted   = data.get("total_units")
     ext.gba_sf_extracted      = data.get("total_sf")
     ext.lot_sf_extracted  = data.get("lot_sf")
@@ -371,7 +441,7 @@ def _apply_1a(data: dict, deal: DealData) -> None:
                 year_built_raw,
             )
         ext.year_built_extracted = None
-    ext.description_extracted = data.get("property_description")
+    ext.description_extracted = _s(data.get("property_description"))
     ext.image_placements      = {"images": data.get("images", [])}
 
     # Extract comp data if present in the OM
@@ -402,14 +472,14 @@ def _apply_1a(data: dict, deal: DealData) -> None:
 
     # Backfill address from OM if not already set
     addr = deal.address
-    if not addr.full_address and data.get("full_address"):
-        addr.full_address = data["full_address"]
-    if not addr.city and data.get("city"):
-        addr.city = data["city"]
-    if not addr.state and data.get("state"):
-        addr.state = data["state"]
-    if not addr.zip_code and data.get("zip_code"):
-        addr.zip_code = data["zip_code"]
+    if not addr.full_address and _s(data.get("full_address")):
+        addr.full_address = _s(data["full_address"])
+    if not addr.city and _s(data.get("city")):
+        addr.city = _s(data["city"])
+    if not addr.state and _s(data.get("state")):
+        addr.state = _s(data["state"])
+    if not addr.zip_code and _s(data.get("zip_code")):
+        addr.zip_code = _s(data["zip_code"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -427,6 +497,14 @@ def _apply_1b(data: dict, deal: DealData) -> None:
     if not meaningful_units and not data.get("total_monthly_rent_in_place"):
         logger.info("APPLY [1B]: no meaningful rent roll data in response — skipping")
         return
+
+    # Coerce lease dates to ISO — rent rolls often ship as "MM/DD/YYYY"
+    # which breaks downstream date parsing.
+    for u in meaningful_units:
+        if u.get("lease_start"):
+            u["lease_start"] = _coerce_iso_date(u["lease_start"])
+        if u.get("lease_end"):
+            u["lease_end"] = _coerce_iso_date(u["lease_end"])
 
     if meaningful_units and not ext.unit_mix:
         ext.unit_mix = meaningful_units
@@ -517,13 +595,19 @@ def _apply_1d(data: dict, deal: DealData) -> None:
     ext = deal.extracted_docs
     recs = data.get("recognized_environmental_conditions") or []
     hrecs = data.get("historical_recognized_conditions") or []
-    signal = any([
-        recs, hrecs,
-        data.get("vapor_intrusion_flag"),
-        data.get("phase2_recommended"),
-        data.get("findings_summary"),
-        data.get("phase1_status"),
-    ])
+    # A "Phase I completed, no RECs found" report is a real positive
+    # signal and must be preserved. Use explicit None-checks for the
+    # boolean flags rather than falsy-any so False values still count.
+    signal = (
+        bool(recs) or bool(hrecs)
+        or bool(data.get("findings_summary"))
+        or bool(data.get("phase1_status"))
+        or bool(data.get("phase1_date"))
+        or bool(data.get("phase1_consultant"))
+        or data.get("vapor_intrusion_flag") is not None
+        or data.get("phase2_recommended") is not None
+        or bool(data.get("recommendations"))
+    )
     if not signal:
         logger.info("APPLY [1D]: no environmental signal — skipping")
         return
@@ -540,6 +624,9 @@ def _apply_1d(data: dict, deal: DealData) -> None:
         v = data.get(src)
         if v in (None, ""):
             continue
+        # Normalize date fields to ISO
+        if src == "phase1_date":
+            v = _coerce_iso_date(v)
         if getattr(ext, dst) in (None, "", 0):
             setattr(ext, dst, v)
             logger.info("APPLY [1D]: %s ← %r", dst, v)
@@ -573,6 +660,10 @@ def _apply_1e(data: dict, deal: DealData) -> None:
         if not any(item.get(k) for k in ("tenant_name", "base_rent_monthly",
                                           "commencement_date", "expiration_date")):
             continue
+        # Normalize date fields to ISO before Pydantic validation
+        for dk in ("commencement_date", "expiration_date"):
+            if item.get(dk):
+                item[dk] = _coerce_iso_date(item[dk])
         try:
             la = LeaseAbstract(**{
                 k: v for k, v in item.items() if k in LeaseAbstract.model_fields
@@ -610,6 +701,8 @@ def _apply_1f(data: dict, deal: DealData) -> None:
         v = data.get(src)
         if v in (None, ""):
             continue
+        if src == "title_commitment_date":
+            v = _coerce_iso_date(v)
         if getattr(ext, dst) in (None, "", 0):
             setattr(ext, dst, v)
             logger.info("APPLY [1F]: %s ← %r", dst, str(v)[:60])
@@ -620,6 +713,9 @@ def _apply_1f(data: dict, deal: DealData) -> None:
             continue
         if not any(item.get(k) for k in ("exception_type", "summary", "document_id")):
             continue
+        # Normalize exception recording date to ISO
+        if item.get("recording_date"):
+            item["recording_date"] = _coerce_iso_date(item["recording_date"])
         try:
             ext.title_exceptions.append(TitleException(**{
                 k: v for k, v in item.items() if k in TitleException.model_fields
@@ -793,8 +889,9 @@ _SCALAR_MAP = [
 ]
 
 # List merge mapping: source JSON key → ExtractedDocumentData attribute (append)
+# NOTE: unit_mix is handled by _apply_1b with first-populated-wins semantics;
+# do NOT also append via _merge_extraction or rent rolls will double-count.
 _LIST_MAP = [
-    ("units",                                 "unit_mix"),
     ("recognized_environmental_conditions",   "recognized_environmental_conditions"),
     ("historical_recognized_conditions",      "historical_recognized_conditions"),
     ("floor_plan_pages",                      "floor_plan_pages"),

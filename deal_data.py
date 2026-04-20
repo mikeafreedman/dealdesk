@@ -16,6 +16,7 @@ Called by main.py after extractor.py, before market.py.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List
@@ -326,26 +327,132 @@ def _merge_assumptions(assumptions: FinancialAssumptions, user_inputs: Dict[str,
 # EXPENSE BACKFILL FROM T-12
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Map from T-12 expense_line_items keys → FinancialAssumptions fields
+# Map from T-12 expense_line_items keys → FinancialAssumptions fields.
+# Keys are normalized (lowercased, underscored) before lookup. Covers the
+# ~40 most-common T-12 chart-of-accounts line names so Haiku's
+# snake_case-every-line output maps cleanly into the assumptions model.
 _EXPENSE_MAP: Dict[str, str] = {
-    "real_estate_taxes":    "re_taxes",
-    "re_taxes":             "re_taxes",
-    "insurance":            "insurance",
-    "gas":                  "gas",
-    "water_sewer":          "water_sewer",
-    "electric":             "electric",
-    "trash":                "trash",
-    "repairs":              "repairs",
-    "repairs_maintenance":  "repairs",
-    "cleaning":             "cleaning",
-    "landscaping":          "landscape_snow",
-    "landscape_snow":       "landscape_snow",
-    "advertising":          "advertising",
-    "salaries":             "salaries",
-    "admin_legal_acct":     "admin_legal_acct",
-    "exterminator":         "exterminator",
-    "pest_control":         "exterminator",
+    # Real estate taxes
+    "real_estate_taxes":       "re_taxes",
+    "real_estate_tax":         "re_taxes",
+    "re_taxes":                "re_taxes",
+    "property_taxes":          "re_taxes",
+    "property_tax":            "re_taxes",
+    "taxes":                   "re_taxes",
+    "re_tax":                  "re_taxes",
+    # Insurance
+    "insurance":               "insurance",
+    "property_insurance":      "insurance",
+    "hazard_insurance":        "insurance",
+    "liability_insurance":     "insurance",
+    "insurance_expense":       "insurance",
+    # Utilities — gas
+    "gas":                     "gas",
+    "natural_gas":             "gas",
+    "heating":                 "gas",
+    # Utilities — water / sewer
+    "water_sewer":             "water_sewer",
+    "water_and_sewer":         "water_sewer",
+    "water":                   "water_sewer",
+    "sewer":                   "water_sewer",
+    "water_sewer_trash":       "water_sewer",
+    # Utilities — electric
+    "electric":                "electric",
+    "electricity":             "electric",
+    "power":                   "electric",
+    "common_area_electric":    "electric",
+    # Trash
+    "trash":                   "trash",
+    "trash_removal":           "trash",
+    "garbage":                 "trash",
+    "waste_removal":           "trash",
+    "refuse":                  "trash",
+    # Repairs & maintenance
+    "repairs":                 "repairs",
+    "repairs_maintenance":     "repairs",
+    "repairs_and_maintenance": "repairs",
+    "maintenance":             "repairs",
+    "rm":                      "repairs",
+    "r_and_m":                 "repairs",
+    "rm_hvac":                 "repairs",
+    "rm_plumbing":              "repairs",
+    "rm_electrical":            "repairs",
+    "building_repairs":        "repairs",
+    "general_repairs":         "repairs",
+    # Cleaning / janitorial
+    "cleaning":                "cleaning",
+    "janitorial":              "cleaning",
+    "custodial":               "cleaning",
+    "common_area_cleaning":    "cleaning",
+    # Landscaping / snow
+    "landscaping":             "landscape_snow",
+    "landscape":               "landscape_snow",
+    "landscape_snow":          "landscape_snow",
+    "grounds":                 "landscape_snow",
+    "grounds_maintenance":     "landscape_snow",
+    "snow_removal":            "landscape_snow",
+    "snow":                    "landscape_snow",
+    "lawn_care":               "landscape_snow",
+    # Advertising / marketing
+    "advertising":             "advertising",
+    "marketing":               "advertising",
+    "advertising_marketing":   "advertising",
+    "leasing_marketing":       "advertising",
+    # Salaries / payroll
+    "salaries":                "salaries",
+    "payroll":                 "salaries",
+    "wages":                   "salaries",
+    "staff_payroll":           "salaries",
+    "on_site_payroll":         "salaries",
+    "salaries_wages":          "salaries",
+    "employee_salaries":       "salaries",
+    # Admin / legal / accounting
+    "admin_legal_acct":        "admin_legal_acct",
+    "administrative":          "admin_legal_acct",
+    "admin":                   "admin_legal_acct",
+    "legal":                   "admin_legal_acct",
+    "accounting":              "admin_legal_acct",
+    "legal_professional":      "admin_legal_acct",
+    "professional_fees":       "admin_legal_acct",
+    "audit":                   "admin_legal_acct",
+    "bank_fees":               "admin_legal_acct",
+    "bookkeeping":             "admin_legal_acct",
+    # Pest control
+    "exterminator":            "exterminator",
+    "pest_control":            "exterminator",
+    "pest":                    "exterminator",
+    # Office / phone / internet
+    "office":                  "office_phone",
+    "office_phone":            "office_phone",
+    "office_expense":          "office_phone",
+    "phone":                   "office_phone",
+    "telephone":               "office_phone",
+    "internet":                "office_phone",
+    "communications":          "office_phone",
+    "office_supplies":         "office_phone",
+    # Licenses / inspections / permits
+    "license_inspections":     "license_inspections",
+    "licenses":                "license_inspections",
+    "licenses_and_permits":    "license_inspections",
+    "permits":                 "license_inspections",
+    "inspections":             "license_inspections",
+    "regulatory_fees":         "license_inspections",
+    # Turnover / make-ready
+    "turnover":                "turnover",
+    "make_ready":              "turnover",
+    "unit_turnover":           "turnover",
+    "make_readies":            "turnover",
 }
+
+
+def _normalize_expense_key(k: str) -> str:
+    """Normalize a T-12 account key for robust lookup: lowercased,
+    non-alphanumeric → underscore, de-duplicated underscores."""
+    if not k:
+        return ""
+    s = re.sub(r"[^a-z0-9]+", "_", k.lower()).strip("_")
+    s = re.sub(r"_+", "_", s)
+    return s
 
 
 def _backfill_expenses(assumptions: FinancialAssumptions, extracted: ExtractedDocumentData,
@@ -353,9 +460,11 @@ def _backfill_expenses(assumptions: FinancialAssumptions, extracted: ExtractedDo
     """Backfill Year-1 expense assumptions from T-12 extracted line items."""
     if not extracted.expense_line_items:
         return
+    unmapped = []
     for t12_key, amount in extracted.expense_line_items.items():
-        assume_field = _EXPENSE_MAP.get(t12_key.lower())
+        assume_field = _EXPENSE_MAP.get(_normalize_expense_key(t12_key))
         if not assume_field:
+            unmapped.append(t12_key)
             continue
         current = getattr(assumptions, assume_field, None)
         # Treat 0.0 as "not set" for expenses — allow extraction to fill
@@ -370,6 +479,9 @@ def _backfill_expenses(assumptions: FinancialAssumptions, extracted: ExtractedDo
                         assume_field, float(amount), t12_key)
         except (ValueError, TypeError):
             pass
+    if unmapped:
+        logger.info("T-12 BACKFILL: %d unmapped expense line item(s) — %s",
+                    len(unmapped), unmapped[:10])
 
 
 def _synthesize_rent_roll(deal: DealData) -> None:
@@ -395,7 +507,45 @@ def _synthesize_rent_roll(deal: DealData) -> None:
 
     num_units = deal.assumptions.num_units or 0
     if num_units <= 0:
-        logger.warning("SYNTH RENT ROLL: num_units=%d — cannot synthesize", num_units)
+        # Non-residential deals (land, office leased on a $/SF basis, retail
+        # pads) don't carry a unit count. Build a single-cell synthetic row
+        # using GBA × market PSF so GPR isn't silently $0.
+        gba = deal.assumptions.gba_sf or 0
+        if gba <= 0:
+            logger.warning(
+                "SYNTH RENT ROLL: num_units=0 and gba_sf=0 — cannot "
+                "synthesize (asset has no unit basis AND no square footage)."
+            )
+            return
+        # Pull a market PSF from extracted commercial comps, else a
+        # conservative $20/SF/yr floor.
+        psf_samples = [
+            float(c.asking_rent_per_sf) for c in
+            ((deal.comps.commercial_comps if deal.comps else []) or [])
+            if c.asking_rent_per_sf
+        ] if deal.comps else []
+        psf_annual = (sum(psf_samples) / len(psf_samples)) if psf_samples else 20.0
+        annual_gpr = round(gba * psf_annual, 2)
+        monthly = round(annual_gpr / 12.0, 2)
+        ext.unit_mix = [{
+            "unit_id": "Whole-building",
+            "unit_type": "Commercial",
+            "sf": gba,
+            "monthly_rent": monthly,
+            "market_rent": monthly,
+            "current_rent_sf": psf_annual / 12.0,
+            "market_rent_sf": psf_annual / 12.0,
+            "status": "Vacant",
+            "is_vacant": True,
+            "notes": f"Synthesised from GBA × ${psf_annual:.2f}/SF/yr market rate",
+        }]
+        ext.total_monthly_rent = monthly
+        ext.avg_rent_per_unit = monthly
+        logger.info(
+            "SYNTH RENT ROLL: no units — synthesised whole-building row "
+            "(%d SF × $%.2f/SF/yr = $%s/mo)",
+            gba, psf_annual, f"{monthly:,.0f}",
+        )
         return
 
     logger.info("SYNTH RENT ROLL: no extracted rent roll — synthesizing for %d units",
@@ -422,15 +572,26 @@ def _synthesize_rent_roll(deal: DealData) -> None:
         if rent and br in market_rents and market_rents[br] is None:
             market_rents[br] = float(rent)
 
-    # Fill missing tiers from HUD FMR data
-    if md.fmr_studio and market_rents["Studio"] is None:
-        market_rents["Studio"] = float(md.fmr_studio)
-    if md.fmr_1br and market_rents["1BR"] is None:
-        market_rents["1BR"] = float(md.fmr_1br)
-    if md.fmr_2br and market_rents["2BR"] is None:
-        market_rents["2BR"] = float(md.fmr_2br)
-    if md.fmr_3br and market_rents["3BR"] is None:
-        market_rents["3BR"] = float(md.fmr_3br)
+    # Fill missing tiers from HUD FMR data. Some jurisdictions return
+    # non-numeric strings ("Data Not Available"); _hud_to_float silently
+    # skips those rather than crashing the rent synth.
+    def _hud_to_float(v):
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    for tier_key, fmr_attr in (
+        ("Studio", "fmr_studio"),
+        ("1BR",    "fmr_1br"),
+        ("2BR",    "fmr_2br"),
+        ("3BR",    "fmr_3br"),
+    ):
+        if market_rents[tier_key] is None:
+            f = _hud_to_float(getattr(md, fmr_attr, None))
+            if f is not None and f > 0:
+                market_rents[tier_key] = f
 
     # Fill any remaining None values by interpolation from what we have
     filled = {k: v for k, v in market_rents.items() if v is not None}
@@ -442,10 +603,22 @@ def _synthesize_rent_roll(deal: DealData) -> None:
         _units = (deal.extracted_docs.unit_mix
                   if deal.extracted_docs and deal.extracted_docs.unit_mix
                   else [])
+        # Use explicit None-check rather than `or` so a legit $0 rent (vacant
+        # unit) is included as a value rather than silently skipped. Filter
+        # zero rents from the average computation since vacant units would
+        # pull the mean below market.
+        def _unit_rent(u):
+            for k in ("monthly_rent", "current_rent"):
+                v = u.get(k)
+                if v is not None and v != "":
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        pass
+            return None
         _sampled_rents = [
-            float(u.get("monthly_rent") or u.get("current_rent") or 0)
-            for u in _units
-            if (u.get("monthly_rent") or u.get("current_rent"))
+            r for r in (_unit_rent(u) for u in _units)
+            if r is not None and r > 0
         ]
         base = (
             sum(_sampled_rents) / len(_sampled_rents)
@@ -472,10 +645,18 @@ def _synthesize_rent_roll(deal: DealData) -> None:
     logger.info("SYNTH RENT ROLL: market rents — %s", market_rents)
 
     # ── Step 2: Determine unit type distribution ──────────────────────
-    # Use a typical distribution if no comps suggest otherwise.
-    # For multifamily value-add: 1BR dominant, then 2BR, then studio.
-
-    if num_units == 1:
+    # Use a typical bedroom distribution when the asset is residential.
+    # For non-residential asset types (office, retail, industrial,
+    # mixed-use), label the synthesised units generically to avoid
+    # fabricated bedroom counts.
+    from models.models import AssetType
+    _is_residential = deal.asset_type in (
+        AssetType.MULTIFAMILY, AssetType.SINGLE_FAMILY,
+    )
+    if not _is_residential:
+        # Generic units labeled by asset type — no bedroom fabrication.
+        distribution = {deal.asset_type.value: 1.0}
+    elif num_units == 1:
         distribution = {"2BR": 1.0}
     elif num_units <= 4:
         distribution = {"1BR": 0.50, "2BR": 0.50}

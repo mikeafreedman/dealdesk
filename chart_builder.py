@@ -15,7 +15,7 @@ Generates 8 PNG chart images for the PDF report using matplotlib.
 Each function returns PNG bytes or None on failure.
 Pipeline continues cleanly if any chart fails.
 
-Called by word_builder.py during report generation.
+Called by report_builder.py during HTML render (via map/chart context).
 """
 
 from __future__ import annotations

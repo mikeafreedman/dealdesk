@@ -212,6 +212,19 @@ def generate_report(deal, pdf_path: str | Path | None = None) -> Path:
     # Playwright's sync API refuses to run on a thread that has a live
     # asyncio event loop (main.py's request handlers are async). Detect
     # that case and hop to a worker thread.
+    # Footer: centered page number only (no "DealDesk" label, no total
+    # pages). Playwright substitutes <span class="pageNumber"></span> at
+    # print time.
+    footer_template = (
+        '<div style="width:100%;'
+        'font-size:8pt;color:#6B6460;'
+        "font-family:'EB Garamond',serif;"
+        'text-align:center;">'
+        '<span class="pageNumber"></span>'
+        '</div>'
+    )
+    header_template = '<div></div>'   # empty but required when footer is shown
+
     def _do_render() -> None:
         with sync_playwright() as p:
             browser = p.chromium.launch()
@@ -222,7 +235,11 @@ def generate_report(deal, pdf_path: str | Path | None = None) -> Path:
                 format="Letter",
                 print_background=True,
                 prefer_css_page_size=True,
-                margin={"top": "0", "bottom": "0", "left": "0", "right": "0"},
+                display_header_footer=True,
+                header_template=header_template,
+                footer_template=footer_template,
+                # Reserve bottom space for the footer; keep others at 0.
+                margin={"top": "0", "bottom": "0.45in", "left": "0", "right": "0"},
             )
             browser.close()
 

@@ -101,10 +101,10 @@
     ('22','Appendix — Methodology'),
   ] %}
   {% for num, title in toc %}
-  <div class="toc-entry">
+  <a class="toc-entry" href="#sect-{{ num }}">
     <span class="toc-num">{{ num }}</span>
     <span class="toc-title">{{ title }}</span>
-  </div>
+  </a>
   {% endfor %}
 </div>
 
@@ -114,9 +114,18 @@
 {% if show_s01 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 01</div>
+    <div class="section-number" id="sect-01">Section 01</div>
     <div class="section-title">Executive Summary</div>
   </div>
+
+  {% if data_quality_degraded %}
+  <div class="callout alert">
+    <strong>Data Quality Notice —</strong> {{ data_quality_failed|length }} external
+    data source(s) failed during this run, so portions of this report rely on
+    fallback values. Verify any flagged numbers independently before acting on
+    them. Failed sources: {{ data_quality_failed|map(attribute='service')|join(', ') }}.
+  </div>
+  {% endif %}
 
   {% if exec_pullquote %}<div class="pullquote">{{ exec_pullquote }}</div>{% endif %}
 
@@ -157,7 +166,7 @@
 {% if show_s02 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 02</div>
+    <div class="section-number" id="sect-02">Section 02</div>
     <div class="section-title">Property Photo Gallery</div>
   </div>
 
@@ -197,7 +206,7 @@
 {% if show_s03 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 03</div>
+    <div class="section-number" id="sect-03">Section 03</div>
     <div class="section-title">Maps &amp; Geographic Context</div>
   </div>
 
@@ -257,7 +266,7 @@
 {% if show_s04 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 04</div>
+    <div class="section-number" id="sect-04">Section 04</div>
     <div class="section-title">Property Description</div>
   </div>
 
@@ -298,7 +307,7 @@
 {% if show_s05 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 05</div>
+    <div class="section-number" id="sect-05">Section 05</div>
     <div class="section-title">Ownership &amp; Title History</div>
   </div>
 
@@ -322,7 +331,7 @@
     {% for row in assessment_rows %}
     <tr>
       <td>{{ row.label }}</td>
-      <td style="text-align:right">{{ row.value }}</td>
+      <td class="right">{{ row.value }}</td>
     </tr>
     {% endfor %}
   </table>
@@ -335,7 +344,7 @@
       <tr>
         <th>Address</th>
         <th>Parcel ID</th>
-        <th style="text-align:right">Market Value</th>
+        <th class="right">Market Value</th>
       </tr>
     </thead>
     <tbody>
@@ -343,7 +352,7 @@
       <tr>
         <td>{{ row.address }}</td>
         <td>{{ row.parcel_id }}</td>
-        <td style="text-align:right">{{ row.market_value }}</td>
+        <td class="right">{{ row.market_value }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -358,14 +367,14 @@
 
   {% if deed_history_rows %}
   <div class="subsection-title">Recorded Deed Transfers</div>
-  <table class="data-table">
+  <table class="data-table deed-table">
     <thead>
       <tr>
         <th>Recording Date</th>
         <th>Document Type</th>
         <th>Grantor</th>
         <th>Grantee</th>
-        <th style="text-align:right">Consideration</th>
+        <th class="right">Consideration</th>
         <th>Document ID</th>
       </tr>
     </thead>
@@ -376,7 +385,7 @@
         <td>{{ row.document_type }}</td>
         <td>{{ row.grantor }}</td>
         <td>{{ row.grantee }}</td>
-        <td style="text-align:right">{{ row.consideration }}</td>
+        <td class="right">{{ row.consideration }}</td>
         <td>{{ row.document_id }}</td>
       </tr>
       {% endfor %}
@@ -408,7 +417,7 @@
 {% if show_s06 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 06</div>
+    <div class="section-number" id="sect-06">Section 06</div>
     <div class="section-title">Zoning &amp; Highest and Best Use</div>
   </div>
 
@@ -427,6 +436,9 @@
     </tr>
     {% endfor %}
   </table>
+  {% if zoning_standards_note %}
+  <div class="source-note">{{ zoning_standards_note }}</div>
+  {% endif %}
   {% elif zoning_standards_note %}
   <div class="subsection-title">Zoning Standards</div>
   <div class="source-note">{{ zoning_standards_note }}</div>
@@ -458,7 +470,7 @@
 {% if show_s07 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 07</div>
+    <div class="section-number" id="sect-07">Section 07</div>
     <div class="section-title">Location &amp; Market Overview</div>
   </div>
 
@@ -515,7 +527,7 @@
 {% if show_s08 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 08</div>
+    <div class="section-number" id="sect-08">Section 08</div>
     <div class="section-title">Neighborhood Trend Analysis</div>
   </div>
   {% if neighborhood_trend_narrative %}
@@ -530,7 +542,7 @@
 {% if show_s09 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 09</div>
+    <div class="section-number" id="sect-09">Section 09</div>
     <div class="section-title">Competitive Supply Pipeline</div>
   </div>
 
@@ -561,7 +573,7 @@
 {% if show_s10 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 10</div>
+    <div class="section-number" id="sect-10">Section 10</div>
     <div class="section-title">Rent Roll &amp; Income Summary</div>
   </div>
 
@@ -595,38 +607,6 @@
       <td class="right">{{ rent_roll_totals.total_monthly }}</td>
     </tr>
     {% endif %}
-  </table>
-  {% endif %}
-
-  {% if lease_abstract_rows %}
-  <div class="subsection-title">Lease Abstracts</div>
-  <table class="data-table rent-roll-table">
-    <tr>
-      <th>Unit</th>
-      <th>Tenant</th>
-      <th>Type</th>
-      <th>Commenc.</th>
-      <th>Expires</th>
-      <th class="right">Base Rent</th>
-      <th>Escalation</th>
-      <th>CAM</th>
-      <th>Renewals</th>
-      <th>Guaranty</th>
-    </tr>
-    {% for row in lease_abstract_rows %}
-    <tr>
-      <td>{{ row.unit }}</td>
-      <td>{{ row.tenant }}</td>
-      <td>{{ row.lease_type }}</td>
-      <td>{{ row.commencement }}</td>
-      <td>{{ row.expiration }}</td>
-      <td class="right">{{ row.base_rent }}</td>
-      <td>{{ row.escalation }}</td>
-      <td>{{ row.cam }}</td>
-      <td>{{ row.renewals }}</td>
-      <td>{{ row.guaranty }}</td>
-    </tr>
-    {% endfor %}
   </table>
   {% endif %}
 
@@ -708,7 +688,7 @@
 {% if show_s11 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 11</div>
+    <div class="section-number" id="sect-11">Section 11</div>
     <div class="section-title">Comparable Market Analysis</div>
   </div>
 
@@ -716,7 +696,7 @@
   <div class="subsection-title">Rent Comparables</div>
   <div class="narrative">{{ rent_comp_narrative }}</div>
   {% if rent_comp_rows %}
-  <table class="data-table">
+  <table class="data-table comp-table">
     <tr><th>Property</th><th>Type</th><th>Beds</th><th class="right">Rent/Mo</th><th class="right">$/SF</th><th>Distance</th><th>Note</th></tr>
     {% for row in rent_comp_rows %}
     <tr>
@@ -738,7 +718,7 @@
   <div class="subsection-title">Commercial Rent Comparables</div>
   <div class="narrative">{{ commercial_comp_narrative }}</div>
   {% if commercial_comp_rows %}
-  <table class="data-table">
+  <table class="data-table comp-table">
     <tr><th>Address</th><th>Use Type</th><th class="right">SF</th><th class="right">Rent/SF</th><th>Lease Type</th></tr>
     {% for row in commercial_comp_rows %}
     <tr>
@@ -758,7 +738,7 @@
   <div class="subsection-title">Sale Comparables</div>
   <div class="narrative">{{ sale_comp_narrative }}</div>
   {% if sale_comp_rows %}
-  <table class="data-table">
+  <table class="data-table comp-table">
     <tr><th>Address</th><th>Date</th><th class="right">Price</th><th class="right">$/SF</th><th class="right">$/Unit</th><th class="right">Cap Rate</th><th>Distance</th></tr>
     {% for row in sale_comp_rows %}
     <tr>
@@ -784,7 +764,7 @@
 {% if show_s12 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 12</div>
+    <div class="section-number" id="sect-12">Section 12</div>
     <div class="section-title">Financial Analysis</div>
   </div>
 
@@ -924,7 +904,7 @@
 {% if show_s13 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 13</div>
+    <div class="section-number" id="sect-13">Section 13</div>
     <div class="section-title">Debt &amp; Capital Structure</div>
   </div>
 
@@ -984,7 +964,7 @@
 {% if show_s14 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 14</div>
+    <div class="section-number" id="sect-14">Section 14</div>
     <div class="section-title">Environmental &amp; Climate Risk</div>
   </div>
 
@@ -1048,7 +1028,7 @@
 {% if show_s15 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 15</div>
+    <div class="section-number" id="sect-15">Section 15</div>
     <div class="section-title">Legal &amp; Title Status</div>
   </div>
 
@@ -1059,7 +1039,7 @@
   <table class="data-table tbl-2col">
     {% if title_commitment_date %}<tr><td>Commitment Date</td><td>{{ title_commitment_date }}</td></tr>{% endif %}
     {% if title_company %}<tr><td>Title Company</td><td>{{ title_company }}</td></tr>{% endif %}
-    {% if title_insurance_amount %}<tr><td>Insurance Amount</td><td style="text-align:right">{{ title_insurance_amount }}</td></tr>{% endif %}
+    {% if title_insurance_amount %}<tr><td>Insurance Amount</td><td class="right">{{ title_insurance_amount }}</td></tr>{% endif %}
     {% if title_vesting %}<tr><td>Vesting</td><td>{{ title_vesting }}</td></tr>{% endif %}
     {% if title_legal_description %}<tr><td>Legal Description</td><td>{{ title_legal_description }}</td></tr>{% endif %}
   </table>
@@ -1067,7 +1047,7 @@
 
   {% if title_exception_rows %}
   <div class="subsection-title">Schedule B Exceptions</div>
-  <table class="data-table">
+  <table class="data-table exception-table">
     <thead>
       <tr>
         <th>Type</th>
@@ -1112,7 +1092,7 @@
 {% if show_s16 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 16</div>
+    <div class="section-number" id="sect-16">Section 16</div>
     <div class="section-title">Due Diligence Flags &amp; Risk Assessment</div>
   </div>
 
@@ -1144,8 +1124,8 @@
     {% if pca_report_date %}<tr><td>Report Date</td><td>{{ pca_report_date }}</td></tr>{% endif %}
     {% if pca_consultant %}<tr><td>Consultant</td><td>{{ pca_consultant }}</td></tr>{% endif %}
     {% if pca_overall_condition %}<tr><td>Overall Condition</td><td>{{ pca_overall_condition }}</td></tr>{% endif %}
-    {% if pca_deferred_maintenance_total %}<tr><td>Deferred Maintenance Total</td><td style="text-align:right">{{ pca_deferred_maintenance_total }}</td></tr>{% endif %}
-    {% if pca_capex_12yr_total %}<tr><td>12-Year Capex Forecast</td><td style="text-align:right">{{ pca_capex_12yr_total }}</td></tr>{% endif %}
+    {% if pca_deferred_maintenance_total %}<tr><td>Deferred Maintenance Total</td><td class="right">{{ pca_deferred_maintenance_total }}</td></tr>{% endif %}
+    {% if pca_capex_12yr_total %}<tr><td>12-Year Capex Forecast</td><td class="right">{{ pca_capex_12yr_total }}</td></tr>{% endif %}
   </table>
   {% endif %}
 
@@ -1157,7 +1137,7 @@
         <th>Condition</th>
         <th>Age</th>
         <th>Remaining Life</th>
-        <th style="text-align:right">Replacement Cost</th>
+        <th class="right">Replacement Cost</th>
         <th>Notes</th>
       </tr>
     </thead>
@@ -1168,7 +1148,7 @@
         <td>{{ row.condition }}</td>
         <td>{{ row.age }}</td>
         <td>{{ row.rul }}</td>
-        <td style="text-align:right">{{ row.repl_cost }}</td>
+        <td class="right">{{ row.repl_cost }}</td>
         <td>{{ row.notes }}</td>
       </tr>
       {% endfor %}
@@ -1183,7 +1163,7 @@
       <tr>
         <th>Item</th>
         <th>Priority</th>
-        <th style="text-align:right">Cost</th>
+        <th class="right">Cost</th>
       </tr>
     </thead>
     <tbody>
@@ -1191,7 +1171,7 @@
       <tr>
         <td>{{ row.item }}</td>
         <td>{{ row.priority }}</td>
-        <td style="text-align:right">{{ row.cost }}</td>
+        <td class="right">{{ row.cost }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -1212,7 +1192,7 @@
 {% if show_s17 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 17</div>
+    <div class="section-number" id="sect-17">Section 17</div>
     <div class="section-title">Due Diligence Checklist &amp; Status Tracker</div>
   </div>
   {% if dd_checklist_intro %}<div class="narrative">{{ dd_checklist_intro }}</div>{% endif %}
@@ -1248,7 +1228,7 @@
 {% if show_s18 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 18</div>
+    <div class="section-number" id="sect-18">Section 18</div>
     <div class="section-title">Project Timeline &amp; Milestones</div>
   </div>
   {% if timeline_narrative %}<div class="narrative">{{ timeline_narrative }}</div>{% endif %}
@@ -1261,7 +1241,7 @@
 {% if show_s19 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 19</div>
+    <div class="section-number" id="sect-19">Section 19</div>
     <div class="section-title">Investment Recommendation</div>
   </div>
 
@@ -1291,7 +1271,7 @@
 {% if show_s20 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 20</div>
+    <div class="section-number" id="sect-20">Section 20</div>
     <div class="section-title">Conclusions &amp; Next Steps</div>
   </div>
 
@@ -1305,11 +1285,11 @@
   {% if solved_price_narrative %}
   <div class="subsection-title">Monte Carlo-Indicated Purchase Price</div>
   <table class="data-table tbl-2col">
-    <tr><td>Target Median LP IRR</td><td style="text-align:right"><strong>{{ solved_price_target_irr_pct }}</strong></td></tr>
-    <tr><td>Current Underwritten Price</td><td style="text-align:right">${{ "{:,.0f}".format(price_solver.base_purchase_price) }}</td></tr>
-    <tr><td>Monte Carlo-Solved Price</td><td style="text-align:right"><strong>{{ solved_price_display }}</strong></td></tr>
-    <tr><td>Adjustment vs. Current Basis</td><td style="text-align:right">{{ solved_price_vs_base_pct }} {{ solved_price_direction }}</td></tr>
-    <tr><td>Median LP IRR at Solved Price</td><td style="text-align:right">{{ solved_price_median_lp_irr_pct }}</td></tr>
+    <tr><td>Target Median LP IRR</td><td class="right"><strong>{{ solved_price_target_irr_pct }}</strong></td></tr>
+    <tr><td>Current Underwritten Price</td><td class="right">${{ "{:,.0f}".format(price_solver.base_purchase_price) }}</td></tr>
+    <tr><td>Monte Carlo-Solved Price</td><td class="right"><strong>{{ solved_price_display }}</strong></td></tr>
+    <tr><td>Adjustment vs. Current Basis</td><td class="right">{{ solved_price_vs_base_pct }} {{ solved_price_direction }}</td></tr>
+    <tr><td>Median LP IRR at Solved Price</td><td class="right">{{ solved_price_median_lp_irr_pct }}</td></tr>
   </table>
   <div class="narrative">{{ solved_price_narrative }}</div>
   {% endif %}
@@ -1331,7 +1311,7 @@
 {% if show_s21 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Section 21</div>
+    <div class="section-number" id="sect-21">Section 21</div>
     <div class="section-title">Disclaimer &amp; Certification</div>
   </div>
   <div class="narrative">
@@ -1356,7 +1336,7 @@
 {% if show_s22 %}
 <div class="report-page">
   <div class="section-title-block">
-    <div class="section-number">Appendix A</div>
+    <div class="section-number" id="sect-22">Appendix A</div>
     <div class="section-title">Data Sources &amp; Methodology</div>
   </div>
   {% if methodology_notes %}<div class="narrative">{{ methodology_notes }}</div>{% endif %}

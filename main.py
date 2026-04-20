@@ -17,7 +17,7 @@ import socket
 import tempfile
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -124,7 +124,7 @@ def _record_deal(email: str, deal: DealData, deal_name: str) -> None:
             "hold_period":   deal.assumptions.hold_period,
             "lp_irr":        getattr(fo, "lp_irr", None) if fo else None,
             "project_irr":   getattr(fo, "project_irr", None) if fo else None,
-            "analyzed_date": datetime.utcnow().isoformat(),
+            "analyzed_date": datetime.now(timezone.utc).isoformat(),
             "status":        "complete",
         }
         user = _read_user(email)
@@ -442,19 +442,31 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
                    req.a_refi3_closing)),
     ]):
         active, year, appraised, ltv, rate, amort, term, orig_fee, prepay, closing = defaults
-        refi_events.append(RefiEvent(
-            active=active,
-            year=year,
-            appraised_value=appraised,
-            cap_rate=refi_cap_rates[i],
-            ltv=ltv / 100.0,
-            rate=rate / 100.0,
-            amort_years=amort,
-            loan_term=term,
-            orig_fee_pct=orig_fee / 100.0,
-            prepay_pct=prepay / 100.0,
-            closing_costs=closing,
-        ))
+        try:
+            refi_events.append(RefiEvent(
+                active=active,
+                year=year,
+                appraised_value=appraised,
+                cap_rate=refi_cap_rates[i],
+                ltv=(ltv or 0) / 100.0,
+                rate=(rate or 0) / 100.0,
+                amort_years=amort,
+                loan_term=term,
+                orig_fee_pct=(orig_fee or 0) / 100.0,
+                prepay_pct=(prepay or 0) / 100.0,
+                closing_costs=closing,
+            ))
+        except Exception as exc:
+            # Pydantic validation errors here previously crashed the whole
+            # request. Log + append a disabled stub so the refi index
+            # stays aligned across the three slots and downstream code
+            # that references refi_events[i] doesn't IndexError.
+            logger.warning(
+                "REFI %s: construction failed (%s) — disabling this slot. "
+                "Inputs: active=%s year=%s ltv=%s rate=%s",
+                prefix, exc, active, year, ltv, rate,
+            )
+            refi_events.append(RefiEvent(active=False, year=year or 5))
 
     # Build waterfall tiers
     waterfall_tiers = [
@@ -569,15 +581,17 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         cap_reserve_per_unit=req.a_cap_reserve,
         commissions_yr1=req.a_commissions,
         # Leasing cost assumptions
-        ti_new_psf=float(req.a_ti_new_psf or 0.0),
-        ti_renewal_psf=float(req.a_ti_renewal_psf or 0.0),
-        commission_new_pct=float(req.a_commission_new_pct or 5.0) / 100.0,
-        commission_renewal_pct=float(req.a_commission_renewal_pct or 2.5) / 100.0,
-        lease_term_years=float(req.a_lease_term_years or 5),
+        # Use explicit None-check rather than `or`-idiom so user-entered 0
+        # is preserved (e.g. 0% commission on a self-managed roll-over).
+        ti_new_psf=float(req.a_ti_new_psf if req.a_ti_new_psf is not None else 0.0),
+        ti_renewal_psf=float(req.a_ti_renewal_psf if req.a_ti_renewal_psf is not None else 0.0),
+        commission_new_pct=float(req.a_commission_new_pct if req.a_commission_new_pct is not None else 5.0) / 100.0,
+        commission_renewal_pct=float(req.a_commission_renewal_pct if req.a_commission_renewal_pct is not None else 2.5) / 100.0,
+        lease_term_years=float(req.a_lease_term_years if req.a_lease_term_years is not None else 5),
         # Renovation scope — accept the frontend string or fall back to the
         # model default (light_cosmetic). lease_up_months is per-unit re-lease.
         renovation_tier=(req.a_renovation_tier or "light_cosmetic"),
-        lease_up_months=int(req.a_lease_up_months or 1),
+        lease_up_months=int(req.a_lease_up_months if req.a_lease_up_months is not None else 1),
         # Exit
         exit_cap_rate=req.a_exit_cap_rate / 100.0,
         disposition_costs_pct=req.a_disp_fee / 100.0,
@@ -759,70 +773,103 @@ async def underwrite(req: UnderwriteRequest, request: Request):
                 fin_path = saved_path
         logger.info("MAIN: %d file(s) queued for extraction", len(all_uploaded_paths))
 
-        # Merge frontend rent roll rows into extracted_docs.unit_mix
+        # Merge frontend rent roll rows into extracted_docs.unit_mix. Every
+        # numeric parse is wrapped with _safe_num so a stray letter in a SF
+        # or rent cell doesn't 500 the whole request — the bad row is
+        # dropped with a warning and the rest of the roll loads.
+        def _safe_num(v, default=0.0):
+            if v is None or v == "":
+                return default
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return default
+
         if req.rent_roll:
             rr_units = []
-            for row in req.rent_roll:
-                if not row.get("unit") and not row.get("sf"):
-                    continue
-                status = row.get("status", "Occupied")
-                is_vacant = status == "Vacant"
-                sf = float(row.get("sf") or 0)
-                rent_mo = float(row.get("rent_mo") or 0)
-                rent_sf = float(row.get("rent_sf") or 0)
-                market_mo = float(row.get("market_mo") or 0)
-                market_sf = float(row.get("market_sf") or 0)
-                rr_units.append({
-                    "unit_id": row.get("unit", ""),
-                    "unit_type": row.get("type", ""),
-                    "sf": sf,
-                    "monthly_rent": rent_mo if rent_mo > 0 else (rent_sf * sf / 12.0 if rent_sf > 0 else 0),
-                    "market_rent": market_mo if market_mo > 0 else market_sf,
-                    "current_rent_sf": rent_sf,
-                    "status": status,
-                    "is_vacant": is_vacant,
-                    "lease_term_years": float(row.get("lease_term") or 5),
-                    "lease_expiry_year": int(float(row.get("expiry_year") or 0)),
-                    "market_rent_sf": market_sf if market_sf > 0 else market_mo,
-                    "renewal_probability": float(row.get("renewal_prob") or 70) / 100.0,
-                    "downtime_months": int(float(row.get("downtime") or 3)),
-                })
+            dropped = 0
+            for row_idx, row in enumerate(req.rent_roll):
+                try:
+                    if not row.get("unit") and not row.get("sf"):
+                        continue
+                    status = row.get("status", "Occupied")
+                    is_vacant = status == "Vacant"
+                    sf = _safe_num(row.get("sf"))
+                    rent_mo = _safe_num(row.get("rent_mo"))
+                    rent_sf = _safe_num(row.get("rent_sf"))
+                    market_mo = _safe_num(row.get("market_mo"))
+                    market_sf = _safe_num(row.get("market_sf"))
+                    rr_units.append({
+                        "unit_id": row.get("unit", ""),
+                        "unit_type": row.get("type", ""),
+                        "sf": sf,
+                        "monthly_rent": (rent_mo if rent_mo > 0
+                                          else (rent_sf * sf / 12.0 if rent_sf > 0 else 0)),
+                        "market_rent": market_mo if market_mo > 0 else market_sf,
+                        "current_rent_sf": rent_sf,
+                        "status": status,
+                        "is_vacant": is_vacant,
+                        "lease_term_years": _safe_num(row.get("lease_term"), 5),
+                        "lease_expiry_year": int(_safe_num(row.get("expiry_year"))),
+                        "market_rent_sf": market_sf if market_sf > 0 else market_mo,
+                        "renewal_probability": _safe_num(row.get("renewal_prob"), 70) / 100.0,
+                        "downtime_months": int(_safe_num(row.get("downtime"), 3)),
+                    })
+                except Exception as exc:
+                    dropped += 1
+                    logger.warning("RENT ROLL row %d dropped (%s): %s",
+                                   row_idx, exc, row)
             if rr_units:
                 deal.extracted_docs.unit_mix = rr_units
-                logger.info("RENT ROLL: %d units from frontend form", len(rr_units))
+                logger.info("RENT ROLL: %d units from frontend form "
+                            "(%d row(s) dropped due to bad data)",
+                            len(rr_units), dropped)
 
         # ── New structured rent roll from frontend UI ─────────────
         if req.residential_rent_roll or req.commercial_rent_roll:
             new_unit_mix = []
+            dropped_new = 0
 
-            for row in (req.residential_rent_roll or []):
-                units = float(row.get('units') or 0)
-                proforma = float(row.get('proforma_rent') or 0)
-                current = float(row.get('current_rent') or 0)
-                if units > 0 and proforma > 0:
-                    new_unit_mix.append({
-                        'unit_type':    row.get('type', 'Residential'),
-                        'count':        units,
-                        'monthly_rent': proforma,
-                        'market_rent':  proforma,
-                        'current_rent': current,
-                    })
+            for idx, row in enumerate(req.residential_rent_roll or []):
+                try:
+                    units = _safe_num(row.get('units'))
+                    proforma = _safe_num(row.get('proforma_rent'))
+                    current = _safe_num(row.get('current_rent'))
+                    if units > 0 and proforma > 0:
+                        new_unit_mix.append({
+                            'unit_type':    row.get('type', 'Residential'),
+                            'count':        units,
+                            'monthly_rent': proforma,
+                            'market_rent':  proforma,
+                            'current_rent': current,
+                        })
+                except Exception as exc:
+                    dropped_new += 1
+                    logger.warning("RES RENT ROLL row %d dropped (%s): %s",
+                                   idx, exc, row)
 
-            for row in (req.commercial_rent_roll or []):
-                sf = float(row.get('sf') or 0)
-                proforma_psf = float(row.get('proforma_rent_psf') or 0)
-                current_psf = float(row.get('current_rent_psf') or 0)
-                if sf > 0 and proforma_psf > 0:
-                    monthly_equiv = (sf * proforma_psf) / 12
-                    new_unit_mix.append({
-                        'unit_type':    row.get('lease_type', 'Commercial'),
-                        'tenant':       row.get('tenant', ''),
-                        'sf':           sf,
-                        'monthly_rent': monthly_equiv,
-                        'market_rent':  monthly_equiv,
-                        'current_rent': (sf * current_psf) / 12,
-                        'cam_psf':      float(row.get('cam_psf') or 0),
-                    })
+            for idx, row in enumerate(req.commercial_rent_roll or []):
+                try:
+                    sf = _safe_num(row.get('sf'))
+                    proforma_psf = _safe_num(row.get('proforma_rent_psf'))
+                    current_psf = _safe_num(row.get('current_rent_psf'))
+                    if sf > 0 and proforma_psf > 0:
+                        monthly_equiv = (sf * proforma_psf) / 12
+                        new_unit_mix.append({
+                            'unit_type':    row.get('lease_type', 'Commercial'),
+                            'tenant':       row.get('tenant', ''),
+                            'sf':           sf,
+                            'monthly_rent': monthly_equiv,
+                            'market_rent':  monthly_equiv,
+                            'current_rent': (sf * current_psf) / 12,
+                            'cam_psf':      _safe_num(row.get('cam_psf')),
+                        })
+                except Exception as exc:
+                    dropped_new += 1
+                    logger.warning("COMM RENT ROLL row %d dropped (%s): %s",
+                                   idx, exc, row)
+            if dropped_new:
+                logger.warning("RENT ROLL: %d row(s) dropped due to bad data", dropped_new)
 
             if new_unit_mix:
                 if deal.extracted_docs is None:

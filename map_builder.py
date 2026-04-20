@@ -9,7 +9,7 @@ Generates three PNG map images for the PDF report:
 Each function returns PNG bytes or None on failure.
 The pipeline continues cleanly if any map fails — placeholders remain in report.
 
-Called by word_builder.py after geocoding is complete (lat/lon on deal.address).
+Called by report_builder.py after geocoding is complete (lat/lon on deal.address).
 """
 
 from __future__ import annotations
@@ -210,18 +210,29 @@ def build_fema_map(deal):
     north = tile_to_lat(cy - half, zoom)
     south = tile_to_lat(cy + half + 1, zoom)
 
-    # Layer 28 = Flood Hazard Zones (SFHA polygons). The group layer "NFHL"
-    # often renders nothing at typical report-map extents because its
-    # sub-layers are scale-dependent — requesting the zones layer directly
-    # is reliable across zoom levels.
-    wms_url = (
-        "https://hazards.fema.gov/gis/nfhl/services/public/NFHL/MapServer/WMSServer?"
-        f"SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=28&STYLES=&CRS=EPSG:4326"
-        f"&BBOX={south},{west},{north},{east}&WIDTH={MAP_WIDTH}&HEIGHT={MAP_HEIGHT}"
-        f"&FORMAT=image/png&TRANSPARENT=TRUE"
+    # FEMA moved the public NFHL endpoint. The legacy WMS path
+    # (hazards.fema.gov/gis/nfhl/...) returns 404 in 2026. The current
+    # working endpoint is the ArcGIS REST /export, which accepts a
+    # layers=show:28 (Flood Hazard Zones) parameter and returns a PNG
+    # directly. Use that and fall back to the group layer if needed.
+    rest_base = (
+        "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/"
+        "MapServer/export?"
+        f"bbox={west},{south},{east},{north}&bboxSR=4326"
+        f"&size={MAP_WIDTH},{MAP_HEIGHT}"
+        "&format=png&transparent=true&f=image"
     )
-
-    overlay_data = _fetch_url(wms_url)
+    overlay_data = None
+    for layer_spec in ("show:28", "show:14,28", ""):
+        candidate = rest_base + (f"&layers={layer_spec}" if layer_spec else "")
+        overlay_data = _fetch_url(candidate)
+        if overlay_data and len(overlay_data) > 500:
+            logger.info("FEMA overlay fetched via layers=%s (%d bytes)",
+                        layer_spec or "default", len(overlay_data))
+            break
+        logger.info("FEMA overlay attempt layers=%s returned %d bytes",
+                    layer_spec or "default",
+                    len(overlay_data) if overlay_data else 0)
     if overlay_data and len(overlay_data) > 500:
         try:
             overlay_img = Image.open(io.BytesIO(overlay_data)).convert("RGBA")

@@ -382,10 +382,11 @@ def _fetch_phl_deed_history(pd_obj: ParcelData, parcel_number: str,
     acct = re.sub(r"\D", "", parcel_number or "")
     if not acct:
         return
+    # Use SELECT * so the query survives column-schema changes in the Carto
+    # rtt_summary dataset (we've been burned twice by renames). Filter /
+    # parse column names defensively on the client side.
     query = (
-        "SELECT document_id, recording_date, document_type, "
-        "grantors, grantees, consideration_amount "
-        "FROM rtt_summary "
+        "SELECT * FROM rtt_summary "
         f"WHERE opa_account_num = '{acct}' "
         "ORDER BY recording_date DESC "
         f"LIMIT {limit}"
@@ -401,14 +402,19 @@ def _fetch_phl_deed_history(pd_obj: ParcelData, parcel_number: str,
     if not rows:
         logger.info("DEED HISTORY (PHL): no records for parcel %s", acct)
         return
+    def _as_str(v):
+        return str(v) if v is not None else None
+
     for r in rows:
         pd_obj.deed_history.append(DeedRecord(
-            recording_date=r.get("recording_date"),
-            document_type=r.get("document_type"),
-            grantor=r.get("grantors"),
-            grantee=r.get("grantees"),
-            consideration_amount=_safe_float(r.get("consideration_amount")),
-            document_id=r.get("document_id"),
+            recording_date=_as_str(r.get("recording_date") or r.get("document_date")),
+            document_type=_as_str(r.get("document_type")),
+            grantor=_as_str(r.get("grantors") or r.get("grantor")),
+            grantee=_as_str(r.get("grantees") or r.get("grantee")),
+            consideration_amount=_safe_float(
+                r.get("consideration_amount") or r.get("consideration_amt")
+            ),
+            document_id=_as_str(r.get("document_id")),
         ))
     logger.info("DEED HISTORY (PHL): %d records pulled for parcel %s",
                 len(rows), acct)
@@ -1599,6 +1605,61 @@ def _fetch_nyc_acris(deal: DealData, pd_obj: ParcelData, addr) -> None:
                 borough_found, borough_found, block, lot)
 
 
+def _reverse_geocode_address(addr) -> None:
+    """Reverse-geocode lat/lon → city / state / zip / street via Nominatim
+    and write the results into the shared PropertyAddress object. Only
+    fills fields that are currently empty so user-entered values aren't
+    overwritten. No-op on network failure."""
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": addr.latitude, "lon": addr.longitude,
+                    "format": "json", "addressdetails": 1},
+            headers={"User-Agent": "DealDesk-CRE/1.0"},
+            timeout=10,
+        )
+        data = resp.json() or {}
+        ad = data.get("address") or {}
+        # City: Nominatim uses "city", "town", "village", or "hamlet"
+        city_val = (ad.get("city") or ad.get("town") or ad.get("village")
+                    or ad.get("hamlet") or ad.get("suburb") or "")
+        state_val = ad.get("state") or ""
+        zip_val = ad.get("postcode") or ""
+        # State name → 2-letter code
+        STATE_ABBR = {
+            "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+            "California": "CA", "Colorado": "CO", "Connecticut": "CT",
+            "Delaware": "DE", "District of Columbia": "DC", "Florida": "FL",
+            "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID", "Illinois": "IL",
+            "Indiana": "IN", "Iowa": "IA", "Kansas": "KS", "Kentucky": "KY",
+            "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+            "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN",
+            "Mississippi": "MS", "Missouri": "MO", "Montana": "MT",
+            "Nebraska": "NE", "Nevada": "NV", "New Hampshire": "NH",
+            "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+            "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH",
+            "Oklahoma": "OK", "Oregon": "OR", "Pennsylvania": "PA",
+            "Rhode Island": "RI", "South Carolina": "SC", "South Dakota": "SD",
+            "Tennessee": "TN", "Texas": "TX", "Utah": "UT", "Vermont": "VT",
+            "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
+            "Wisconsin": "WI", "Wyoming": "WY",
+        }
+        state_code = STATE_ABBR.get(state_val, state_val[:2].upper() if state_val else "")
+
+        if city_val and not addr.city:
+            addr.city = city_val
+        if state_code and not addr.state:
+            addr.state = state_code
+        if zip_val and not addr.zip_code:
+            addr.zip_code = zip_val[:5]
+        logger.info(
+            "REVERSE GEOCODE: populated address fields city=%s state=%s zip=%s",
+            addr.city, addr.state, addr.zip_code,
+        )
+    except Exception as exc:
+        logger.warning("Reverse geocode failed: %s", exc)
+
+
 def _fetch_osm_parcel(deal: DealData, pd_obj: ParcelData, addr) -> None:
     """Last-resort: Nominatim reverse geocode for address confirmation + neighborhood."""
     lat = addr.latitude
@@ -1641,6 +1702,15 @@ def fetch_parcel(deal: DealData) -> None:
     with a known most-recent sale produces at least one visible row.
     """
     addr = deal.address
+
+    # Pre-flight: if the upstream form submission omitted city / state / zip
+    # but we have a geocoded lat/lon, reverse-geocode to fill them. Without
+    # these, the dispatch below skips the Philly / DC / ArcGIS branches
+    # (which gate on state+city) and NO parcel data gets fetched — every
+    # downstream section (ownership, zoning, etc.) then fails to populate.
+    if addr.latitude and addr.longitude and not (addr.city and addr.state):
+        _reverse_geocode_address(addr)
+
     state = (addr.state or "").strip().upper()
     city = (addr.city or "").strip()
 
