@@ -105,7 +105,8 @@ def _build_image_context(deal) -> dict:
     """
     img_ctx: dict = {}
 
-    # Maps
+    # Maps + Street View (build_all_maps now returns all 6 images including
+    # 3-angle street view)
     try:
         from map_builder import build_all_maps
         maps = build_all_maps(deal)
@@ -119,22 +120,38 @@ def _build_image_context(deal) -> dict:
         if getattr(maps, "fema", None):
             img_ctx["fema_map_b64"] = _bytes_to_data_uri(maps.fema)
             logger.info("REPORT_IMG: FEMA map OK (%d bytes)", len(maps.fema))
+        # 3-angle Street View from the Google Street View Static API
+        if getattr(maps, "street_view", None):
+            img_ctx["street_view_b64"] = _bytes_to_data_uri(maps.street_view, "image/jpeg")
+            logger.info("REPORT_IMG: street view primary OK (%d bytes)",
+                        len(maps.street_view))
+        if getattr(maps, "street_view_alt1", None):
+            img_ctx["street_view_alt1_b64"] = _bytes_to_data_uri(maps.street_view_alt1, "image/jpeg")
+            logger.info("REPORT_IMG: street view alt1 OK (%d bytes)",
+                        len(maps.street_view_alt1))
+        if getattr(maps, "street_view_alt2", None):
+            img_ctx["street_view_alt2_b64"] = _bytes_to_data_uri(maps.street_view_alt2, "image/jpeg")
+            logger.info("REPORT_IMG: street view alt2 OK (%d bytes)",
+                        len(maps.street_view_alt2))
     except Exception as exc:
         logger.warning("REPORT_IMG: map generation failed — %s", exc)
 
-    # Street view
-    try:
-        sv_path = fetch_street_view_image(
-            deal.address.full_address or "",
-            deal.deal_id or "unknown",
-        )
-        if sv_path:
-            uri = _file_to_data_uri(sv_path)
-            if uri:
-                img_ctx["street_view_b64"] = uri
-                logger.info("REPORT_IMG: street view OK (%s)", sv_path)
-    except Exception as exc:
-        logger.warning("REPORT_IMG: street view failed — %s", exc)
+    # Legacy file-based street view fallback (only when the Static API
+    # returned no imagery above). Keeps the old fetch_street_view_image
+    # path in case of API outage.
+    if "street_view_b64" not in img_ctx:
+        try:
+            sv_path = fetch_street_view_image(
+                deal.address.full_address or "",
+                deal.deal_id or "unknown",
+            )
+            if sv_path:
+                uri = _file_to_data_uri(sv_path)
+                if uri:
+                    img_ctx["street_view_b64"] = uri
+                    logger.info("REPORT_IMG: street view legacy fallback (%s)", sv_path)
+        except Exception as exc:
+            logger.warning("REPORT_IMG: street view legacy fetch failed — %s", exc)
 
     return img_ctx
 

@@ -359,14 +359,103 @@ def _lookup_fips_from_latlon(addr) -> None:
         logger.warning("FIPS lookup (FCC API) failed: %s", exc)
 
 
+def validate_address_google(raw_address: str) -> dict:
+    """Call Google Address Validation API to normalize + geocode an address.
+
+    Returns a dict: normalized_address, latitude, longitude, confidence
+    (HIGH/MEDIUM/LOW), dpv (USPS delivery point code), success (bool).
+    Returns {"success": False} on any error. This is the preferred first
+    step in the geocoding pipeline — the Census Geocoder remains the
+    fallback when validation fails or the API key is missing."""
+    from config import ADDRESS_VALIDATION_API_URL as _AV_URL
+
+    if not GOOGLE_MAPS_API_KEY:
+        logger.info("Address validation skipped — no GOOGLE_MAPS_API_KEY")
+        return {"success": False}
+    if not raw_address:
+        return {"success": False}
+
+    payload = {
+        "address": {
+            "addressLines": [raw_address],
+            "regionCode":  "US",
+        },
+        "enableUspsCass": True,
+    }
+    try:
+        r = requests.post(
+            _AV_URL,
+            params={"key": GOOGLE_MAPS_API_KEY},
+            json=payload,
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        result  = data.get("result", {}) or {}
+        verdict = result.get("verdict", {}) or {}
+        address = result.get("address", {}) or {}
+        geocode = result.get("geocode", {}) or {}
+        usps    = result.get("uspsData", {}) or {}
+
+        formatted = address.get("formattedAddress") or raw_address
+        location  = geocode.get("location", {}) or {}
+        lat       = location.get("latitude")
+        lon       = location.get("longitude")
+
+        granularity = (verdict.get("geocodeGranularity") or "").upper()
+        confidence  = (
+            "HIGH"   if granularity in ("PREMISE", "SUB_PREMISE") else
+            "MEDIUM" if granularity == "BLOCK"                     else
+            "LOW"
+        )
+        dpv = usps.get("dpvConfirmation", "")
+
+        logger.info(
+            "Address validation: '%s' → '%s' [%s] lat=%s lon=%s",
+            raw_address, formatted, confidence,
+            f"{lat:.5f}" if lat is not None else "None",
+            f"{lon:.5f}" if lon is not None else "None",
+        )
+        return {
+            "success":            True,
+            "normalized_address": formatted,
+            "latitude":           lat,
+            "longitude":          lon,
+            "confidence":         confidence,
+            "dpv":                dpv,
+        }
+    except Exception as exc:
+        logger.warning("Address Validation API error: %s", exc)
+        return {"success": False}
+
+
 def _census_geocode(deal: DealData) -> None:
     """
-    Call the Census Bureau Geocoder to get census tract GEOID,
-    school district, and lat/lon from the property address.
-    Then check Opportunity Zone status.
+    Call Google Address Validation FIRST, then the Census Bureau Geocoder
+    as a fallback, to populate address.latitude / longitude / census_tract
+    / validated_address on the deal. Then check Opportunity Zone status.
     """
     addr = deal.address
     full = addr.full_address
+
+    # Step 1 — Google Address Validation (most accurate; handles range
+    # addresses like "2-8 S. 46th Street"). Sets lat/lon + validated fields
+    # on the PropertyAddress object. On failure, falls through to Census.
+    if full:
+        validation = validate_address_google(full)
+        if validation.get("success") and validation.get("latitude") and validation.get("longitude"):
+            addr.latitude              = validation["latitude"]
+            addr.longitude             = validation["longitude"]
+            addr.validated_address     = validation.get("normalized_address")
+            addr.validation_confidence = validation.get("confidence")
+            addr.dpv_confirmation      = validation.get("dpv")
+            logger.info("Geocoding: Address Validation API succeeded — skipping Census Geocoder")
+            # Still run OZ check below against the validated coords; the
+            # Census Geocoder call is what populates census_tract / fips,
+            # which downstream demographics need. Fall through to Census
+            # so tract/fips get populated, but it will now geocode to the
+            # same coordinates.
+
     if not full:
         logger.warning("Census Geocoder: no address — skipping")
         return
@@ -2105,6 +2194,192 @@ def _compute_market_rents(deal: DealData) -> None:
 # PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════════
+# GOOGLE PLACES API (NEW) — Neighborhood POI enrichment
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _lat_lon_valid_market(lat, lon) -> bool:
+    """Local lat/lon validator (avoids a circular import from map_builder)."""
+    try:
+        if lat is None or lon is None:
+            return False
+        return -90 <= float(lat) <= 90 and -180 <= float(lon) <= 180
+    except (TypeError, ValueError):
+        return False
+
+
+def fetch_nearby_pois(deal: DealData) -> list:
+    """Call the Places API (New) to find POIs within PLACES_RADIUS_METERS
+    (1 mile default) of the subject. Populates deal.nearby_pois (list of
+    dicts) and deal.poi_summary (category → count). Each POI dict carries
+    name, type, lat, lon, rating, and distance_ft."""
+    from config import PLACES_NEARBY_URL as _PL_URL
+    from config import PLACES_RADIUS_METERS as _PL_R
+    from config import POI_TYPES as _PL_TYPES
+
+    lat = deal.address.latitude
+    lon = deal.address.longitude
+    if not GOOGLE_MAPS_API_KEY or not _lat_lon_valid_market(lat, lon):
+        logger.info("Places API skipped — no key or no coordinates")
+        return []
+
+    all_pois: list = []
+    summary: dict = {}
+    for poi_type in _PL_TYPES:
+        payload = {
+            "includedTypes":  [poi_type],
+            "maxResultCount": 10,
+            "locationRestriction": {
+                "circle": {
+                    "center": {"latitude": lat, "longitude": lon},
+                    "radius": float(_PL_R),
+                }
+            },
+        }
+        headers = {
+            "Content-Type":    "application/json",
+            "X-Goog-Api-Key":  GOOGLE_MAPS_API_KEY,
+            "X-Goog-FieldMask": (
+                "places.displayName,places.location,"
+                "places.types,places.rating,places.id"
+            ),
+        }
+        try:
+            r = requests.post(_PL_URL, json=payload, headers=headers, timeout=10)
+            if r.status_code == 429:
+                logger.warning("Places API rate limit hit — sleeping 1s")
+                time.sleep(1)
+                continue
+            r.raise_for_status()
+            places = (r.json() or {}).get("places", []) or []
+            for p in places:
+                loc    = p.get("location", {}) or {}
+                p_lat  = loc.get("latitude")
+                p_lon  = loc.get("longitude")
+                name   = ((p.get("displayName") or {}).get("text")) or "Unknown"
+                rating = p.get("rating")
+                # Haversine distance in feet
+                dist_ft = None
+                if p_lat and p_lon:
+                    dlat = math.radians(p_lat - lat)
+                    dlon = math.radians(p_lon - lon)
+                    a = (math.sin(dlat / 2) ** 2
+                         + math.cos(math.radians(lat))
+                         * math.cos(math.radians(p_lat))
+                         * math.sin(dlon / 2) ** 2)
+                    dist_m = 6371000 * 2 * math.asin(math.sqrt(a))
+                    dist_ft = int(dist_m * 3.28084)
+                all_pois.append({
+                    "name":        name,
+                    "type":        poi_type,
+                    "lat":         p_lat,
+                    "lon":         p_lon,
+                    "rating":      rating,
+                    "distance_ft": dist_ft,
+                })
+            summary[poi_type] = len(places)
+            logger.info("Places API: %s → %d results", poi_type, len(places))
+        except Exception as exc:
+            logger.warning("Places API error for type '%s': %s", poi_type, exc)
+            continue
+
+    deal.nearby_pois = all_pois
+    deal.poi_summary = summary
+    total = sum(summary.values())
+    logger.info("Places API: %d total POIs across %d categories",
+                total, len(summary))
+    return all_pois
+
+
+def fetch_commercial_density(deal: DealData) -> dict:
+    """Derive commercial-activity density from the Places API results on
+    deal.poi_summary. Buckets POIs into food/transit/grocery/school/park
+    /retail, totals them, and labels the intensity High / Moderate / Low.
+    Populates deal.commercial_density."""
+    if not getattr(deal, "nearby_pois", None):
+        fetch_nearby_pois(deal)
+    summary = getattr(deal, "poi_summary", None) or {}
+
+    food_bev = (summary.get("restaurant", 0)
+                + summary.get("bar", 0)
+                + summary.get("cafe", 0))
+    transit  = (summary.get("transit_station", 0)
+                + summary.get("subway_station", 0)
+                + summary.get("bus_station", 0))
+    retail   = (summary.get("shopping_mall", 0)
+                + summary.get("bank", 0)
+                + summary.get("pharmacy", 0)
+                + summary.get("gym", 0))
+    grocery  = summary.get("grocery_or_supermarket", 0)
+    schools  = summary.get("school", 0)
+    parks    = summary.get("park", 0)
+    total    = sum(summary.values())
+
+    density_label = (
+        "High"     if total >= 25 else
+        "Moderate" if total >= 10 else
+        "Low"
+    )
+    result = {
+        "food_and_beverage":    food_bev,
+        "transit_access_score": transit,
+        "grocery_count":        grocery,
+        "school_count":         schools,
+        "park_count":           parks,
+        "retail_services":      retail,
+        "total_amenities":      total,
+        "density_label":        density_label,
+    }
+    deal.commercial_density = result
+    logger.info("Commercial density: %s (%d total amenities within 1 mile)",
+                density_label, total)
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GOOGLE ELEVATION API — Parcel elevation for flood-risk scoring
+# ═══════════════════════════════════════════════════════════════════════════
+
+def fetch_elevation(deal: DealData) -> Optional[float]:
+    """Fetch elevation (meters) at the subject's geocoded coordinates from
+    the Google Maps Elevation API. Populates deal.address.elevation_meters
+    and .elevation_feet. Returns meters or None on failure."""
+    from config import ELEVATION_API_URL as _EL_URL
+
+    lat = deal.address.latitude
+    lon = deal.address.longitude
+    if not GOOGLE_MAPS_API_KEY or not _lat_lon_valid_market(lat, lon):
+        logger.info("Elevation skipped — no key or no coordinates")
+        return None
+    try:
+        r = requests.get(
+            _EL_URL,
+            params={
+                "locations": f"{lat},{lon}",
+                "key":       GOOGLE_MAPS_API_KEY,
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        results = (r.json() or {}).get("results", []) or []
+        if not results:
+            logger.warning("Elevation API: empty results for %s",
+                           deal.address.full_address)
+            return None
+        elevation_m = float(results[0].get("elevation", 0))
+        elevation_f = elevation_m * 3.28084
+        deal.address.elevation_meters = round(elevation_m, 1)
+        deal.address.elevation_feet   = round(elevation_f, 1)
+        logger.info("Elevation: %.1f ft (%.1f m) at subject property",
+                    elevation_f, elevation_m)
+        return elevation_m
+    except Exception as exc:
+        logger.error("Elevation API error: %s", exc)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+
 def enrich_market_data(deal: DealData) -> DealData:
     """
     Master market enrichment function — populates DealData with external
@@ -2277,6 +2552,21 @@ def enrich_market_data(deal: DealData) -> DealData:
             logger.info("EPA: flags=%s", epa_flags)
     else:
         logger.warning("EPA: no ZIP code — skipping")
+
+    # ── STEP 8B: Google Places (POIs + density) ─────────────────
+    # Runs before map_builder so the neighborhood map can use nearby_pois
+    # for color-coded pins around the subject property.
+    try:
+        fetch_nearby_pois(deal)
+        fetch_commercial_density(deal)
+    except Exception as exc:
+        logger.error("Places enrichment error: %s", exc)
+
+    # ── STEP 8C: Elevation ──────────────────────────────────────
+    try:
+        fetch_elevation(deal)
+    except Exception as exc:
+        logger.error("Elevation fetch error: %s", exc)
 
     # ── Data pull date ────────────────────────────────────────────
     md.data_pull_date = data_pull_date

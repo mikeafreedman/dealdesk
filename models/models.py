@@ -95,6 +95,13 @@ class PropertyAddress(BaseModel):
     longitude:    Optional[float] = None
     census_tract: Optional[str]   = None
     fips_code:    Optional[str]   = None
+    # Populated by Google Address Validation API (USPS CASS)
+    validated_address:     Optional[str]   = None
+    validation_confidence: Optional[str]   = None   # HIGH / MEDIUM / LOW
+    dpv_confirmation:      Optional[str]   = None   # USPS: Y / S / D / N
+    # Populated by Google Maps Elevation API
+    elevation_meters:      Optional[float] = None
+    elevation_feet:        Optional[float] = None
 
 
 class DeedRecord(BaseModel):
@@ -1027,6 +1034,12 @@ class DealData(BaseModel):
 
     # Provenance log
     provenance: ProvenanceLog = Field(default_factory=ProvenanceLog)
+
+    # Google Maps enrichment (populated by market.py)
+    nearby_pois:        Optional[List[Dict[str, Any]]] = None
+    poi_summary:        Optional[Dict[str, int]]       = None
+    amenity_narrative:  Optional[str]                  = None
+    commercial_density: Optional[Dict[str, Any]]       = None
 
     # Output file paths (set by main.py after generation)
     output_pdf_path:  Optional[str] = None

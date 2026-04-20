@@ -172,12 +172,32 @@
 
   {% if photo_gallery_intro %}<div class="narrative">{{ photo_gallery_intro }}</div>{% endif %}
 
-  {% if street_view_b64 %}
-  <div class="photo-grid hero">
-    <div class="photo-cell">
-      <img src="{{ street_view_b64 }}" alt="Street View">
-      <div class="photo-caption">Google Street View — {{ full_address }}</div>
+  {% if street_view_b64 or street_view_alt1_b64 or street_view_alt2_b64 %}
+  <div class="street-view-grid">
+    {% if street_view_b64 %}
+    <div class="street-view-primary">
+      <img src="{{ street_view_b64 }}" alt="Property exterior — primary view" class="report-photo">
+      <p class="figure-caption">Figure 2.1a — Street View, Primary Facing</p>
     </div>
+    {% endif %}
+    {% if street_view_alt1_b64 or street_view_alt2_b64 %}
+    <div class="street-view-secondary">
+      {% if street_view_alt1_b64 %}
+      <div class="street-view-half">
+        <img src="{{ street_view_alt1_b64 }}" alt="Property exterior — east angle"
+             class="report-photo report-photo-half">
+        <p class="figure-caption">Figure 2.1b — Street View, East</p>
+      </div>
+      {% endif %}
+      {% if street_view_alt2_b64 %}
+      <div class="street-view-half">
+        <img src="{{ street_view_alt2_b64 }}" alt="Property exterior — west angle"
+             class="report-photo report-photo-half">
+        <p class="figure-caption">Figure 2.1c — Street View, West</p>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
   </div>
   {% endif %}
 

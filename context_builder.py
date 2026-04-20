@@ -708,6 +708,13 @@ def build_context(deal: DealData) -> dict:
     ctx["city"] = deal.address.city
     ctx["state"] = deal.address.state
     ctx["zip_code"] = deal.address.zip_code
+    # New Google Maps enrichment context
+    ctx["validated_address"] = getattr(deal.address, "validated_address", None) or ""
+    ctx["elevation_feet"]    = getattr(deal.address, "elevation_feet", None)
+    ctx["elevation_meters"]  = getattr(deal.address, "elevation_meters", None)
+    ctx["poi_summary"]       = getattr(deal, "poi_summary", {}) or {}
+    ctx["commercial_density"] = getattr(deal, "commercial_density", {}) or {}
+    ctx["nearby_pois"]       = getattr(deal, "nearby_pois", []) or []
     ctx["asset_type"] = deal.asset_type.value
     ctx["investment_strategy"] = deal.investment_strategy.value
     ctx["asking_price"] = f"${deal.assumptions.purchase_price:,.0f}" if deal.assumptions.purchase_price else "Not disclosed"

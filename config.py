@@ -87,6 +87,53 @@ SMTP_PORT_DEFAULT = 587
 # ── Google Maps / Street View ────────────────────────────────
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 
+# ── Map image dimensions ─────────────────────────────────────
+MAP_WIDTH  = 800   # pixels — Static Maps + tile stitching
+MAP_HEIGHT = 500
+
+# ── Street View image dimensions ─────────────────────────────
+SV_WIDTH   = 800
+SV_HEIGHT  = 500
+
+# ── Google Aerial View API (preview — returns photographic stills) ─────
+AERIAL_VIEW_API_URL = "https://aerialview.googleapis.com/v1/videos:lookupVideo"
+
+# ── Google Address Validation API (USPS CASS standardization) ──────────
+ADDRESS_VALIDATION_API_URL = "https://addressvalidation.googleapis.com/v1:validateAddress"
+
+# ── Google Places API (New) — Nearby Search ─────────────────────────────
+PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
+
+# Places Aggregate endpoint (preview) — falls back to Places Nearby when
+# not enabled on the project.
+PLACES_AGGREGATE_URL = "https://places.googleapis.com/v1/places:searchNearby"
+
+# ── Google Map Tiles API (session-based styled tiles) ──────────────────
+MAP_TILES_SESSION_URL = "https://tile.googleapis.com/v1/createSession"
+MAP_TILES_FETCH_URL   = "https://tile.googleapis.com/v1/2dtiles/{z}/{x}/{y}"
+
+# ── Google Maps Elevation API ──────────────────────────────────────────
+ELEVATION_API_URL = "https://maps.googleapis.com/maps/api/elevation/json"
+
+# ── Places search radius (meters) — 1 mile = 1,609.34 m ────────────────
+PLACES_RADIUS_METERS = 1609
+
+# ── POI categories for neighborhood context enrichment ─────────────────
+POI_TYPES = [
+    "grocery_or_supermarket",
+    "transit_station",
+    "subway_station",
+    "bus_station",
+    "school",
+    "park",
+    "restaurant",
+    "bank",
+    "pharmacy",
+    "hospital",
+    "gym",
+    "shopping_mall",
+]
+
 # ── FRED (Federal Reserve Economic Data) ─────────────────────
 FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 

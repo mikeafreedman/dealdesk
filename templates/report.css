@@ -733,6 +733,47 @@ h4, .subsection-title {
    the photo grid breathing room after a narrative block so it doesn't sit
    tight against the intro paragraph. */
 .narrative + .photo-grid { margin-top: 26px; }
+
+/* ── STREET VIEW GRID (Section 02 primary + secondary angles) ───────── */
+.street-view-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.street-view-primary img,
+.street-view-half img {
+  width: 100%;
+  display: block;
+  border: 1px solid var(--sage-light);
+  border-radius: 4px;
+}
+.street-view-primary img {
+  max-height: 340px;
+  object-fit: cover;
+}
+.street-view-secondary {
+  display: flex;
+  gap: 10px;
+}
+.street-view-half {
+  flex: 1 1 0;
+}
+.report-photo-half {
+  max-height: 220px;
+  object-fit: cover;
+}
+.figure-caption {
+  margin: 4px 0 0 0;
+  font-size: 8pt;
+  color: var(--earth);
+  font-style: italic;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+.narrative + .street-view-grid { margin-top: 26px; }
 .narrative + .photo-grid.hero { margin-top: 26px; }
 .photo-cell img {
   width: 100%;
