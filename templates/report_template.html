@@ -219,6 +219,18 @@
   </div>
   {% endif %}
 
+  {% if pdf_photos and pdf_photos|length > 0 %}
+  <div class="subsection-title">Offering Memorandum Photographs</div>
+  <div class="photo-grid">
+    {% for ph in pdf_photos %}
+    <div class="photo-cell">
+      <img src="{{ ph.src }}" alt="OM property photo {{ loop.index }}" class="report-photo">
+      <div class="photo-caption">{{ ph.caption }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if photo_gallery_note %}<div class="source-note">{{ photo_gallery_note }}</div>{% endif %}
 
   {# Floor plans: only rendered when at least one image is present. No
@@ -525,9 +537,36 @@
   <div class="narrative">{{ permitted_uses_description }}</div>
   {% endif %}
 
-  {% if buildable_capacity or buildable_capacity_narrative %}
+  {% if buildable_capacity_steps or buildable_capacity or buildable_capacity_narrative %}
   <div class="subsection-title">Buildable Capacity</div>
+  {% if buildable_capacity_steps and buildable_capacity_steps|length > 0 %}
+  <ol class="calc-steps">
+    {% for step in buildable_capacity_steps %}
+    <li class="calc-step">
+      <div class="calc-step-header">
+        <span class="calc-step-label">{{ step.label }}</span>
+        {% if step.formula %}<span class="calc-step-formula">{{ step.formula }}</span>{% endif %}
+      </div>
+      {% if step.inputs and step.inputs|length > 0 %}
+      <ul class="calc-step-inputs">
+        {% for inp in step.inputs %}<li>{{ inp }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% if step.result %}<div class="calc-step-result">= {{ step.result }}</div>{% endif %}
+      {% if step.note %}<div class="calc-step-note">{{ step.note }}</div>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% if buildable_binding_constraint or buildable_binding_result %}
+  <div class="calc-binding">
+    <span class="calc-binding-label">Binding constraint:</span>
+    {% if buildable_binding_constraint %}<strong>{{ buildable_binding_constraint }}</strong>{% endif %}
+    {% if buildable_binding_result %} → {{ buildable_binding_result }}{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
   <div class="narrative">{{ buildable_capacity or buildable_capacity_narrative }}</div>
+  {% endif %}
   {% endif %}
 
   {% if highest_best_use or hbu_content or hbu_narrative %}
@@ -721,44 +760,9 @@
   </table>
   {% endif %}
 
-  {% if rent_roll_rows %}
-  <div class="subsection-title">Rent Roll Detail</div>
-  <table class="data-table rent-roll-table">
-    <tr>
-      <th>Unit</th>
-      <th>Type</th>
-      <th class="right">SF</th>
-      <th>Tenant</th>
-      <th class="right">Monthly Rent</th>
-      <th class="right">Market Rent</th>
-      <th>Lease Start</th>
-      <th>Lease End</th>
-      <th>Status</th>
-    </tr>
-    {% for row in rent_roll_rows %}
-    <tr>
-      <td>{{ row.unit }}</td>
-      <td>{{ row.type }}</td>
-      <td class="right">{{ row.sf }}</td>
-      <td>{{ row.tenant }}</td>
-      <td class="right">{{ row.monthly_rent }}</td>
-      <td class="right">{{ row.market_rent }}</td>
-      <td>{{ row.lease_start }}</td>
-      <td>{{ row.lease_end }}</td>
-      <td>{{ row.status }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% if rent_roll_totals and rent_roll_totals.total_monthly %}
-  <div class="source-note">
-    Occupied: {{ rent_roll_totals.occupied }} &nbsp;|&nbsp;
-    Vacant: {{ rent_roll_totals.vacant }} &nbsp;|&nbsp;
-    Total SF: {{ rent_roll_totals.total_sf }} &nbsp;|&nbsp;
-    Monthly In-Place Rent: {{ rent_roll_totals.total_monthly }} &nbsp;|&nbsp;
-    Annualized: {{ rent_roll_totals.annual }}
-  </div>
-  {% endif %}
-  {% endif %}
+  {# Per-unit rent roll detail removed from the PDF — the full detail
+     lives in the Excel model's Rent Roll tab. Section 10 keeps the
+     Unit Mix Summary roll-up above and the Income Summary below. #}
 
   <div class="subsection-title">Income Summary (Stabilized Year)</div>
   <table class="data-table">
@@ -1003,7 +1007,58 @@
   </table>
   {% endif %}
 
-  {% if monte_carlo_narrative %}
+  {% if has_monte_carlo %}
+  <div class="subsection-title">Monte Carlo Risk-Weighted Return</div>
+
+  <div class="mc-method">
+    <div class="mc-heading">Method</div>
+    <p>{{ monte_carlo_method }}</p>
+  </div>
+
+  <div class="mc-heading">Results</div>
+  <table class="data-table mc-stats-table">
+    <thead>
+      <tr>
+        <th>Scenario</th>
+        <th class="right">LP IRR</th>
+        <th class="right">Equity Multiple</th>
+        <th>Meaning</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in monte_carlo_stat_rows %}
+      <tr{% if 'Median' in row.label %} class="total-row"{% endif %}>
+        <td><strong>{{ row.label }}</strong></td>
+        <td class="right">{{ row.irr }}</td>
+        <td class="right">{{ row.em }}</td>
+        <td>{{ row.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="mc-summary-grid">
+    <div class="mc-summary-cell">
+      <div class="mc-summary-label">Probability above {{ monte_carlo_target_irr }} target</div>
+      <div class="mc-summary-value">{{ monte_carlo_prob_above_tgt }}</div>
+    </div>
+    <div class="mc-summary-cell">
+      <div class="mc-summary-label">Dominant driver (R²)</div>
+      <div class="mc-summary-value">{{ monte_carlo_dominant_var }} <span class="mc-summary-sub">({{ monte_carlo_dominant_r2 }})</span></div>
+    </div>
+    <div class="mc-summary-cell">
+      <div class="mc-summary-label">Distribution shape</div>
+      <div class="mc-summary-value">{{ monte_carlo_shape }}</div>
+    </div>
+    <div class="mc-summary-cell">
+      <div class="mc-summary-label">Valid iterations</div>
+      <div class="mc-summary-value">{{ monte_carlo_n_valid }}</div>
+    </div>
+  </div>
+
+  <div class="mc-heading">Interpretation</div>
+  <div class="narrative">{{ monte_carlo_narrative }}</div>
+  {% elif monte_carlo_narrative %}
   <div class="subsection-title">Monte Carlo Risk-Weighted Return</div>
   <div class="narrative">{{ monte_carlo_narrative }}</div>
   {% endif %}
@@ -1169,6 +1224,54 @@
   {% if climate_risk_narrative %}
   <div class="subsection-title">Climate Risk</div>
   <div class="narrative">{{ climate_risk_narrative }}</div>
+  {% endif %}
+
+  {% if has_insurance_analysis %}
+  <div class="subsection-title">Property Insurance &amp; Coverage</div>
+
+  {% if insurance_kpi_rows %}
+  <table class="data-table tbl-2col">
+    {% for row in insurance_kpi_rows %}
+    <tr><td>{{ row.label }}</td><td class="right">{{ row.value }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if insurance_summary_table %}
+  <div class="subsection-title" style="font-size:11pt;margin-top:14pt">Coverage Summary</div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Coverage Type</th>
+        <th>Required</th>
+        <th class="right">Est. Annual Cost</th>
+        <th>Notes</th>
+        <th>Flag</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in insurance_summary_table %}
+      <tr>
+        <td><strong>{{ row.coverage_type }}</strong></td>
+        <td>{{ row.required }}</td>
+        <td class="right">{{ row.est_annual_cost }}</td>
+        <td>{{ row.notes }}</td>
+        <td>{{ row.flag }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if insurance_narrative_p1 %}
+  <div class="narrative" style="margin-top:10pt">{{ insurance_narrative_p1 }}</div>
+  {% endif %}
+  {% if insurance_narrative_p2 %}
+  <div class="narrative">{{ insurance_narrative_p2 }}</div>
+  {% endif %}
+  {% if insurance_narrative_p3 %}
+  <div class="narrative">{{ insurance_narrative_p3 }}</div>
+  {% endif %}
   {% endif %}
 </div>
 {% endif %}

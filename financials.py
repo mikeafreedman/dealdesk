@@ -661,6 +661,11 @@ def _compute_lease_events(deal) -> dict:
     total_commission_all = 0.0
     total_ti_all = 0.0
     total_downtime_all = 0.0
+    # Accumulate unit IDs that ship without an expiry year so the loop
+    # emits ONE summary line at the end instead of N per-unit warnings.
+    # Residential OMs almost never carry lease schedules; we were logging
+    # 18+ WARNINGs on every multifamily deal just from this branch.
+    _no_expiry_units: List = []
 
     for u in units:
         sf = float(u.get("sf") or 0)
@@ -708,7 +713,7 @@ def _compute_lease_events(deal) -> dict:
         # B. Occupied tenant with known expiry
         if expiry_yr < 1 or expiry_yr > hold:
             if expiry_yr == 0:
-                logger.warning("LEASE EVENT: tenant %s has no expiry year — skipping", unit_id)
+                _no_expiry_units.append(unit_id)
             continue
 
         yr = expiry_yr
@@ -764,6 +769,17 @@ def _compute_lease_events(deal) -> dict:
         "total TI=$%.0f | total downtime=$%.0f across %d event years",
         tenant_count, total_commission_all, total_ti_all,
         total_downtime_all, event_years)
+    # One summary line for units without an expiry year — the common
+    # case for multifamily OMs (no per-unit lease schedule disclosed).
+    if _no_expiry_units:
+        _preview = ", ".join(str(u) for u in _no_expiry_units[:5])
+        _suffix = f" … +{len(_no_expiry_units) - 5} more" if len(_no_expiry_units) > 5 else ""
+        logger.info(
+            "LEASE EVENTS: %d unit(s) have no expiry year and were skipped "
+            "(common for multifamily without per-unit lease dates). "
+            "Units: %s%s",
+            len(_no_expiry_units), _preview, _suffix,
+        )
     for yr in sorted(year_costs):
         for d in year_costs[yr]["detail"]:
             logger.info("  %s", d)
@@ -2023,23 +2039,193 @@ def solve_purchase_price_for_lp_irr(
     return result
 
 
+def solve_purchase_price_for_hurdle(
+    deal: DealData,
+    insurance: float,
+    metric: str = "lp_irr",
+    target: float = 0.15,
+) -> dict:
+    """Dispatch the price solver to the correct binding metric.
+
+    Supported metrics (all targets are decimals — 0.15 = 15%):
+      - "project_irr": median project IRR across MC iterations
+      - "lp_irr": median LP IRR across MC iterations (existing solver)
+      - "stab_cap_rate": Year-2 NOI ÷ purchase price (deterministic —
+        NOI is independent of price, so solve by division)
+      - "stab_coc": Year-2 cash flow after debt service ÷ total equity
+        (deterministic via a small bisection on price; debt size + debt
+        service depend on price)
+    """
+    a = deal.assumptions
+    fo = deal.financial_outputs
+    base_price = a.purchase_price or 0.0
+
+    metric = (metric or "lp_irr").strip().lower()
+
+    # ── Project IRR: reuse LP-IRR solver with lp_offset forced to 0.
+    if metric == "project_irr":
+        # Temporarily zero the lp_offset by masking fo.lp_irr/project_irr
+        _orig_lp, _orig_proj = fo.lp_irr, fo.project_irr
+        try:
+            # Force lp_offset = 0 inside the LP solver by setting lp_irr
+            # and project_irr to the same value. Then the target the
+            # solver binds to is exactly `target` as a project IRR.
+            fo.lp_irr, fo.project_irr = target, target
+            out = solve_purchase_price_for_lp_irr(deal, insurance,
+                                                  target_lp_irr=target)
+        finally:
+            fo.lp_irr, fo.project_irr = _orig_lp, _orig_proj
+        out["metric"] = "project_irr"
+        out["target"] = target
+        return out
+
+    # ── LP IRR: existing solver.
+    if metric == "lp_irr":
+        out = solve_purchase_price_for_lp_irr(deal, insurance,
+                                              target_lp_irr=target)
+        out["metric"] = "lp_irr"
+        out["target"] = target
+        return out
+
+    # ── Stabilized cap rate: NOI / price. NOI doesn't depend on price,
+    # so price = NOI / target. Pull stabilized-year NOI directly.
+    if metric == "stab_cap_rate":
+        stab_noi = (
+            getattr(fo, "stabilized_noi", None)
+            or (fo.noi_by_year[1] if getattr(fo, "noi_by_year", None)
+                and len(fo.noi_by_year) > 1 else None)
+            or getattr(fo, "noi_yr1", None)
+        )
+        if not stab_noi or stab_noi <= 0 or not target or target <= 0:
+            return {"converged": False, "reason": "missing_noi_or_target",
+                    "metric": "stab_cap_rate", "target": target}
+        solved = stab_noi / target
+        logger.info(
+            "PRICE SOLVER (cap_rate): target=%.2f%% × Y2 NOI $%s "
+            "→ solved price $%s (base $%s, adj %+.1f%%)",
+            target * 100, f"{stab_noi:,.0f}", f"{solved:,.0f}",
+            f"{base_price:,.0f}",
+            ((solved - base_price) / base_price * 100) if base_price else 0,
+        )
+        return {
+            "converged": True,
+            "metric": "stab_cap_rate",
+            "target": target,
+            "stabilized_noi": stab_noi,
+            "base_purchase_price": base_price,
+            "solved_purchase_price": solved,
+            "price_adjustment_pct": (
+                (solved - base_price) / base_price if base_price else 0.0),
+        }
+
+    # ── Stabilized CoC: Y2 cash flow after debt service ÷ equity. CoC
+    # depends on price through loan sizing + debt service. Bisect on
+    # price — the existing SU + debt-service plumbing already handles it.
+    if metric == "stab_coc":
+        if base_price <= 0:
+            return {"converged": False, "reason": "no_base_price",
+                    "metric": "stab_coc", "target": target}
+
+        def _coc_at(price: float) -> Optional[float]:
+            original = a.purchase_price
+            try:
+                a.purchase_price = price
+                su = _compute_sources_uses(deal)
+                eq = su.get("total_equity_required") or 0.0
+                if eq <= 0:
+                    return None
+                # Y2 cash flow after debt service.
+                cfads_y2 = None
+                ibd = getattr(fo, "cash_flow_before_debt_yearly", None)
+                ds  = getattr(fo, "debt_service_yearly", None)
+                if ibd and ds and len(ibd) > 1 and len(ds) > 1:
+                    cfads_y2 = ibd[1] - ds[1]
+                if cfads_y2 is None:
+                    return None
+                return cfads_y2 / eq
+            finally:
+                a.purchase_price = original
+
+        low, high = base_price * 0.25, base_price * 2.00
+        coc_low, coc_high = _coc_at(low), _coc_at(high)
+        if coc_low is None or coc_high is None:
+            return {"converged": False, "reason": "bracket_failed",
+                    "metric": "stab_coc", "target": target,
+                    "base_purchase_price": base_price}
+        # CoC decreases with price (higher price → bigger equity base).
+        if target > coc_low:
+            # Even cheapest price can't hit the target — report the max.
+            return {"converged": False, "reason": "target_unreachable",
+                    "metric": "stab_coc", "target": target,
+                    "max_coc_at_low_bracket": coc_low,
+                    "base_purchase_price": base_price,
+                    "solved_purchase_price": low}
+        if target < coc_high:
+            return {"converged": False, "reason": "target_unreachable",
+                    "metric": "stab_coc", "target": target,
+                    "min_coc_at_high_bracket": coc_high,
+                    "base_purchase_price": base_price,
+                    "solved_purchase_price": high}
+
+        mid = base_price
+        coc_mid = target
+        for i in range(18):
+            mid = 0.5 * (low + high)
+            coc_mid = _coc_at(mid)
+            if coc_mid is None:
+                break
+            if abs(coc_mid - target) <= 0.002:
+                break
+            if coc_mid > target:
+                low = mid
+            else:
+                high = mid
+
+        converged = coc_mid is not None and abs(coc_mid - target) <= 0.002
+        logger.info(
+            "PRICE SOLVER (stab_coc): target=%.2f%% → solved price $%s "
+            "(base $%s, CoC %.2f%%, converged=%s)",
+            target * 100, f"{mid:,.0f}", f"{base_price:,.0f}",
+            (coc_mid or 0) * 100, converged,
+        )
+        return {
+            "converged": converged,
+            "metric": "stab_coc",
+            "target": target,
+            "base_purchase_price": base_price,
+            "solved_purchase_price": mid,
+            "solved_coc": coc_mid,
+            "price_adjustment_pct": (
+                (mid - base_price) / base_price if base_price else 0.0),
+        }
+
+    logger.warning("Unknown hurdle metric %r — defaulting to lp_irr", metric)
+    out = solve_purchase_price_for_lp_irr(deal, insurance, target_lp_irr=target)
+    out["metric"] = "lp_irr"
+    out["target"] = target
+    return out
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # §10  PROMPT 5A — MONTE CARLO NARRATIVE  (only AI call)
 # ═══════════════════════════════════════════════════════════════════════════
 
 _SYSTEM_5A = (
     "You are a senior CRE analyst writing for an institutional investment committee.\n"
-    "Interpret 10,000-iteration Monte Carlo simulation results and write the\n"
-    "risk-weighted return narrative for the Financial Analysis section.\n\n"
+    "Interpret 2,000-iteration Monte Carlo simulation results and write a\n"
+    "CONCISE risk-weighted return interpretation for the Financial Analysis\n"
+    "section. A structured percentile table + method box precede your\n"
+    "paragraph — do NOT repeat those numbers; interpret them.\n\n"
     "RULES:\n"
-    "- Exactly two paragraphs. No headers, no bullets, no tables.\n"
-    "- P1: Central tendency and distribution shape. Median IRR and EM. P10-P90 spread.\n"
-    "  Probability of exceeding target LP IRR. If bimodal: identify two clusters.\n"
-    "- P2: Dominant input variable and its R-squared. Bear case scenario in plain English.\n"
-    "  Whether the return profile is appropriately compensated for the risk level.\n"
-    "- Tone: Precise, confident, analytical. No hedging language.\n"
-    "- Do not define Monte Carlo. Do not repeat numbers in the adjacent table. Interpret.\n"
-    "- Length: 120–180 words per paragraph. Output plain text only."
+    "- Exactly ONE paragraph, 60–90 words total. No headers, no bullets.\n"
+    "- Cover three things in order: (1) is the median outcome acceptable\n"
+    "  versus the target, (2) what the P10→P90 spread implies about risk,\n"
+    "  (3) which input variable dominates and what diligence item it\n"
+    "  implies. End with a single-sentence verdict on risk-adjusted\n"
+    "  attractiveness.\n"
+    "- Tone: precise, confident, analytical. No hedging language. No\n"
+    "  definition of Monte Carlo. Do not restate percentile numbers.\n"
+    "- Output plain text only."
 )
 
 _USER_5A = (
@@ -2115,53 +2301,68 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
     gba = a.gba_sf or (deal.parcel_data.building_sf if deal.parcel_data else None)
 
     # ── Public-data tax & insurance estimates (all asset types) ─────────
-    # Priority: assessed-value × local effective tax rate is always the
-    # authoritative number; user-entered re_taxes is preserved as a prior
-    # estimate for audit but overridden when the public-data value is
-    # available. Same logic for insurance (TIV × rate × catastrophe loading).
+    # Precedence: T-12 extraction > public-data estimator > user input.
+    # Only apply the estimator when the current value did NOT come from
+    # extraction (provenance tag `t12:…` set by deal_data._backfill_expenses).
+    # Uploaded operating statements reflect real billed amounts — the
+    # public-data TIV × rate estimate is a scaffold for deals without a
+    # T-12, never an override of extracted truth.
+    _prov = getattr(deal.provenance, "field_sources", None) or {}
     try:
         from expense_pricing import (
             estimate_property_taxes,
             estimate_property_insurance,
         )
-        _tax_est = estimate_property_taxes(deal)
-        if _tax_est:
-            _tax_val, _tax_src = _tax_est
-            _prior = a.re_taxes
-            a.re_taxes = _tax_val
-            if _prior and _prior not in (0.0, _tax_val):
-                logger.info(
-                    "PUBLIC DATA: re_taxes user=$%s → overridden to $%s (%s)",
-                    f"{_prior:,.0f}", f"{_tax_val:,.0f}", _tax_src,
-                )
-            else:
-                logger.info(
-                    "PUBLIC DATA: re_taxes ← $%s (%s)",
-                    f"{_tax_val:,.0f}", _tax_src,
-                )
+        _tax_from_t12 = str(_prov.get("re_taxes", "") or "").startswith("t12:")
+        if _tax_from_t12:
+            logger.info("PUBLIC DATA: re_taxes held at $%s from extraction "
+                        "(T-12 line) — estimator skipped",
+                        f"{a.re_taxes:,.0f}")
         else:
-            logger.info("PUBLIC DATA: no basis to estimate re_taxes "
-                        "(no parcel assessed value or purchase price); "
-                        "user-entered value retained")
+            _tax_est = estimate_property_taxes(deal)
+            if _tax_est:
+                _tax_val, _tax_src = _tax_est
+                _prior = a.re_taxes
+                a.re_taxes = _tax_val
+                if _prior and _prior not in (0.0, _tax_val):
+                    logger.info(
+                        "PUBLIC DATA: re_taxes user=$%s → overridden to $%s (%s)",
+                        f"{_prior:,.0f}", f"{_tax_val:,.0f}", _tax_src,
+                    )
+                else:
+                    logger.info(
+                        "PUBLIC DATA: re_taxes ← $%s (%s)",
+                        f"{_tax_val:,.0f}", _tax_src,
+                    )
+            else:
+                logger.info("PUBLIC DATA: no basis to estimate re_taxes "
+                            "(no parcel assessed value or purchase price); "
+                            "user-entered value retained")
 
-        _ins_est = estimate_property_insurance(deal)
-        if _ins_est:
-            _ins_val, _ins_src = _ins_est
-            _prior_ins = a.insurance
-            a.insurance = _ins_val
-            if _prior_ins and _prior_ins not in (0.0, _ins_val):
-                logger.info(
-                    "PUBLIC DATA: insurance user=$%s → overridden to $%s (%s)",
-                    f"{_prior_ins:,.0f}", f"{_ins_val:,.0f}", _ins_src,
-                )
-            else:
-                logger.info(
-                    "PUBLIC DATA: insurance ← $%s (%s)",
-                    f"{_ins_val:,.0f}", _ins_src,
-                )
+        _ins_from_t12 = str(_prov.get("insurance", "") or "").startswith("t12:")
+        if _ins_from_t12:
+            logger.info("PUBLIC DATA: insurance held at $%s from extraction "
+                        "(T-12 line) — estimator skipped",
+                        f"{a.insurance:,.0f}")
         else:
-            logger.info("PUBLIC DATA: no GBA — cannot estimate insurance; "
-                        "user-entered value retained")
+            _ins_est = estimate_property_insurance(deal)
+            if _ins_est:
+                _ins_val, _ins_src = _ins_est
+                _prior_ins = a.insurance
+                a.insurance = _ins_val
+                if _prior_ins and _prior_ins not in (0.0, _ins_val):
+                    logger.info(
+                        "PUBLIC DATA: insurance user=$%s → overridden to $%s (%s)",
+                        f"{_prior_ins:,.0f}", f"{_ins_val:,.0f}", _ins_src,
+                    )
+                else:
+                    logger.info(
+                        "PUBLIC DATA: insurance ← $%s (%s)",
+                        f"{_ins_val:,.0f}", _ins_src,
+                    )
+            else:
+                logger.info("PUBLIC DATA: no GBA — cannot estimate insurance; "
+                            "user-entered value retained")
     except Exception as exc:
         logger.warning("PUBLIC DATA estimator failed (non-fatal): %s", exc)
 
@@ -2447,11 +2648,17 @@ def run_financials(deal: DealData) -> DealData:
             else:
                 logger.warning("Monte Carlo produced no valid results -- skipping Prompt 5A")
 
-            # Purchase-price solver — find the price that achieves a median
-            # LP IRR of 15% across the same MC input distributions.
+            # Purchase-price solver — binds to the user's selected Go/No-Go
+            # hurdle metric (Project IRR / LP IRR / Stabilized Cap Rate /
+            # Stabilized CoC). The hurdle_value is stored as a decimal on
+            # assumptions (e.g. 0.15 = 15%).
             try:
-                fo.price_solver_results = solve_purchase_price_for_lp_irr(
-                    deal, insurance, target_lp_irr=0.15
+                _metric = (getattr(deal.assumptions, "hurdle_metric", None)
+                           or "lp_irr")
+                _target = (getattr(deal.assumptions, "hurdle_value", None)
+                           or 0.15)
+                fo.price_solver_results = solve_purchase_price_for_hurdle(
+                    deal, insurance, metric=_metric, target=_target,
                 )
             except Exception as exc:
                 logger.warning("Price solver failed (non-fatal): %s", exc)

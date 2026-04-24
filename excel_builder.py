@@ -376,6 +376,34 @@ def _populate_rent_roll(ws, deal: DealData) -> None:
     residential_units = [u for u in units if _classify_unit(u) == "residential"]
     commercial_units  = [u for u in units if _classify_unit(u) == "commercial"]
 
+    # Drop empty commercial placeholders (no tenant_name AND no SF AND
+    # no rent) when residential units exist. This happens when an OM
+    # extractor tags a footer row or a rendering artifact as a
+    # commercial unit — if we keep it, the commercial populator's
+    # "all_empty" branch triggers the whole-building GPR fallback,
+    # which double-counts the residential rent against gba.
+    if residential_units and commercial_units:
+        def _is_placeholder_commercial(u: dict) -> bool:
+            if not isinstance(u, dict):
+                return True
+            has_any = any(
+                u.get(k) for k in (
+                    "tenant_name", "sf", "monthly_rent",
+                    "annual_rent_per_sf", "rent_per_sf_yr",
+                )
+            )
+            return not has_any
+        real_commercial = [u for u in commercial_units
+                           if not _is_placeholder_commercial(u)]
+        dropped = len(commercial_units) - len(real_commercial)
+        if dropped:
+            logger.info(
+                "EXCEL Rent Roll: dropped %d empty commercial placeholder(s) "
+                "from a mixed-use unit_mix (residential covers GPR)",
+                dropped,
+            )
+        commercial_units = real_commercial
+
     # No classified units → fall back to asset-type hint so the summary
     # row in the residential populator (gross_potential_rent ÷ num_units)
     # still fires when extraction produced nothing.
@@ -503,8 +531,21 @@ def _populate_rent_roll_commercial(ws, units: list, deal: DealData) -> None:
 
     gpr = getattr(deal.financial_outputs, "gross_potential_rent", None) or 0
 
+    # ── Guard: skip whole-building GPR fallback for mixed-use ────
+    # fo.gross_potential_rent already includes the residential share,
+    # and deal.assumptions.gba_sf is the combined residential +
+    # commercial footprint. Writing gpr / gba into the commercial
+    # section when residential rows are populated double-counts both
+    # rent AND space — exactly the bug the user reported. Only allow
+    # the GPR fallback for pure-commercial deals (no residential unit
+    # mix present).
+    ext = deal.extracted_docs
+    _has_residential = bool(ext and ext.unit_mix and any(
+        _classify_unit(u) == "residential" for u in ext.unit_mix
+    ))
+
     # ── GPR fallback: if no tenant data but GPR exists, write it ─
-    if all_empty and gpr > 0:
+    if all_empty and gpr > 0 and not _has_residential:
         gba = deal.assumptions.gba_sf
         if not gba or gba <= 0:
             gba = 18000
@@ -539,7 +580,17 @@ def _populate_rent_roll_commercial(ws, units: list, deal: DealData) -> None:
     for i, row in enumerate(range(_COM_START, _COM_END + 1)):
         if i < len(commercial_units):
             t = commercial_units[i]
-            ws[f"B{row}"] = t.get("tenant_name")
+            # Tenant name fallback: extractor often leaves tenant_name
+            # null when the OM describes the space generically (e.g.
+            # "Ground-floor retail, 800 SF"). Use the suite or a
+            # unit-type label so column B never renders blank.
+            _tenant = (
+                t.get("tenant_name")
+                or (f"{t.get('unit_type') or 'Commercial'} Tenant"
+                    + (f" ({t.get('unit_id') or t.get('suite')})"
+                       if (t.get('unit_id') or t.get('suite')) else ""))
+            )
+            ws[f"B{row}"] = _tenant
             ws[f"C{row}"] = t.get("unit_id") or t.get("suite")
             ws[f"D{row}"] = t.get("sf") or 0
             # Derive annual rent/SF: prefer explicit, else compute from monthly_rent
@@ -843,8 +894,18 @@ def _section_uses(a, fo=None) -> CellMap:
         # Hard Costs
         ("C63", a.stormwater),
         ("C64", a.demo),
-        ("C65", a.const_hard),
-        ("C66", a.const_reserve),
+        # Construction hard cost: user enters $/SF on the frontend. Write
+        # the PSF rate to D65 (user-editable) and the total in C65 as an
+        # Excel formula that multiplies by GBA (C10). If the user later
+        # edits GBA or the PSF rate in Excel, the total recomputes live.
+        # Fall back to the Python-computed dollar total when the PSF is
+        # not populated (e.g. legacy saved deals).
+        ("D65", a.const_hard_psf),
+        ("E65", "$/SF × GBA"),
+        ("C65", (f"=D65*C10" if a.const_hard_psf else a.const_hard)),
+        ("D66", a.const_reserve_psf),
+        ("E66", "$/SF × GBA"),
+        ("C66", (f"=D66*C10" if a.const_reserve_psf else a.const_reserve)),
         ("C67", a.gc_overhead),
     ]
 
@@ -954,9 +1015,13 @@ def _populate_refi_balances(ws, deal: DealData) -> None:
 
 
 def _populate_constr_interest_tab(ws, deal: DealData) -> None:
-    """
-    Populate the 'Constr Interest' sheet with the monthly S-curve draw
+    """Populate the 'Constr Interest' sheet with the monthly S-curve draw
     schedule and summary stats computed by financials.py.
+
+    Styling mirrors the template's house typography: Century Gothic at
+    all levels, with the palette used on Returns Summary / Pro Forma /
+    S&U — walnut (#2C1F14), sage-deep (#4A6E50), sage-light (#B2C9B4),
+    parchment (#F5EFE4), earth (#8B7355).
     """
     fo = deal.financial_outputs
     a  = deal.assumptions
@@ -964,102 +1029,152 @@ def _populate_constr_interest_tab(ws, deal: DealData) -> None:
     schedule = getattr(fo, 'construction_interest_schedule', []) or []
     carry    = getattr(fo, 'construction_interest_carry', 0.0) or 0.0
 
-    # ── Summary header block (rows 2–11) ────────────────────────────
-    ws["B2"] = "CONSTRUCTION LOAN INTEREST SCHEDULE"
-    ws["B3"] = "S-curve draw model — interest accrues on drawn balance only"
-
-    ws["B5"] = "Acquisition Loan Amount"
-    ws["C5"] = getattr(fo, 'initial_loan_amount', 0.0) or 0.0
-
-    ws["B6"] = "Construction Period (Months)"
-    ws["C6"] = getattr(a, 'const_period_months', 0) or 0
-
-    ws["B7"] = "Permit / Mobilization Lag (Months)"
-    ws["C7"] = getattr(a, 'draw_start_lag', 1)
-
-    ws["B8"] = "Annual Interest Rate"
-    ws["C8"] = getattr(a, 'interest_rate', 0.0) or 0.0
-
-    hard_total = (getattr(a, 'const_hard', 0.0) or 0.0) + \
-                 (getattr(a, 'const_reserve', 0.0) or 0.0)
-    tpc = getattr(fo, 'total_project_cost', 0.0) or 0.0
-    ws["B9"]  = "Hard Cost Share (% of Total Project Cost)"
-    ws["C9"]  = round(hard_total / tpc, 4) if tpc > 0 else 0.0
-
-    ws["B10"] = "Total Construction Interest Carry"
-    ws["C10"] = carry
-
-    # ── Column headers (row 13) ──────────────────────────────────────
-    HDR_ROW = 13
-    headers = [
-        "Month",
-        "Monthly Draw ($)",
-        "Cumulative Draw %",
-        "Outstanding Balance ($)",
-        "Monthly Interest ($)",
-    ]
-    for col_offset, h in enumerate(headers):
-        ws.cell(row=HDR_ROW, column=2 + col_offset, value=h)
-
-    # ── DealDesk styling — dark walnut headers, parchment alternating data ──
     from openpyxl.styles import Alignment, Border, Side
-    walnut_fill  = PatternFill(start_color="2C1F14", end_color="2C1F14", fill_type="solid")
-    walnut_font  = Font(color="FFFFFF", bold=True, size=11)
-    parch_fill   = PatternFill(start_color="F5EFE4", end_color="F5EFE4", fill_type="solid")
-    dark_font    = Font(color="2C1F14", size=10)
-    thin_side    = Side(border_style="thin", color="2C1F14")
-    thin_border  = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-    center_align = Alignment(horizontal="center", vertical="center")
 
-    # Column widths
-    for col_letter, width in [("B", 10), ("C", 18), ("D", 18), ("E", 20), ("F", 18)]:
+    # Palette — RGB hex values pulled from the template Returns Summary
+    # / S&U / Pro Forma tab cells (font color + fill inspection).
+    CLR_WALNUT       = "2C1F14"
+    CLR_SAGE_DEEP    = "4A6E50"
+    CLR_SAGE_LIGHT   = "B2C9B4"
+    CLR_PARCHMENT    = "F5EFE4"
+    CLR_EARTH        = "8B7355"
+    CLR_WHITE        = "FFFFFF"
+
+    # Font helpers — Century Gothic everywhere, matching the template.
+    def F(size, bold=False, color=CLR_WALNUT, italic=False):
+        return Font(name="Century Gothic", size=size, bold=bold, color=color, italic=italic)
+
+    fill_walnut    = PatternFill("solid", fgColor=CLR_WALNUT)
+    fill_sage_lt   = PatternFill("solid", fgColor=CLR_SAGE_LIGHT)
+    fill_parch     = PatternFill("solid", fgColor=CLR_PARCHMENT)
+    fill_white     = PatternFill("solid", fgColor=CLR_WHITE)
+
+    _side_rule     = Side(border_style="thin", color=CLR_SAGE_LIGHT)
+    border_table   = Border(left=_side_rule, right=_side_rule,
+                            top=_side_rule, bottom=_side_rule)
+
+    align_center   = Alignment(horizontal="center", vertical="center")
+    align_right    = Alignment(horizontal="right", vertical="center")
+    align_left     = Alignment(horizontal="left",  vertical="center", indent=1)
+
+    # ── Column widths — tab has 5 data cols in B..F plus an A gutter ──
+    ws.column_dimensions["A"].width = 4
+    for col_letter, width in [("B", 12), ("C", 20), ("D", 20), ("E", 22), ("F", 20)]:
         ws.column_dimensions[col_letter].width = width
 
-    # Section title (row 2)
-    ws["B2"].font = Font(color="2C1F14", bold=True, size=14)
+    # ── A1 tab title bar (full width, sage-light bg) ──────────────────
+    ws.merge_cells("A1:F1")
+    ws["A1"] = "CONSTRUCTION LOAN INTEREST SCHEDULE"
+    ws["A1"].font = F(16, bold=True, color=CLR_WALNUT)
+    ws["A1"].fill = fill_sage_lt
+    ws["A1"].alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 28
 
-    # Header row styling
-    ws.row_dimensions[HDR_ROW].height = 28
-    for col_offset in range(len(headers)):
-        c = ws.cell(row=HDR_ROW, column=2 + col_offset)
-        c.fill = walnut_fill
-        c.font = walnut_font
-        c.alignment = center_align
-        c.border = thin_border
+    ws.merge_cells("A2:F2")
+    ws["A2"] = "S-curve draw model — interest accrues on drawn balance only"
+    ws["A2"].font = F(9, color=CLR_EARTH, italic=True)
+    ws["A2"].fill = fill_parch
+    ws["A2"].alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[2].height = 18
 
-    # ── Data rows ────────────────────────────────────────────────────
+    # ── Summary block (rows 4–9) — two-column label/value on parchment ──
+    SUMMARY = [
+        ("Acquisition Loan Amount",               getattr(fo, 'initial_loan_amount', 0.0) or 0.0,         "$#,##0"),
+        ("Construction Period (Months)",          getattr(a,  'const_period_months', 0)  or 0,            "0"),
+        ("Permit / Mobilization Lag (Months)",    getattr(a,  'draw_start_lag', 1),                       "0"),
+        ("Annual Interest Rate",                  getattr(a,  'interest_rate', 0.0) or 0.0,               "0.00%"),
+    ]
+    # Hard cost share (computed)
+    hard_total = (getattr(a, 'const_hard', 0.0) or 0.0) + (getattr(a, 'const_reserve', 0.0) or 0.0)
+    tpc = getattr(fo, 'total_project_cost', 0.0) or 0.0
+    SUMMARY.append(
+        ("Hard Cost Share (% of Total Project Cost)",
+         round(hard_total / tpc, 4) if tpc > 0 else 0.0,
+         "0.00%")
+    )
+    SUMMARY.append(
+        ("Total Construction Interest Carry", carry, "$#,##0.00")
+    )
+
+    for i, (label, value, num_fmt) in enumerate(SUMMARY):
+        r = 4 + i
+        ws.cell(row=r, column=2, value=label)
+        ws.cell(row=r, column=3, value=value)
+        lbl = ws.cell(row=r, column=2)
+        val = ws.cell(row=r, column=3)
+        lbl.font = F(10, color=CLR_WALNUT)
+        lbl.fill = fill_parch
+        lbl.alignment = align_left
+        lbl.border = border_table
+        val.font = F(10, bold=True, color=CLR_SAGE_DEEP)
+        val.fill = fill_white
+        val.alignment = align_right
+        val.border = border_table
+        val.number_format = num_fmt
+        # Merge the trailing columns so the summary block reads clean
+        # across the full width, mirroring the Returns Summary layout.
+        ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=6)
+        trailing = ws.cell(row=r, column=4)
+        trailing.fill = fill_white
+        trailing.border = border_table
+        ws.row_dimensions[r].height = 20
+
+    # ── Schedule table header (row 12) ────────────────────────────────
+    HDR_ROW = 12
+    headers = [
+        ("Month",                 "0"),
+        ("Monthly Draw ($)",       "$#,##0"),
+        ("Cumulative Draw %",      "0.0%"),
+        ("Outstanding Balance ($)","$#,##0"),
+        ("Monthly Interest ($)",   "$#,##0.00"),
+    ]
+    ws.row_dimensions[HDR_ROW].height = 26
+    for col_offset, (h, _nf) in enumerate(headers):
+        c = ws.cell(row=HDR_ROW, column=2 + col_offset, value=h)
+        c.fill = fill_walnut
+        c.font = F(9, bold=True, color=CLR_WHITE)
+        c.alignment = align_center
+        c.border = border_table
+
+    # ── Data rows ─────────────────────────────────────────────────────
     if not schedule:
-        ws.cell(row=HDR_ROW + 1, column=2,
-                value="No construction period — interest carry = $0")
+        ws.merge_cells(start_row=HDR_ROW + 1, start_column=2,
+                       end_row=HDR_ROW + 1, end_column=6)
+        note = ws.cell(
+            row=HDR_ROW + 1, column=2,
+            value="No construction period — interest carry = $0",
+        )
+        note.font = F(10, italic=True, color=CLR_EARTH)
+        note.alignment = Alignment(horizontal="center", vertical="center")
+        note.fill = fill_parch
     else:
+        keys = ["month", "monthly_draw", "cumulative_draw_pct",
+                "outstanding_balance", "monthly_interest"]
         for i, entry in enumerate(schedule):
             r = HDR_ROW + 1 + i
-            ws.cell(row=r, column=2, value=entry.get("month"))
-            ws.cell(row=r, column=3, value=entry.get("monthly_draw"))
-            ws.cell(row=r, column=4, value=entry.get("cumulative_draw_pct"))
-            ws.cell(row=r, column=5, value=entry.get("outstanding_balance"))
-            ws.cell(row=r, column=6, value=entry.get("monthly_interest"))
-            # Parchment on alternate rows; white elsewhere. Both get dark text,
-            # centered alignment, thin border.
-            row_fill = parch_fill if i % 2 == 0 else None
-            for col_offset in range(5):
-                c = ws.cell(row=r, column=2 + col_offset)
-                if row_fill is not None:
-                    c.fill = row_fill
-                c.font = dark_font
-                c.alignment = center_align
-                c.border = thin_border
+            row_fill = fill_parch if i % 2 == 0 else fill_white
+            for col_offset, (key, nf) in enumerate(zip(keys, [h[1] for h in headers])):
+                c = ws.cell(row=r, column=2 + col_offset, value=entry.get(key))
+                c.font = F(10, color=CLR_WALNUT)
+                c.alignment = align_center if col_offset == 0 else align_right
+                c.border = border_table
+                c.fill = row_fill
+                c.number_format = nf
 
-        # Totals row
+        # Totals row — walnut header treatment matching table header style.
         total_row = HDR_ROW + 1 + len(schedule)
         ws.cell(row=total_row, column=2, value="TOTAL")
+        # Leave cols C-E blank but styled; put carry in F (Monthly Interest col)
         ws.cell(row=total_row, column=6, value=carry)
-        for col_offset in range(5):
+        for col_offset, (_h, nf) in enumerate(headers):
             c = ws.cell(row=total_row, column=2 + col_offset)
-            c.fill = walnut_fill
-            c.font = walnut_font
-            c.alignment = center_align
-            c.border = thin_border
+            c.fill = fill_walnut
+            c.font = F(10, bold=True, color=CLR_WHITE)
+            c.alignment = align_center if col_offset == 0 else align_right
+            c.border = border_table
+            if col_offset == 4:
+                c.number_format = nf
+        ws.row_dimensions[total_row].height = 22
 
     logger.info(
         "CONSTR INTEREST TAB: wrote %d schedule rows, total_carry=%s",
@@ -1390,7 +1505,10 @@ def _section_dev_period(a) -> CellMap:
     return [
         ("C172", a.const_period_months),
         ("C173", a.const_loan_rate),
-        ("C174", a.const_hard),
+        # Development-period hard cost — keyed to the same PSF × GBA logic
+        # as C65 above. Uses a direct reference to C65 so both cells stay
+        # in sync when the user edits PSF or GBA in Excel.
+        ("C174", ("=C65" if a.const_hard_psf else a.const_hard)),
         # draw_start_lag exposed on the 'Constr Interest' tab (no row in template)
         # C175 = Construction Budget Soft Costs (no single model field)
         # C176 = Total Construction Budget (formula)

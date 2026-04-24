@@ -119,8 +119,14 @@ ELEVATION_API_URL = "https://maps.googleapis.com/maps/api/elevation/json"
 PLACES_RADIUS_METERS = 1609
 
 # ── POI categories for neighborhood context enrichment ─────────────────
+# Slugs use the Places API (New) v1 table
+# (https://developers.google.com/maps/documentation/places/web-service/place-types).
+# `grocery_or_supermarket` from the legacy API was split into
+# `grocery_store` + `supermarket` and returns 400 Bad Request on the new
+# endpoint — do NOT revert without verifying upstream.
 POI_TYPES = [
-    "grocery_or_supermarket",
+    "supermarket",
+    "grocery_store",
     "transit_station",
     "subway_station",
     "bus_station",

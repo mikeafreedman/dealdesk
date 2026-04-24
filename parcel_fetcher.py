@@ -46,6 +46,12 @@ _DC_PROPERTY_URL = (
     "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/"
     "Property_and_Land_WebMercator/MapServer/56/query"
 )
+# Dedicated DC zoning layer — polygon spatial join against the subject
+# coordinates returns the zoning district (e.g. "RF-1", "MU-3A").
+_DC_ZONING_URL = (
+    "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/"
+    "Planning_Landuse_and_Zoning_WebMercator/MapServer/3/query"
+)
 
 # NYC ACRIS — three linked Socrata datasets on data.cityofnewyork.us.
 # Joined by document_id: Legals (address → docs) → Master (doc metadata) →
@@ -446,48 +452,157 @@ def _fetch_phl_deed_history(pd_obj: ParcelData, parcel_number: str,
 
 
 def _fetch_dc_dcgis(deal: DealData, pd_obj: ParcelData, addr) -> None:
-    """DC Office of Tax & Revenue via DCGIS REST API."""
-    street_number, _ = _split_street(addr.street)
-    parcel_search = f"{street_number}%" if street_number else "%"
-    params = {
-        "where": f"SSL LIKE '{parcel_search}'",
-        "outFields": "*",
-        "f": "json",
-    }
-    try:
-        resp = requests.get(_DC_PROPERTY_URL, params=params, timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        features = resp.json().get("features", [])
-    except Exception as exc:
-        logger.warning("PROPERTY RECORDS (DC) failed: %s", exc)
+    """DC Office of Tax & Revenue via DCGIS REST API (layer 56 = ITSPE FACTS).
+
+    Search strategy: DC's SSL (Square/Suffix/Lot) doesn't encode the
+    street number, so the prior `SSL LIKE '1027%'` approach matched by
+    coincidence when the SQUARE number happened to equal the house
+    number. Search by PROPERTY_ADDRESS instead — DCGIS stores it as
+    'STREET_NUMBER STREET_NAME QUADRANT'. Normalize case and strip
+    punctuation to maximize match rate.
+
+    Zoning: joined in from a separate polygon layer (Zoning 2016) via
+    spatial query against the subject's lat/lon.
+    """
+    street_number, street_name = _split_street(addr.street)
+    if not street_number or not street_name:
+        logger.info("PROPERTY RECORDS (DC): missing street number/name — skipping")
         return
-    if not features:
-        logger.info("PROPERTY RECORDS (DC): no match for '%s'", parcel_search)
+
+    # Build address-match patterns. DCGIS stores PROPERTY_ADDRESS uppercase
+    # with the quadrant suffix (NE/NW/SE/SW) at the end. Example:
+    # "1027 16TH ST NE". Haiku-normalized user input might drop periods
+    # or mix case, so build 2 patterns and try each.
+    import re as _re
+    _street_up = _re.sub(r"[^A-Z0-9 ]", "", street_name.upper()).strip()
+    _tokens = [t for t in _street_up.split() if t]
+    # Use the distinctive street token (skip directionals at the head)
+    DIRECTIONALS = {"N", "S", "E", "W", "NE", "NW", "SE", "SW", "NORTH", "SOUTH", "EAST", "WEST"}
+    distinctive = next((t for t in _tokens if t not in DIRECTIONALS), "")
+
+    patterns = []
+    if distinctive:
+        patterns.append(f"{street_number} {distinctive}%")
+        patterns.append(f"%{street_number} %{distinctive}%")
+    patterns.append(f"{street_number}%")  # last-ditch fallback
+
+    attrs: dict = {}
+    parcel_number = ""
+    matched_pattern = None
+    for pat in patterns:
+        params = {
+            "where": f"PROPERTY_ADDRESS LIKE '{pat}'",
+            "outFields": "*",
+            "f": "json",
+        }
+        try:
+            resp = requests.get(_DC_PROPERTY_URL, params=params, timeout=_REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            features = resp.json().get("features", [])
+        except Exception as exc:
+            logger.warning("PROPERTY RECORDS (DC) query failed for %r: %s", pat, exc)
+            continue
+        if features:
+            attrs = features[0].get("attributes", {}) or {}
+            parcel_number = attrs.get("SSL") or ""
+            matched_pattern = pat
+            logger.info("PROPERTY RECORDS (DC): matched PROPERTY_ADDRESS LIKE '%s' "
+                        "→ %d row(s)", pat, len(features))
+            break
+
+    if not attrs:
+        logger.info("PROPERTY RECORDS (DC): no address match for %s %s",
+                    street_number, street_name)
         return
-    attrs = features[0].get("attributes", {}) or {}
-    parcel_number = attrs.get("SSL") or ""
-    owner = attrs.get("OWNERNAME") or ""
-    zoning = attrs.get("ZONING") or ""
-    market_value = _safe_float(attrs.get("ASSESSMENT") or attrs.get("TOTVAL"))
+
+    # Field mapping for layer 56 (ITSPE FACTS). These are the actual
+    # column names returned by the DCGIS REST endpoint — NOT the Esri
+    # legacy names from other states' assessment services.
+    owner = attrs.get("OWNER_NAME_PRIMARY") or attrs.get("CAREOF_NAME") or ""
+    # Current appraised value = land + building. Fall back to prior-year
+    # total when the current split isn't populated.
+    _land = _safe_float(attrs.get("APPRAISED_VALUE_CURRENT_LAND") or 0)
+    _bldg = _safe_float(attrs.get("APPRAISED_VALUE_CURRENT_BLDG") or 0)
+    market_value: Optional[float] = None
+    if (_land or 0) or (_bldg or 0):
+        market_value = (_land or 0) + (_bldg or 0)
+    else:
+        market_value = _safe_float(attrs.get("APPRAISED_VALUE_PRIOR_TOTAL"))
+
     pd_obj.parcel_id = parcel_number or pd_obj.parcel_id
     pd_obj.owner_name = owner or pd_obj.owner_name
-    pd_obj.zoning_code = zoning or pd_obj.zoning_code
     pd_obj.assessed_value = market_value if market_value is not None else pd_obj.assessed_value
-    # Most-recent sale fields — DCGIS commonly exposes SALEDATE / SALEPRICE.
+
+    # Owner mailing address — useful for title history / LLC lookup.
+    _mail_lines = [
+        attrs.get("OWNER_ADDRESS_LINE1"),
+        attrs.get("OWNER_ADDRESS_LINE2"),
+        attrs.get("OWNER_ADDRESS_CITYSTZIP"),
+    ]
+    _mail_full = " / ".join(x for x in _mail_lines if x)
+    if _mail_full and not pd_obj.taxpayer_mailing_address:
+        pd_obj.taxpayer_mailing_address = _mail_full
+
+    # Lot area (OTR reports parcel land area in SF as LANDAREA). The
+    # ParcelData field is `lot_area_sf`, not `lot_sf`.
+    _landarea = _safe_float(attrs.get("LANDAREA") or 0)
+    if _landarea and _landarea > 0 and not pd_obj.lot_area_sf:
+        pd_obj.lot_area_sf = _landarea
+
+    # Most-recent sale fields — layer 56 exposes LAST_SALE_PRICE + LAST_SALE_DATE.
     sale_date = _coerce_arcgis_date(
-        attrs.get("SALEDATE") or attrs.get("SALE_DATE") or attrs.get("LASTSALEDATE")
+        attrs.get("LAST_SALE_DATE") or attrs.get("DEED_DATE")
+        or attrs.get("SALEDATE") or attrs.get("SALE_DATE")
     )
-    sale_price = _safe_float(attrs.get("SALEPRICE") or attrs.get("SALE_PRICE") or attrs.get("LASTSALEPRICE"))
+    sale_price = _safe_float(
+        attrs.get("LAST_SALE_PRICE") or attrs.get("SALEPRICE")
+        or attrs.get("SALE_PRICE")
+    )
     if sale_date:
         pd_obj.last_sale_date = sale_date
     if sale_price is not None:
         pd_obj.last_sale_price = sale_price
-    if zoning and not deal.zoning.zoning_code:
-        deal.zoning.zoning_code = zoning
-    # Reuse the ArcGIS multi-sale scanner — DCGIS attribute dicts follow the
-    # same Esri schema, so SALEDATE1/2/3 columns (if present) get picked up.
+
+    # Homestead flag (OTR populates HOMESTEAD_DESCRIPTION with e.g.
+    # "Homestead" / "Senior" / null).
+    _hs = attrs.get("HOMESTEAD_DESCRIPTION")
+    if _hs:
+        pd_obj.homestead_status = str(_hs)
+
+    # ── Zoning via spatial join against Zoning 2016 layer ──────────
+    _lat = getattr(deal.address, "latitude", None)
+    _lon = getattr(deal.address, "longitude", None)
+    zoning = ""
+    if _lat is not None and _lon is not None:
+        try:
+            zparams = {
+                "geometry": f"{_lon},{_lat}",
+                "geometryType": "esriGeometryPoint",
+                "inSR": "4326",
+                "spatialRel": "esriSpatialRelIntersects",
+                "outFields": "ZONING,ZONING_LABEL,ZONE_DISTRICT,ZONE_DESCRIPTION",
+                "returnGeometry": "false",
+                "f": "json",
+            }
+            zr = requests.get(_DC_ZONING_URL, params=zparams, timeout=_REQUEST_TIMEOUT)
+            zr.raise_for_status()
+            zfeats = zr.json().get("features", []) or []
+            if zfeats:
+                zattrs = zfeats[0].get("attributes", {}) or {}
+                zoning = (zattrs.get("ZONING")
+                          or zattrs.get("ZONING_LABEL") or "")
+                _zdist = zattrs.get("ZONE_DISTRICT") or ""
+                if zoning:
+                    pd_obj.zoning_code = zoning
+                    deal.zoning.zoning_code = zoning
+                    if _zdist and not deal.zoning.zoning_district:
+                        deal.zoning.zoning_district = _zdist
+                    logger.info("DC ZONING: spatial join → zoning=%s district=%s",
+                                zoning, _zdist)
+        except Exception as exc:
+            logger.warning("DC ZONING spatial join failed: %s", exc)
+
     _extract_arcgis_multi_sale_deeds(attrs, pd_obj)
-    # Derive ownership_entity_type + years_owned
     _derive_owner_metadata(pd_obj)
     deal.provenance.field_sources["property_records"] = "dc_dcgis"
     logger.info(
@@ -1923,6 +2038,111 @@ _PLATFORM_SCRAPERS = {
 }
 
 
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+
+def _playwright_fetch_worker(
+    url: str,
+    content_marker: str,
+    timeout_ms: int,
+) -> Optional[str]:
+    """Worker that runs in a dedicated thread so sync_playwright() sees
+    no ambient asyncio event loop. Do not call directly — use
+    _fetch_rendered_text_playwright()."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning("Playwright not installed — skipping browser-rendered fetch for %s", url)
+        return None
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            ctx = browser.new_context(
+                user_agent=_BROWSER_HEADERS["User-Agent"],
+                viewport={"width": 1280, "height": 800},
+                locale="en-US",
+            )
+            page = ctx.new_page()
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                if content_marker:
+                    try:
+                        page.wait_for_function(
+                            "marker => (document.body.innerText || '').includes(marker)",
+                            arg=content_marker,
+                            timeout=timeout_ms,
+                        )
+                    except Exception as _we:
+                        logger.info(
+                            "Playwright content-marker wait timed out for '%s' "
+                            "(marker=%r): %s — returning whatever loaded",
+                            url, content_marker, _we,
+                        )
+                else:
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                    except Exception:
+                        pass
+                text = page.evaluate("() => document.body.innerText || ''")
+            finally:
+                browser.close()
+        return text or None
+    except Exception as exc:
+        logger.warning("Playwright browser fetch failed (%s): %s", url, exc)
+        return None
+
+
+def _fetch_rendered_text_playwright(
+    url: str,
+    content_marker: str = "",
+    timeout_ms: int = 60000,
+) -> Optional[str]:
+    """Render `url` in a headless Chromium via Playwright and return the
+    visible text of the document body (post-JS, post-hydration).
+
+    This path exists because amlegal (American Legal Publishing) sits
+    behind Cloudflare's JavaScript challenge AND its content is rendered
+    by a React SPA — the HTML returned by a bare GET contains no code
+    text.
+
+    Critical: sync_playwright() refuses to run inside an asyncio event
+    loop (raises "It looks like you are using Playwright Sync API
+    inside the asyncio loop"). Uvicorn request handlers run on an
+    asyncio loop, so we dispatch the sync Playwright call to a
+    dedicated thread via ThreadPoolExecutor, which has no ambient
+    event loop.
+    """
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_playwright_fetch_worker, url, content_marker, timeout_ms)
+        try:
+            # Give the worker a bit more than its internal timeout so
+            # cleanup + result marshalling can complete.
+            return future.result(timeout=(timeout_ms / 1000) + 10)
+        except concurrent.futures.TimeoutError:
+            logger.warning("Playwright worker timed out for %s", url)
+            return None
+
+
+# Platform → content marker that signals the SPA has hydrated with the
+# real zoning code text. These markers must appear in document.body.innerText
+# once the code HTML is in the DOM.
+_PLATFORM_CONTENT_MARKERS = {
+    "amlegal":   "§",   # every amlegal section header uses the § glyph
+    "municode":  "Sec.",
+    "ecode360":  "§",
+}
+
+
 def fetch_zoning_text(url: str, code_platform: Optional[str] = None,
                       max_chars: int = 12000) -> Optional[str]:
     """Fetch a zoning-chapter URL and return cleaned text for LLM extraction
@@ -1933,37 +2153,72 @@ def fetch_zoning_text(url: str, code_platform: Optional[str] = None,
         - "amlegal"   → amlegal scraper
         - "municode"  → municode scraper
         - anything else → generic HTML-strip fallback
+
+    Fetch strategy:
+      1. Plain `requests` with browser-like headers (fast path).
+      2. If that returns 403 / Cloudflare challenge HTML / too little text,
+         retry the fetch with a headless Chromium via Playwright so the
+         JS challenge can resolve.
     """
     if not url:
         return None
-    try:
-        # Browser-like UA: amlegal / municode / ecode360 all tend to 403 the
-        # identifying bot UA. Full Accept headers reduce the 403 rate further.
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        resp = requests.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        html = resp.text
-    except Exception as exc:
-        logger.warning("Zoning code scrape failed (%s): %s", url, exc)
-        return None
 
     platform_key = (code_platform or "").strip().lower()
-    scraper = _PLATFORM_SCRAPERS.get(platform_key, _scrape_generic)
+    text: Optional[str] = None
+
+    # Fast path: plain requests + platform HTML scraper.
     try:
-        text = scraper(html)
+        resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT)
+        status = resp.status_code
+        body = resp.text or ""
+        # Cloudflare's interstitial returns 403 (sometimes 200) with a
+        # "Just a moment..." body. Treat the interstitial marker as a
+        # cache-miss so the Playwright fallback takes over.
+        is_cf_challenge = (
+            "Just a moment..." in body[:2000]
+            or "challenge-platform" in body[:4000]
+            or "cf-browser-verification" in body[:4000]
+        )
+        if status == 200 and not is_cf_challenge:
+            scraper = _PLATFORM_SCRAPERS.get(platform_key, _scrape_generic)
+            try:
+                candidate = scraper(body)
+            except Exception as exc:
+                logger.warning("Zoning scraper (%s) failed, generic fallback: %s",
+                               platform_key or "generic", exc)
+                candidate = _scrape_generic(body)
+            # Sanity check: amlegal's React SPA ships an essentially empty
+            # <div id="react" class="react--loading"> on the wire; if we
+            # get <200 chars back, fall through to the Playwright render.
+            if candidate and len(candidate) >= 200:
+                text = candidate
+            else:
+                logger.info(
+                    "Zoning fast path returned too little text (%d chars) — "
+                    "falling through to Playwright render: %s",
+                    len(candidate) if candidate else 0, url,
+                )
+        else:
+            logger.info(
+                "Zoning fetch needs browser render (status=%s, cf_challenge=%s) — "
+                "retrying with Playwright: %s",
+                status, is_cf_challenge, url,
+            )
     except Exception as exc:
-        # Platform-specific scraper blew up (unexpected HTML) — fall back clean.
-        logger.warning("Zoning scraper (%s) failed, falling back: %s",
-                       platform_key or "generic", exc)
-        text = _scrape_generic(html)
+        logger.info("Zoning fetch (requests) failed — will retry with Playwright: %s: %s",
+                    url, exc)
+
+    # Fallback: Playwright — solves Cloudflare + waits for SPA hydration,
+    # then returns the body's rendered innerText directly (no HTML parse).
+    if text is None:
+        marker = _PLATFORM_CONTENT_MARKERS.get(platform_key, "")
+        rendered = _fetch_rendered_text_playwright(url, content_marker=marker)
+        if rendered and len(rendered) >= 200:
+            text = rendered
+            logger.info(
+                "Zoning fetch: Playwright returned %d chars of rendered text (platform=%s)",
+                len(rendered), platform_key or "generic",
+            )
 
     if not text or len(text) < 200:
         logger.warning("Zoning code scrape returned too little text (%d chars, platform=%s)",

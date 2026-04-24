@@ -773,16 +773,16 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         <div class="assum-card-body">
           <div class="assum-row-label" style="margin-bottom:10px;font-weight:600">Construction &amp; Renovation</div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Construction Budget &mdash; Hard Costs (S&amp;U)</div><div class="assum-row-desc">GC contract amount &mdash; recorded in Sources &amp; Uses hard costs.</div></div>
-            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_const_hard" value="0" oninput="markChanged()"><span class="field-note">GC contract amount &mdash; goes into Sources &amp; Uses</span></div>
+            <div><div class="assum-row-label">Construction Budget &mdash; Hard Costs (S&amp;U)</div><div class="assum-row-desc">GC contract rate on a per-SF basis. Multiplied by Gross Building Area to produce the total hard-cost line in Sources &amp; Uses.</div></div>
+            <div class="field"><label>Cost ($/SF)</label><input class="fi" type="text" id="a_const_hard" value="0" oninput="markChanged(); _updateConstTotal('a_const_hard', 'a_const_hard_total')"><span class="field-note" id="a_const_hard_total">Total: $0 (enter GBA + $/SF)</span></div>
           </div>
           <div class="assum-row">
             <div><div class="assum-row-label">Year-1 Renovation / CapEx (Pro Forma Below-the-Line)</div><div class="assum-row-desc">Annual CapEx charge in Year 1 of the Pro Forma. Separate from the S&amp;U construction budget.</div></div>
             <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_renovations_yr1" value="0" oninput="markChanged()"><span class="field-note">Pro Forma below-the-line item &mdash; NOT the S&amp;U construction budget</span></div>
           </div>
           <div class="assum-row">
-            <div><div class="assum-row-label">Construction Contingency Reserve</div><div class="assum-row-desc">Reserve for construction cost overruns. Recorded as a line item in Sources &amp; Uses.</div></div>
-            <div class="field"><label>Amount ($)</label><input class="fi" type="text" id="a_const_reserve" value="0" oninput="markChanged()"><span class="field-note">Typically 5–10% of hard costs</span></div>
+            <div><div class="assum-row-label">Construction Contingency Reserve</div><div class="assum-row-desc">Contingency rate on a per-SF basis. Multiplied by Gross Building Area to produce the reserve line in Sources &amp; Uses. Typically 5&ndash;10% of hard-cost PSF.</div></div>
+            <div class="field"><label>Cost ($/SF)</label><input class="fi" type="text" id="a_const_reserve" value="0" oninput="markChanged(); _updateConstTotal('a_const_reserve', 'a_const_reserve_total')"><span class="field-note" id="a_const_reserve_total">Total: $0 (enter GBA + $/SF)</span></div>
           </div>
           <div class="assum-row">
             <div><div class="assum-row-label">Construction Period (Months)</div><div class="assum-row-desc">Set to 0 for stabilized acquisitions. Drives carry cost calculation.</div></div>
@@ -837,7 +837,8 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
           <div class="fg3" style="margin-bottom:8px">
             <div class="field"><label>Exterminator ($)</label><input class="fi" type="number" id="a_exterminator" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
             <div class="field"><label>Cleaning / Maintenance ($)</label><input class="fi" type="number" id="a_cleaning" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
-            <div class="field"><label>Turnover ($)</label><input class="fi" type="number" id="a_turnover" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
+            <div class="field"><label>Turnover ($ per unit)</label><input class="fi" type="number" id="a_turnover" value="0" placeholder="0 = use $800/unit default" oninput="markChanged()"></div>
+            <div class="field"><label>Turnover Rate (%)</label><input class="fi" type="number" id="a_turnover_rate_pct" value="30" placeholder="% of units turning over per year" oninput="markChanged()"><span class="field-note">Applied to per-unit turnover cost × num_units to compute annual expense.</span></div>
           </div>
           <div class="fg3" style="margin-bottom:8px">
             <div class="field"><label>Advertising ($)</label><input class="fi" type="number" id="a_advertising" value="0" placeholder="0 = not applicable" oninput="markChanged()"></div>
@@ -1171,16 +1172,31 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
         <input type="text" id="f_reno_cost" value="0">
       </div>
 
-      <!-- DEFAULT REPORT SECTIONS -->
-      <div class="assum-section-label">Default Report Sections</div>
+      <!-- GO / NO-GO HURDLE -->
+      <div class="assum-section-label">Go / No-Go Hurdle</div>
 
       <div class="assum-card">
-        <div class="assum-card-head"><div class="assum-card-title">PDF Report Section Defaults</div><div class="assum-card-sub">Toggle which of the 22 sections are included in every generated PDF report by default</div></div>
+        <div class="assum-card-head"><div class="assum-card-title">Investment Decision Hurdle</div><div class="assum-card-sub">The single metric + target value that drives the Opinion of Value and Go / No-Go recommendation. The Monte Carlo price solver binds to this hurdle.</div></div>
         <div class="assum-card-body">
-          <div style="font-size:11.5px;color:var(--muted);margin-bottom:16px;line-height:1.5">
-            Sections toggled <strong>on</strong> are included in every report by default. Sections toggled <strong>off</strong> are excluded unless re-enabled per deal.
+          <div class="assum-row">
+            <div><div class="assum-row-label">Hurdle Metric</div><div class="assum-row-desc">Which return metric the deal must clear to be a Go. The price solver will value the property at the purchase price that produces the target value for this metric (median across 2,000 MC iterations).</div></div>
+            <div class="field"><label>Metric</label>
+              <select class="fi" id="a_hurdle_metric" onchange="markChanged(); _updateHurdleUnit()">
+                <option value="project_irr">Project IRR (Unlevered)</option>
+                <option value="lp_irr" selected>LP IRR (Levered, after promote)</option>
+                <option value="stab_cap_rate">Stabilized Cap Rate (Year 2 NOI &divide; Purchase Price)</option>
+                <option value="stab_coc">Stabilized Cash-on-Cash (Year 2 Cash Flow &divide; Equity)</option>
+              </select>
+              <span class="field-note" id="a_hurdle_unit_note">LP IRR target &mdash; entered as a percentage (e.g. 15 for 15%).</span>
+            </div>
           </div>
-          <!-- Section toggles removed — full report always generated -->
+          <div class="assum-row">
+            <div><div class="assum-row-label">Target Value</div><div class="assum-row-desc">Minimum acceptable value for the selected metric. The solver will back-solve the purchase price that meets this threshold across Monte Carlo iterations.</div></div>
+            <div class="field"><label id="a_hurdle_value_label">Target (%)</label>
+              <input class="fi" type="text" id="a_hurdle_value" value="15.00" oninput="markChanged()">
+              <span class="field-note">Decisions fire below this threshold. Solver binds exactly to this value.</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1289,7 +1305,7 @@ const DEFAULTS = {
   a_water_sewer:'0', a_electric:'0', a_license:'0', a_trash:'0',
   // §10 Variable expenses
   a_mgmt_fee:'0', a_salaries:'0', a_repairs:'0',
-  a_exterminator:'0', a_cleaning:'0', a_turnover:'0',
+  a_exterminator:'0', a_cleaning:'0', a_turnover:'0', a_turnover_rate_pct:'30',
   a_advertising:'0', a_landscape:'0', a_admin:'0',
   a_office:'0', a_misc_expense:'0',
   // §11 Below-the-line
@@ -1319,6 +1335,8 @@ const DEFAULTS = {
   a_min_em:'1.80', a_min_irr:'12.00', a_min_coc:'7.00', a_min_dscr:'1.25', a_min_cap:'5.50',
   // Target IRR (used in modal)
   a_target_irr:'15.00',
+  // Go / No-Go hurdle — metric + target value
+  a_hurdle_metric:'lp_irr', a_hurdle_value:'15.00',
   // §16 Notifications
   a_notify_email_enabled: false, a_notify_email_recipients:'',
 };
@@ -1408,6 +1426,11 @@ function _applyAssumptions(saved, ht, savedSec) {
     const el = document.getElementById('toggle_'+s.id);
     if(el) el.checked = savedSec[s.id] !== undefined ? savedSec[s.id] : s.on;
   });
+  // Refresh derived totals that depend on multiple fields (PSF × GBA
+  // previews for construction hard cost + contingency).
+  try { _refreshAllConstTotals(); } catch (e) { /* helper may not be loaded yet */ }
+  // Sync the Go/No-Go hurdle label/note to the saved metric selection.
+  try { _updateHurdleUnit(); } catch (e) { /* helper may not be loaded yet */ }
 }
 
 async function loadAssumptions() {
@@ -1554,6 +1577,54 @@ function toggleRefiEvent(n) {
 }
 
 function markChanged() { setSaveStatus('unsaved'); }
+
+// Construction-budget $/SF × GBA live-total preview. Wired to the two
+// PSF inputs (a_const_hard, a_const_reserve) via oninput; the GBA
+// input also calls _refreshAllConstTotals() below so edits to GBA
+// refresh both PSF-based previews.
+function _updateConstTotal(psfInputId, noteSpanId) {
+  var psf = parseFloat((document.getElementById(psfInputId) || {}).value || '0') || 0;
+  var gba = parseFloat((document.getElementById('a_gba_sf') || {}).value || '0') || 0;
+  var span = document.getElementById(noteSpanId);
+  if (!span) return;
+  if (psf > 0 && gba > 0) {
+    var total = Math.round(psf * gba);
+    span.textContent = 'Total: $' + total.toLocaleString() + ' (' +
+                       psf.toLocaleString() + ' $/SF × ' +
+                       gba.toLocaleString() + ' SF)';
+  } else if (psf > 0 && gba <= 0) {
+    span.textContent = 'Total: $0 (set GBA to see total)';
+  } else if (gba > 0) {
+    span.textContent = 'Total: $0 (enter $/SF)';
+  } else {
+    span.textContent = 'Total: $0 (enter GBA + $/SF)';
+  }
+}
+function _refreshAllConstTotals() {
+  _updateConstTotal('a_const_hard',    'a_const_hard_total');
+  _updateConstTotal('a_const_reserve', 'a_const_reserve_total');
+}
+
+// Go/No-Go hurdle: update the label + note to match the selected metric.
+// IRR + CoC are percentages; cap rate is also a percentage; no unit
+// difference today, but the helper is structured so we can add $-based
+// hurdles (e.g. target NOI) later without touching the markup.
+function _updateHurdleUnit() {
+  var sel = document.getElementById('a_hurdle_metric');
+  var label = document.getElementById('a_hurdle_value_label');
+  var note = document.getElementById('a_hurdle_unit_note');
+  if (!sel) return;
+  var metric = sel.value || 'lp_irr';
+  var info = {
+    project_irr:   { label: 'Target (%)', note: 'Project IRR target — unlevered, entered as a percentage.' },
+    lp_irr:        { label: 'Target (%)', note: 'LP IRR target — levered post-promote, entered as a percentage.' },
+    stab_cap_rate: { label: 'Target (%)', note: 'Stabilized cap rate target — Year 2 NOI ÷ Purchase Price, as a percentage.' },
+    stab_coc:      { label: 'Target (%)', note: 'Stabilized cash-on-cash target — Year 2 CF ÷ Total Equity, as a percentage.' },
+  };
+  var meta = info[metric] || info.lp_irr;
+  if (label) label.textContent = meta.label;
+  if (note)  note.textContent  = meta.note;
+}
 
 function updateOriginationFee() {
   var purchasePrice = parseFloat((document.getElementById('f_purchase_price') || document.getElementById('a_purchase_price') || {}).value || '0') || 0;
@@ -2130,6 +2201,7 @@ async function submitRun() {
       a_exterminator:         _num('a_exterminator'),
       a_cleaning:             _num('a_cleaning'),
       a_turnover:             _num('a_turnover'),
+      a_turnover_rate_pct:    _num('a_turnover_rate_pct'),
       a_advertising:          _num('a_advertising'),
       a_landscape:            _num('a_landscape'),
       a_admin:                _num('a_admin'),
@@ -2174,6 +2246,8 @@ async function submitRun() {
       a_sens_cap_high:        _num('a_sens_cap_high'),
       a_sens_cap_step:        _num('a_sens_cap_step'),
       a_target_irr:           _num('a_target_irr'),
+      a_hurdle_metric:        _str('a_hurdle_metric') || 'lp_irr',
+      a_hurdle_value:         _num('a_hurdle_value'),
 
       // Top-level income override — if user typed a monthly rent, pass to backend
       monthly_gross_rent:     _num('monthly_rent') || _num('monthly_gross_rent') || 0,

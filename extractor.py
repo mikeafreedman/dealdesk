@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, List, Optional
 
 import anthropic
@@ -55,10 +56,21 @@ SYSTEM_1A = (
 
 SYSTEM_1B = (
     "You are a commercial real estate analyst specializing in rent roll analysis.\n"
-    "Extract all unit-level data from the rent roll. Return structured JSON.\n\n"
+    "Extract every unit-level row from the rent roll. Return structured JSON.\n\n"
     "RULES:\n"
     "- Extract ONLY data explicitly present. Return null for missing fields.\n"
-    "- Monthly rents as numbers. Dates in ISO format.\n"
+    "- The source may be a standalone rent roll OR a rent-roll table embedded\n"
+    "  inside a longer offering memorandum. Search the ENTIRE text for any\n"
+    "  tabular or list structure that enumerates units or tenants (look for\n"
+    "  column headers like 'Unit', 'Unit #', 'Apt', 'Suite', 'Tenant',\n"
+    "  'Bedrooms', 'SF', 'Monthly Rent', 'Rent/SF'). A bulleted or numbered\n"
+    "  per-unit list (e.g. 'Unit 1 — 2BR — $1,800') also counts.\n"
+    "- If the OM shows a 'Unit Mix Summary' table (e.g. 5 × 2BR @ $1,800,\n"
+    "  8 × 1BR @ $1,500), expand each row into the corresponding number of\n"
+    "  synthetic unit records so total_units matches the sum.\n"
+    "- NEVER return an empty units array when the document clearly states\n"
+    "  a unit count with rent figures — expand the summary instead.\n"
+    "- Monthly rents as numbers (strip '$' and ','). Dates in ISO format.\n"
     "- Lease status: \"occupied\" | \"vacant\" | \"month-to-month\" | \"notice\" | \"pending\"\n"
     "- Unit type: \"Studio\" | \"1BR\" | \"2BR\" | \"3BR\" | \"4BR+\" | \"Commercial\" | \"Other\"\n"
     "Output ONLY valid JSON."
@@ -319,6 +331,70 @@ USER_1C = (
 def pdf_to_markdown(pdf_path: str) -> str:
     """Convert a PDF file to markdown text via PyMuPDF4LLM."""
     return pymupdf4llm.to_markdown(pdf_path)
+
+
+def extract_pdf_photos(
+    pdf_path: str,
+    out_dir: Path,
+    min_side_px: int = 400,
+    max_photos: int = 12,
+) -> List[str]:
+    """Extract photo-sized raster images from a PDF using PyMuPDF.
+
+    Saves each qualifying image to out_dir as {basename}_p{page}_i{idx}.png
+    and returns the list of absolute paths. Skips images smaller than
+    min_side_px on the short edge (filters out logos, icons, line art).
+
+    Returns an empty list on any fitz error so pipeline stays non-fatal.
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        logger.warning("extract_pdf_photos: PyMuPDF not available — skipping")
+        return []
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    basename = Path(pdf_path).stem[:40]
+    saved: List[str] = []
+
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as exc:
+        logger.warning("extract_pdf_photos: fitz.open failed for %s: %s", pdf_path, exc)
+        return []
+
+    try:
+        for page_idx, page in enumerate(doc):
+            if len(saved) >= max_photos:
+                break
+            for img_idx, img in enumerate(page.get_images(full=True)):
+                if len(saved) >= max_photos:
+                    break
+                xref = img[0]
+                try:
+                    pix = fitz.Pixmap(doc, xref)
+                except Exception:
+                    continue
+                try:
+                    # Drop tiny rasters (logos, icons, rules)
+                    if min(pix.width, pix.height) < min_side_px:
+                        continue
+                    # Convert CMYK / alpha to RGB so PIL + Playwright can render
+                    if pix.n - pix.alpha >= 4:
+                        pix = fitz.Pixmap(fitz.csRGB, pix)
+                    out_path = out_dir / f"{basename}_p{page_idx + 1:03d}_i{img_idx:02d}.png"
+                    pix.save(str(out_path))
+                    saved.append(str(out_path))
+                finally:
+                    pix = None
+    finally:
+        doc.close()
+
+    logger.info(
+        "extract_pdf_photos: %s → %d photo(s) saved to %s",
+        Path(pdf_path).name, len(saved), out_dir,
+    )
+    return saved
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1112,6 +1188,19 @@ def extract_documents(
             _apply_1a(result, deal)
             _merge_extraction(ext, result, source="1A", file=f["path"])
             logger.info("EXTRACTOR [1A]: complete for '%s'", f["path"])
+
+            # Extract actual photo rasters from this non-foreign OM so
+            # the report's photo gallery can display real property images
+            # from the broker package (in addition to Google Street View).
+            try:
+                from config import OUTPUTS_DIR
+                photo_dir = Path(OUTPUTS_DIR) / f"{deal.deal_id}_photos"
+                saved = extract_pdf_photos(f["path"], photo_dir)
+                if saved:
+                    ext.pdf_photo_paths.extend(saved)
+            except Exception as _pe:
+                logger.warning("EXTRACTOR [1A]: photo extraction failed for '%s': %s",
+                               f["path"], _pe)
         except Exception as exc:
             logger.warning("EXTRACTOR [1A]: failed for '%s': %s", f["path"], exc)
 

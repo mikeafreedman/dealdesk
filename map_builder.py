@@ -336,14 +336,18 @@ def build_aerial_map(deal) -> Optional[bytes]:
 
     logger.info("Aerial map: building for lat=%.5f lon=%.5f", lat, lon)
 
-    # Priority 1 — Maps Static API satellite at regional zoom (~30-min drive)
+    # Priority 1 — Maps Static API hybrid view at regional zoom (~30-min
+    # drive). `maptype=hybrid` overlays roads, place labels, and locality
+    # names on top of the satellite imagery — analysts use these labels
+    # to identify neighborhoods, highways, and landmarks at a glance.
+    # `maptype=satellite` returns pure imagery with no labels.
     if GOOGLE_MAPS_API_KEY:
         try:
             params = {
                 "center":  f"{lat},{lon}",
                 "zoom":    "10",
                 "size":    f"{MAP_WIDTH}x{MAP_HEIGHT}",
-                "maptype": "satellite",
+                "maptype": "hybrid",
                 "scale":   "2",
                 "markers": f"color:0x4A6E50|label:P|{lat},{lon}",
                 "key":     GOOGLE_MAPS_API_KEY,
@@ -354,7 +358,7 @@ def build_aerial_map(deal) -> Optional[bytes]:
                 timeout=TIMEOUT,
             )
             r.raise_for_status()
-            logger.info("Aerial map: using Maps Static API satellite view (zoom 10)")
+            logger.info("Aerial map: using Maps Static API hybrid view (zoom 10, satellite + labels)")
             return r.content
         except Exception as exc:
             logger.warning("Maps Static aerial fallback failed: %s", exc)
@@ -375,7 +379,9 @@ def _build_poi_marker_string(pois: List[dict]) -> List[str]:
         "transit_station":        "0x4A6E50",
         "subway_station":         "0x4A6E50",
         "bus_station":            "0x4A6E50",
-        "grocery_or_supermarket": "0xC4A882",
+        "grocery_or_supermarket": "0xC4A882",  # legacy fallback
+        "supermarket":            "0xC4A882",
+        "grocery_store":          "0xC4A882",
         "school":                 "0x5C3D26",
         "park":                   "0xB2C9B4",
         "restaurant":             "0x8B6914",

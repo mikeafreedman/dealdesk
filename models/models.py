@@ -213,6 +213,13 @@ class ZoningData(BaseModel):
     max_buildable_units:  Optional[int]   = None
     max_buildable_sf:     Optional[float] = None
     buildable_capacity_narrative: Optional[str] = None
+    # Structured math-problem layout: each entry carries label, formula,
+    # inputs (list of "Name = value" strings), result, and a one-line note.
+    # Populated by Prompt 3B via _apply_3b; rendered in the report as a
+    # numbered calc layout rather than a prose paragraph.
+    buildable_capacity_steps: List[Dict[str, Any]] = Field(default_factory=list)
+    binding_constraint:   Optional[str]   = None
+    binding_result:       Optional[str]   = None
     hbu_narrative:        Optional[str]   = None
     hbu_conclusion:       Optional[str]   = None
     municipal_code_url:   Optional[str]   = None
@@ -371,6 +378,13 @@ class FinancialAssumptions(BaseModel):
     demo:                float = 0.0
     const_hard:          float = 0.0
     const_reserve:       float = 0.0
+    # Per-SF inputs that the frontend collects; multiplied by gba_sf at
+    # request time to populate const_hard / const_reserve. Persisted so
+    # the Excel Assumptions tab can surface both the PSF rate and the
+    # implied dollar total (as an Excel formula that recomputes if the
+    # user later edits GBA in-cell).
+    const_hard_psf:      float = 0.0
+    const_reserve_psf:   float = 0.0
     gc_overhead:         float = 0.0
 
     # §3 Sources — additional capital
@@ -440,26 +454,36 @@ class FinancialAssumptions(BaseModel):
     fee_income:          float = 0.0     # was 6000.0 — default to $0
 
     # §9 Fixed expenses (Year 1)
+    # Taxes + insurance retain historical class defaults — their
+    # values come from the public-data pipeline (parcel assessed value
+    # × local tax rate; TIV × insurance rate) and should not be
+    # overridden by a cold-start default.
+    # Other fields default to 0 so deal_data._apply_expense_defaults
+    # (Tier 3) can substitute the rule-based value when neither
+    # extraction nor user input populated them.
     re_taxes:            float = 45000.0
     insurance:           float = 18000.0
-    gas:                 float = 12000.0
-    water_sewer:         float = 14000.0
-    electric:            float = 10000.0
-    license_inspections: float = 2500.0
-    trash:               float = 8000.0
+    gas:                 float = 0.0
+    water_sewer:         float = 0.0
+    electric:            float = 0.0
+    license_inspections: float = 0.0
+    trash:               float = 0.0
 
     # §10 Variable expenses (Year 1)
-    mgmt_fee_pct:        float = 0.06
-    salaries:            float = 24000.0
-    repairs:             float = 8000.0
-    exterminator:        float = 3600.0
-    cleaning:            float = 6000.0
-    turnover:            float = 5000.0
-    advertising:         float = 4000.0
-    landscape_snow:      float = 6000.0
-    admin_legal_acct:    float = 5000.0
-    office_phone:        float = 3000.0
-    miscellaneous:       float = 2000.0
+    mgmt_fee_pct:        float = 0.05
+    salaries:            float = 0.0
+    repairs:             float = 0.0
+    exterminator:        float = 0.0
+    cleaning:            float = 0.0
+    turnover:            float = 0.0
+    # Fraction of units that turn over each year (0.30 = 30%). Used
+    # with per-unit turnover cost to derive Year-1 turnover expense.
+    turnover_rate_pct:   float = 0.30
+    advertising:         float = 0.0
+    landscape_snow:      float = 0.0
+    admin_legal_acct:    float = 0.0
+    office_phone:        float = 0.0
+    miscellaneous:       float = 0.0
 
     # §11 Below-the-line
     cap_reserve_per_unit: float = 400.0
@@ -511,6 +535,12 @@ class FinancialAssumptions(BaseModel):
     min_coc:             float = 0.07
     min_dscr:            float = 1.25
     min_cap_rate:        float = 0.055
+    # Go / No-Go hurdle — single-metric binding the MC price solver +
+    # Opinion of Value + recommendation. Metric is one of:
+    #   "project_irr" | "lp_irr" | "stab_cap_rate" | "stab_coc"
+    # hurdle_value is stored as a DECIMAL (0.15 = 15%), not a percent.
+    hurdle_metric:       str   = "lp_irr"
+    hurdle_value:        float = 0.15
 
     @model_validator(mode='after')
     def lp_equals_complement(self) -> 'FinancialAssumptions':
@@ -686,6 +716,9 @@ class ExtractedDocumentData(BaseModel):
     year_built_extracted:   Optional[int]   = None
     description_extracted:  Optional[str]   = None
     image_placements:       Optional[Dict[str, Any]] = None
+    # Actual photo files extracted from uploaded PDF pages (absolute paths).
+    # Populated by extractor._extract_pdf_photos() using PyMuPDF.
+    pdf_photo_paths:        List[str]       = Field(default_factory=list)
     # From Prompt 1B — Rent Roll
     unit_mix:               Optional[List[Dict[str, Any]]] = None
     total_units_from_rr:    Optional[int]   = None

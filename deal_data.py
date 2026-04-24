@@ -346,21 +346,35 @@ _EXPENSE_MAP: Dict[str, str] = {
     "hazard_insurance":        "insurance",
     "liability_insurance":     "insurance",
     "insurance_expense":       "insurance",
-    # Utilities — gas
+    # Utilities — gas. `utilities_*` prefix covers Haiku's common
+    # snake_case output when the OM uses a "Utilities:" grouping header.
     "gas":                     "gas",
     "natural_gas":             "gas",
     "heating":                 "gas",
+    "utilities_gas":           "gas",
+    "utility_gas":             "gas",
     # Utilities — water / sewer
     "water_sewer":             "water_sewer",
     "water_and_sewer":         "water_sewer",
     "water":                   "water_sewer",
     "sewer":                   "water_sewer",
     "water_sewer_trash":       "water_sewer",
+    "utilities_water":         "water_sewer",
+    "utilities_water_sewer":   "water_sewer",
+    "utilities_sewer":         "water_sewer",
+    "utility_water":           "water_sewer",
     # Utilities — electric
     "electric":                "electric",
     "electricity":             "electric",
     "power":                   "electric",
     "common_area_electric":    "electric",
+    "utilities_electric":      "electric",
+    "utilities_electricity":   "electric",
+    "utility_electric":        "electric",
+    # Generic "utilities" catch-all — if the T-12 rolls all utilities
+    # into one line, map to electric so at least it shows up (better
+    # than being silently unmapped). Split lines still override.
+    "utilities":               "electric",
     # Trash
     "trash":                   "trash",
     "trash_removal":           "trash",
@@ -457,31 +471,167 @@ def _normalize_expense_key(k: str) -> str:
 
 def _backfill_expenses(assumptions: FinancialAssumptions, extracted: ExtractedDocumentData,
                        provenance: Dict[str, str]) -> None:
-    """Backfill Year-1 expense assumptions from T-12 extracted line items."""
+    """Populate Year-1 expense assumptions using this precedence:
+        1. Extracted T-12 line item (WINS whenever it has a value)
+        2. User input (fallback when extraction is absent / blank)
+
+    Overrides any user-entered value with the extracted figure when the
+    uploaded financials carry a usable number. When extraction returns
+    nothing for a given line, the user-entered value is preserved.
+    """
     if not extracted.expense_line_items:
+        logger.info("EXPENSE BACKFILL: no T-12 line items extracted — "
+                    "user-entered expense values retained")
         return
     unmapped = []
+    overrides = 0
+    fills = 0
     for t12_key, amount in extracted.expense_line_items.items():
         assume_field = _EXPENSE_MAP.get(_normalize_expense_key(t12_key))
         if not assume_field:
             unmapped.append(t12_key)
             continue
-        current = getattr(assumptions, assume_field, None)
-        # Treat 0.0 as "not set" for expenses — allow extraction to fill
-        if current is not None and current != 0.0 and not _is_blank(current):
-            continue  # user explicitly set a non-zero value
         if _is_blank(amount):
             continue
         try:
-            setattr(assumptions, assume_field, float(amount))
-            provenance[assume_field] = f"t12:{t12_key}"
-            logger.info("Backfilled expense %s = $%.2f from T-12 line '%s'",
-                        assume_field, float(amount), t12_key)
+            new_val = float(amount)
         except (ValueError, TypeError):
-            pass
+            continue
+        prior = getattr(assumptions, assume_field, None)
+        prior_set = (prior is not None and prior != 0.0 and not _is_blank(prior))
+        setattr(assumptions, assume_field, new_val)
+        provenance[assume_field] = f"t12:{t12_key}"
+        if prior_set and abs((prior or 0.0) - new_val) > 0.01:
+            overrides += 1
+            logger.info(
+                "EXPENSE BACKFILL (extraction wins): %s $%.2f → $%.2f "
+                "(user-entered value overridden by T-12 line '%s')",
+                assume_field, float(prior or 0.0), new_val, t12_key,
+            )
+        else:
+            fills += 1
+            logger.info("EXPENSE BACKFILL: %s = $%.2f from T-12 line '%s'",
+                        assume_field, new_val, t12_key)
+    logger.info(
+        "EXPENSE BACKFILL SUMMARY: %d fields filled from extraction, "
+        "%d user values overridden by extraction, %d unmapped line items",
+        fills, overrides, len(unmapped),
+    )
     if unmapped:
-        logger.info("T-12 BACKFILL: %d unmapped expense line item(s) — %s",
-                    len(unmapped), unmapped[:10])
+        logger.info("T-12 BACKFILL: unmapped keys — %s", unmapped[:10])
+
+
+def _apply_expense_defaults(assumptions: FinancialAssumptions,
+                            provenance: Dict[str, str]) -> None:
+    """Tier 3 of the expense cascade: when a field is still 0 AND was
+    NOT populated by extraction, apply the rule-based default.
+
+    Precedence is preserved:
+       1. Extraction (T-12 line item)  — handled by _backfill_expenses
+       2. User input (non-zero)        — never overwritten here
+       3. Rule-based default           — this function
+
+    Taxes + insurance are intentionally excluded — those have their
+    own pipeline (parcel-assessed-value × local effective rate + TIV ×
+    insurance rate with catastrophe loading) driven by public data.
+    """
+    n = int(assumptions.num_units or 0)
+
+    # (field, default) pairs. Each `default` is a closure that computes
+    # the fallback dollar amount when num_units is known. Fields whose
+    # defaults don't scale with unit count use constants.
+    PER_UNIT_MONTHLY = {
+        "water_sewer": 75.0,   # $75 per unit per month
+        "electric":    25.0,   # $25 per unit per month
+        "repairs":    200.0,   # $200 per unit per month
+    }
+    PER_UNIT_YEARLY = {
+        "advertising":  50.0,  # $50 per unit per year
+    }
+    FLAT_YEARLY = {
+        "trash":             5000.0,
+        "exterminator":      1200.0,
+        "cleaning":          2400.0,   # $200/mo × 12
+        "landscape_snow":    1000.0,
+        "admin_legal_acct":  5000.0,
+        "office_phone":       600.0,
+        "miscellaneous":      500.0,
+    }
+
+    applied: list = []
+
+    def _should_apply(field: str) -> bool:
+        # Skip if extraction populated this field.
+        if str(provenance.get(field, "") or "").startswith("t12:"):
+            return False
+        cur = getattr(assumptions, field, None)
+        # Apply when user left it blank / zero.
+        return cur in (None, 0, 0.0)
+
+    # Per-unit monthly fields — require num_units > 0 to derive a total.
+    for field, psu_monthly in PER_UNIT_MONTHLY.items():
+        if not _should_apply(field):
+            continue
+        if n <= 0:
+            # Without a unit count we can't back into a dollar total.
+            # Leave at 0 so the Excel Assumptions tab flags it visually.
+            continue
+        val = round(psu_monthly * n * 12, 2)
+        setattr(assumptions, field, val)
+        provenance[field] = f"default:${psu_monthly:.0f}/unit/mo × {n} units"
+        applied.append(f"{field}=${val:,.0f}")
+
+    for field, psu_yearly in PER_UNIT_YEARLY.items():
+        if not _should_apply(field):
+            continue
+        if n <= 0:
+            continue
+        val = round(psu_yearly * n, 2)
+        setattr(assumptions, field, val)
+        provenance[field] = f"default:${psu_yearly:.0f}/unit/yr × {n} units"
+        applied.append(f"{field}=${val:,.0f}")
+
+    # Flat yearly fields — apply regardless of unit count.
+    for field, yearly in FLAT_YEARLY.items():
+        if not _should_apply(field):
+            continue
+        setattr(assumptions, field, yearly)
+        provenance[field] = f"default:${yearly:,.0f}/year flat"
+        applied.append(f"{field}=${yearly:,.0f}")
+
+    # Turnover cost: $800 per unit × turnover_rate_pct × num_units.
+    # Turnover rate default (30%) lives on assumptions; user can
+    # override it in the form.
+    if _should_apply("turnover") and n > 0:
+        rate = float(assumptions.turnover_rate_pct or 0.30)
+        val = round(800.0 * rate * n, 2)
+        assumptions.turnover = val
+        provenance["turnover"] = (
+            f"default:$800/unit × {rate:.0%} rate × {n} units"
+        )
+        applied.append(f"turnover=${val:,.0f}")
+
+    # Management fee — user/extraction both live in mgmt_fee_pct (a
+    # percentage, not a dollar figure). Leave at its 0.05 class default.
+
+    # License / inspections — intentionally not defaulted; municipal
+    # fees vary so much per deal that a flat default would be misleading.
+    # Log a reminder if blank.
+    if _should_apply("license_inspections"):
+        logger.info(
+            "EXPENSE DEFAULTS: license_inspections left at $0 — municipal "
+            "fees vary per deal; confirm local rates before investment "
+            "committee review",
+        )
+
+    if applied:
+        logger.info(
+            "EXPENSE DEFAULTS: %d rule-based defaults applied "
+            "(extraction + user inputs remain authoritative where set) — %s",
+            len(applied), "; ".join(applied[:10]),
+        )
+    else:
+        logger.info("EXPENSE DEFAULTS: no fields needed rule-based defaults")
 
 
 def _synthesize_rent_roll(deal: DealData) -> None:
@@ -498,6 +648,24 @@ def _synthesize_rent_roll(deal: DealData) -> None:
     Logs provenance as "synthesized" so it's visible in the report.
     """
     ext = deal.extracted_docs
+
+    # ── Re-synth gate: a prior synth that fell back to the hardcoded
+    # $1,200 floor (because HUD FMR wasn't yet fetched) should be
+    # reconsidered once market data is available. Detect the stale
+    # default-sourced synth and clear unit_mix so the FMR-aware path
+    # below can rebuild it.
+    _rr_src = (deal.provenance.field_sources.get("rent_roll_source") or "")
+    if _rr_src.endswith("_default") and deal.market_data and (
+        deal.market_data.fmr_1br or deal.market_data.fmr_2br
+    ):
+        logger.info(
+            "SYNTH RENT ROLL: prior synth used default rents (%s) — "
+            "re-synthesizing now that HUD FMR is available",
+            _rr_src,
+        )
+        ext.unit_mix = []
+        ext.total_monthly_rent = None
+        ext.avg_rent_per_unit = None
 
     # ── Gate: only run if no units were extracted ─────────────────────
     if ext.unit_mix and len(ext.unit_mix) > 0:
@@ -689,13 +857,16 @@ def _synthesize_rent_roll(deal: DealData) -> None:
     logger.info("SYNTH RENT ROLL: market rents — %s", market_rents)
 
     # ── Step 2: Determine unit type distribution ──────────────────────
-    # Use a typical bedroom distribution when the asset is residential.
-    # For non-residential asset types (office, retail, industrial,
-    # mixed-use), label the synthesised units generically to avoid
-    # fabricated bedroom counts.
+    # Use a typical bedroom distribution when the asset has a
+    # residential component. Mixed-Use is treated as residential for
+    # defaulting purposes because the residential portion drives the
+    # per-unit rent; commercial SF is priced separately via the
+    # whole-building path (num_units == 0). Pure commercial asset
+    # types (Office, Retail, Industrial) get a generic label so we
+    # don't fabricate bedroom counts.
     from models.models import AssetType
     _is_residential = deal.asset_type in (
-        AssetType.MULTIFAMILY, AssetType.SINGLE_FAMILY,
+        AssetType.MULTIFAMILY, AssetType.SINGLE_FAMILY, AssetType.MIXED_USE,
     )
     if not _is_residential:
         # Generic units labeled by asset type — no bedroom fabrication.
@@ -734,7 +905,26 @@ def _synthesize_rent_roll(deal: DealData) -> None:
     for br_type, count in unit_counts.items():
         if count <= 0:
             continue
-        rent = market_rents.get(br_type, 1200)
+        # Rent cascade:
+        #   1. Exact bedroom-type match (Studio/1BR/2BR/3BR/4BR+)
+        #   2. 2BR as neutral residential proxy (most common tier)
+        #   3. 1BR, then any populated tier
+        #   4. $1,200 absolute floor (should be unreachable when HUD FMR
+        #      fetched successfully — a miss here signals a data-source
+        #      failure upstream and warrants a log warning).
+        rent = (
+            market_rents.get(br_type)
+            or market_rents.get("2BR")
+            or market_rents.get("1BR")
+            or next((v for v in market_rents.values() if v), None)
+            or 1200
+        )
+        if market_rents.get(br_type) is None:
+            logger.warning(
+                "SYNTH RENT ROLL: no market rent for unit type %r — "
+                "using $%s fallback (check HUD FMR fetch + renovation tier)",
+                br_type, f"{rent:,.0f}",
+            )
         for _ in range(count):
             unit_mix.append({
                 "unit_id": f"Unit {unit_num}",
@@ -770,6 +960,98 @@ def _synthesize_rent_roll(deal: DealData) -> None:
     deal.provenance.field_sources["rent_roll_note"] = (
         "SYNTHETIC: No rent roll provided. Unit mix and rents estimated from "
         "market comparables and HUD Fair Market Rent data. Verify before closing."
+    )
+
+
+def _synthesize_commercial_for_mixed_use(deal: DealData) -> None:
+    """For Mixed-Use deals, append a synthetic commercial tenant row to
+    unit_mix when none is present. Ground-floor retail / office is the
+    norm in mixed-use, so an all-residential rent roll understates GPR.
+
+    Sizing assumptions (configurable, based on typical urban 4-5 story
+    mixed-use in Philadelphia):
+      - Commercial SF ≈ 18% of GBA (ground-floor footprint proportion)
+      - Market PSF/yr: median of extracted commercial comps, else $22/SF/yr
+        (Phila. CMX/ICMX retail range, mid-2020s)
+      - Lease type: NNN (default for ground-floor retail)
+    """
+    from models.models import AssetType
+    if deal.asset_type != AssetType.MIXED_USE:
+        return
+    ext = deal.extracted_docs
+    if ext is None:
+        return
+    units = ext.unit_mix or []
+    has_commercial = any(
+        isinstance(u, dict) and (
+            (u.get("unit_type") or "").strip().lower()
+            in ("commercial", "office", "retail", "industrial")
+            or u.get("annual_rent_per_sf") is not None
+            or u.get("lease_type")
+            or u.get("tenant_name")
+        )
+        for u in units
+    )
+    if has_commercial:
+        return
+
+    gba = deal.assumptions.gba_sf or 0
+    if gba <= 0:
+        logger.info(
+            "SYNTH COMMERCIAL: skipping — Mixed-Use deal has no GBA; "
+            "cannot size ground-floor footprint",
+        )
+        return
+
+    # Commercial footprint: 18% of GBA for 4-5 story mixed-use. Cap
+    # at 8,000 SF so outsized buildings don't post implausibly large
+    # commercial rents.
+    commercial_sf = round(min(gba * 0.18, 8000))
+
+    # Market PSF/yr: commercial comps → default floor
+    psf_samples = [
+        float(c.asking_rent_per_sf) for c in
+        ((deal.comps.commercial_comps if deal.comps else []) or [])
+        if c.asking_rent_per_sf and c.asking_rent_per_sf > 0
+    ] if deal.comps else []
+    if psf_samples:
+        psf_samples.sort()
+        n = len(psf_samples)
+        psf_annual = (psf_samples[n // 2] if n % 2
+                      else (psf_samples[n // 2 - 1] + psf_samples[n // 2]) / 2)
+    else:
+        psf_annual = 22.0  # Phila. CMX/ICMX ground-floor retail mid-range
+
+    annual_rent = round(commercial_sf * psf_annual)
+    monthly_rent = round(annual_rent / 12)
+
+    synthetic_commercial = {
+        "unit_id": "GF-Commercial",
+        "unit_type": "Commercial",
+        "tenant_name": "Ground Floor Retail (projected)",
+        "sf": commercial_sf,
+        "monthly_rent": monthly_rent,
+        "market_rent": monthly_rent,
+        "annual_rent_per_sf": round(psf_annual, 2),
+        "market_rent_sf": round(psf_annual, 2),
+        "lease_type": "NNN",
+        "status": "Vacant",
+        "is_vacant": True,
+        "notes": (
+            f"SYNTHETIC: ground-floor commercial sized at 18% of GBA "
+            f"({commercial_sf:,} SF @ ${psf_annual:.2f}/SF/yr). Verify against "
+            f"actual floor plan + lease prior to closing."
+        ),
+    }
+    ext.unit_mix = units + [synthetic_commercial]
+    logger.info(
+        "SYNTH COMMERCIAL: added ground-floor retail placeholder — "
+        "%d SF × $%.2f/SF/yr = $%s/yr (Mixed-Use deal, no commercial "
+        "extracted from OM)",
+        commercial_sf, psf_annual, f"{annual_rent:,}",
+    )
+    deal.provenance.field_sources["commercial_tenant_source"] = (
+        f"synthetic_ground_floor_{commercial_sf}sf_at_{round(psf_annual)}psf"
     )
 
 
@@ -899,6 +1181,10 @@ def assemble_deal(deal: DealData, user_inputs: Dict[str, Any]) -> DealData:
     # ── 6. Financial assumptions ──────────────────────────────────
     _merge_assumptions(deal.assumptions, user_inputs, extracted, provenance)
     _backfill_expenses(deal.assumptions, extracted, provenance)
+    # Tier 3: apply rule-based defaults (per-unit & flat-yearly) to any
+    # expense field still at 0 after extraction + user input. Respects
+    # the extraction provenance — never overwrites a T-12 value.
+    _apply_expense_defaults(deal.assumptions, provenance)
     _synthesize_rent_roll(deal)
 
     # ── 7. Investor mode ──────────────────────────────────────────

@@ -308,6 +308,8 @@ class UnderwriteRequest(BaseModel):
     a_exterminator: float = 0.0
     a_cleaning: float = 0.0
     a_turnover: float = 0.0
+    # Fraction of units that turn over each year (percentage, 30 = 30%)
+    a_turnover_rate_pct: float = 30.0
     a_advertising: float = 0.0
     a_landscape: float = 0.0
     a_admin: float = 0.0
@@ -359,6 +361,11 @@ class UnderwriteRequest(BaseModel):
     a_min_dscr: float = 1.25
     a_min_cap: float = 0.055
     a_target_irr: float = 15.0
+    # Go / No-Go hurdle metric — drives the Monte Carlo price solver +
+    # the Opinion of Value + the Go/No-Go recommendation. One of:
+    #   project_irr | lp_irr | stab_cap_rate | stab_coc
+    a_hurdle_metric: Optional[str] = "lp_irr"
+    a_hurdle_value:  Optional[float] = 15.0
 
     # Leasing cost assumptions
     a_ti_new_psf:              Optional[float] = None
@@ -398,16 +405,70 @@ def _save_base64_file(name: str, content_base64: str) -> str:
     return tmp.name
 
 
+def _contingency_sanity_check(const_hard_psf, const_reserve_psf) -> None:
+    """Warn when contingency PSF looks implausibly low vs hard cost PSF.
+
+    Industry norm: construction contingency is 5–15% of hard costs.
+    A contingency PSF below 2% of hard-cost PSF is usually a decimal
+    typo (e.g. 1.25 entered when 12.50 was intended) — surface it as
+    an INFO log so analysts can catch it during review.
+    """
+    try:
+        h = float(const_hard_psf or 0)
+        c = float(const_reserve_psf or 0)
+    except (TypeError, ValueError):
+        return
+    if h <= 0 or c <= 0:
+        return
+    ratio = c / h
+    if ratio < 0.02:
+        logger.warning(
+            "CONSTRUCTION INPUT: contingency $%.2f/SF is only %.1f%% of hard "
+            "cost $%.2f/SF — industry norm is 5–15%%. Verify decimal placement "
+            "on the Assumptions form before relying on the totals.",
+            c, ratio * 100, h,
+        )
+
+
+def _psf_to_total(psf, gba) -> float:
+    """Convert a $/SF input to a total dollar amount given a GBA.
+
+    Used for construction hard costs and contingency reserve, which the
+    frontend collects as $/SF. Returns the raw PSF when GBA is missing
+    or zero so the value isn't silently lost — Excel's formula will
+    override with the correct total once GBA is populated in C10.
+    """
+    try:
+        psf_f = float(psf or 0)
+        gba_f = float(gba or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if gba_f > 0:
+        return round(psf_f * gba_f, 2)
+    return psf_f
+
+
 def _build_deal(req: UnderwriteRequest) -> DealData:
     """Parse the flat request into a DealData with populated FinancialAssumptions."""
     full_address = ", ".join(
         p for p in [req.f_address, req.f_city, req.f_state, req.f_zip] if p
     )
 
+    # Frontend sends short strategy slugs (stabilized / value_add /
+    # for_sale); the backend enum uses fuller names (stabilized_hold /
+    # value_add / opportunistic). Normalize here so legacy option values
+    # keep working without having to migrate saved deals.
+    _STRATEGY_ALIASES = {
+        "stabilized":  "stabilized_hold",
+        "for_sale":    "opportunistic",
+    }
+    _strategy_raw = (req.f_strategy or "").strip()
+    _strategy_val = _STRATEGY_ALIASES.get(_strategy_raw, _strategy_raw)
+
     deal = DealData(
         deal_id=str(uuid.uuid4()),
         asset_type=AssetType(req.f_asset_type),
-        investment_strategy=InvestmentStrategy(req.f_strategy),
+        investment_strategy=InvestmentStrategy(_strategy_val),
         deal_description=req.f_description,
         investor_mode=req.investor_mode,
         address=PropertyAddress(
@@ -514,8 +575,19 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         permits=req.a_permits,
         stormwater=req.a_stormwater,
         demo=req.a_demo,
-        const_hard=req.a_const_hard,
-        const_reserve=req.a_const_reserve,
+        # Construction hard cost and contingency reserve are collected as
+        # $/SF on the frontend. Convert to total dollars here by multiplying
+        # by GBA. If the user submits with no GBA yet (0), we keep the raw
+        # value so the pipeline isn't zeroed out — Excel will overwrite the
+        # total via its formula once GBA is populated. Store the PSF value
+        # separately so Excel can surface both the rate and the formula.
+        const_hard=_psf_to_total(req.a_const_hard, req.a_gba_sf),
+        const_reserve=_psf_to_total(req.a_const_reserve, req.a_gba_sf),
+        const_hard_psf=float(req.a_const_hard or 0),
+        const_reserve_psf=float(req.a_const_reserve or 0),
+        # Sanity check: contingency < 2% of hard costs usually = decimal typo.
+        # Fires a WARNING log; does not alter the value. (No-op when either is 0.)
+        # _contingency_sanity_check called right after assumptions build below.
         gc_overhead=req.a_gc_overhead,
         mezz_debt=req.a_mezz_debt,
         tax_credit_equity=req.a_tax_credit_eq,
@@ -572,6 +644,7 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         exterminator=req.a_exterminator,
         cleaning=req.a_cleaning,
         turnover=req.a_turnover,
+        turnover_rate_pct=(req.a_turnover_rate_pct or 30.0) / 100.0,
         advertising=req.a_advertising,
         landscape_snow=req.a_landscape,
         admin_legal_acct=req.a_admin,
@@ -619,9 +692,15 @@ def _build_deal(req: UnderwriteRequest) -> DealData:
         min_dscr=req.a_min_dscr,
         min_cap_rate=req.a_min_cap,
         target_lp_irr=req.a_target_irr / 100.0,
+        # Go/No-Go hurdle — frontend sends the target as a percentage
+        # (e.g. 15 for 15%); normalize to a decimal. Metric string is
+        # validated downstream in the solver.
+        hurdle_metric=(req.a_hurdle_metric or "lp_irr").strip() or "lp_irr",
+        hurdle_value=((req.a_hurdle_value or 15.0) / 100.0),
     )
 
     deal.assumptions = assumptions
+    _contingency_sanity_check(req.a_const_hard, req.a_const_reserve)
     logger.info("DEAL INPUT hard_costs=%s (from form: const_hard=%s, reno=%s)",
                 assumptions.const_hard, req.a_const_hard, req.f_reno_cost)
     logger.info("FORM INPUT a_const_hard=%s, f_reno_cost=%s",

@@ -1575,7 +1575,9 @@ def _scrape_zoning_code(url: str, deal: Optional[DealData] = None) -> Optional[s
     code_platform = None
     if deal is not None:
         code_platform = deal.provenance.field_sources.get("code_platform")
-    return fetch_zoning_text(url, code_platform)
+    # 25K chars keeps most of a Title's navigation + introductory context.
+    # The LLM (Prompt 3A) tolerates this budget cleanly under Sonnet.
+    return fetch_zoning_text(url, code_platform, max_chars=25000)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1623,6 +1625,153 @@ def _call_llm_text(model: str, system: str, user_msg: str, max_tokens: int = 204
     except (anthropic.APIError, IndexError, KeyError) as exc:
         logger.warning("LLM text call failed (%s): %s", model, exc)
         return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HISTORICAL REGISTRY LOOKUP — National Register + Local Designations
+# ═══════════════════════════════════════════════════════════════════════════
+
+_SYSTEM_HIST = (
+    "You are a preservation-planning analyst. Given a property address, city, "
+    "state, and year built, determine its historical registry status using "
+    "your training knowledge of the National Register of Historic Places "
+    "(NRHP), state registers, and city landmark designations.\n\n"
+    "RULES:\n"
+    "- Evaluate FOUR separate determinations, IN THIS ORDER:\n"
+    "  1. NRHP individual listing — is this specific property individually "
+    "     listed on the National Register?\n"
+    "  2. NRHP historic district — does this address sit within an NRHP-listed "
+    "     or NRHP-eligible historic district? If yes, name the district.\n"
+    "  3. Local / state landmark — is the property designated under the city's "
+    "     or state's historic preservation ordinance (e.g. Philadelphia Register "
+    "     of Historic Places, NYC Landmarks Preservation Commission, DC Historic "
+    "     Landmark / Historic District)?\n"
+    "  4. Historic Tax Credit eligibility — would the property, based on its "
+    "     age (pre-1940 favorable), character, and district status, be a "
+    "     reasonable candidate for the federal 20% Historic Rehabilitation Tax "
+    "     Credit or state-level HTCs? Answer conservatively: only `true` when "
+    "     the property is already listed OR sits in a district AND year_built is "
+    "     pre-1975. Everything else → `false` with a brief explanation.\n"
+    "- When uncertain (neighborhood close to a known district but not a known "
+    "  contributor), say so in the notes and return null for the designation "
+    "  fields rather than inventing a listing name.\n"
+    "- Cite the specific district or listing name when applicable. NEVER "
+    "  fabricate NRHP reference numbers.\n"
+    "Output ONLY valid JSON."
+)
+
+_USER_HIST = (
+    "Property: {property_address}\n"
+    "City: {city}\n"
+    "State: {state}\n"
+    "Year built: {year_built}\n"
+    "Property type: {asset_type}\n\n"
+    "Return JSON:\n"
+    '{{\n'
+    '  "nrhp_individual": false,\n'
+    '  "nrhp_listing_name": null,\n'
+    '  "nrhp_district": null,\n'
+    '  "local_designation": null,\n'
+    '  "state_designation": null,\n'
+    '  "htc_eligible": false,\n'
+    '  "htc_reasoning": null,\n'
+    '  "notes": null\n'
+    '}}'
+)
+
+
+def _fetch_historical_status(deal: DealData) -> None:
+    """Populate DealData.historical_designation / historic_district /
+    historic_preservation_notes / historic_tax_credits_eligible.
+
+    Primary path: Sonnet call against curated training knowledge of the
+    National Register + city/state landmark ordinances (same pattern
+    used for zoning when municipal-code scrapes fail). Returns
+    conservative nulls when unsure rather than inventing listings.
+
+    Future extension: when NPS's NRHP public ArcGIS endpoint becomes
+    reliably queryable, add a spatial point-in-polygon pre-check here
+    to verify the LLM's answer. The hook lives below the Sonnet call.
+    """
+    addr = deal.address
+    if not (addr.city and addr.state and addr.full_address):
+        logger.info("HISTORICAL: insufficient address data — skipping")
+        return
+
+    year_built = (
+        deal.assumptions.year_built
+        or (deal.extracted_docs.year_built_extracted if deal.extracted_docs else None)
+        or (deal.parcel_data.year_built if deal.parcel_data else None)
+    )
+    asset_type = (deal.asset_type.value if deal.asset_type else "unknown")
+
+    user_msg = _USER_HIST.format(
+        property_address=addr.full_address,
+        city=addr.city,
+        state=addr.state,
+        year_built=str(year_built) if year_built else "unknown",
+        asset_type=asset_type,
+    )
+    result = _call_llm(MODEL_SONNET, _SYSTEM_HIST, user_msg, max_tokens=1024)
+    if not result:
+        logger.warning("HISTORICAL: Sonnet lookup failed — historical status unavailable")
+        return
+
+    # ── Designation string: lead with NRHP individual, fall back to
+    #    NRHP district, then local, then state. Keep the label concise.
+    designation = None
+    district = None
+    if result.get("nrhp_individual") and result.get("nrhp_listing_name"):
+        designation = f"NRHP listed — {result['nrhp_listing_name']}"
+    if result.get("nrhp_district"):
+        district = result["nrhp_district"]
+        if not designation:
+            designation = f"Contributing to NRHP historic district"
+    if result.get("local_designation"):
+        if designation:
+            designation = f"{designation} / {result['local_designation']}"
+        else:
+            designation = result["local_designation"]
+    if not designation and result.get("state_designation"):
+        designation = f"State-designated historic resource — {result['state_designation']}"
+
+    # ── Compose preservation notes paragraph. Always render something
+    #    the report can show — either the substantive findings or a
+    #    clear "no designation" note for the reader.
+    notes_parts = []
+    if result.get("notes"):
+        notes_parts.append(str(result["notes"]).strip())
+    if result.get("htc_reasoning"):
+        notes_parts.append(f"HTC assessment: {result['htc_reasoning']}")
+    if not notes_parts and not designation:
+        notes_parts.append(
+            "Claude's National Register + local-designation lookup returned "
+            "no match for this address. A definitive answer requires a "
+            "title-company historic-designation search prior to closing — "
+            "especially if alterations, demolition, or a building-envelope "
+            "change is contemplated."
+        )
+    preservation_notes = " ".join(notes_parts) if notes_parts else None
+
+    # ── Write onto DealData ────────────────────────────────────────
+    if designation:
+        deal.historical_designation = designation
+    if district:
+        deal.historic_district = district
+    if preservation_notes:
+        deal.historic_preservation_notes = preservation_notes
+    deal.historic_tax_credits_eligible = bool(result.get("htc_eligible"))
+
+    deal.provenance.field_sources["historical_status_source"] = (
+        "llm_nrhp_lookup (Sonnet training-knowledge — NRHP + local)"
+    )
+
+    logger.info(
+        "HISTORICAL: designation=%s | district=%s | HTC eligible=%s",
+        (designation or "none")[:60],
+        (district or "—")[:40],
+        deal.historic_tax_credits_eligible,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1727,9 +1876,14 @@ def _apply_3a(data: dict, deal: DealData) -> None:
                     seen.add(item)
             setattr(z, attr, existing)
 
-    sv = data.get("source_verification") or {}
-    z.source_verified = not sv.get("source_mismatch", False)
-    z.source_notes    = sv.get("source_notes") or z.source_notes
+    # Only overwrite source_verified / source_notes when the payload
+    # actually carries a source_verification block. A partial gap-fill
+    # payload (just the missing dimension keys) must NOT silently flip
+    # source_verified from False -> True and erase the fallback note.
+    if "source_verification" in data and isinstance(data["source_verification"], dict):
+        sv = data["source_verification"]
+        z.source_verified = not sv.get("source_mismatch", False)
+        z.source_notes    = sv.get("source_notes") or z.source_notes
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1740,10 +1894,22 @@ _SYSTEM_3B = (
     "You are a commercial real estate development analyst specializing in zoning capacity.\n"
     "Calculate maximum buildable development capacity from zoning parameters and parcel data.\n\n"
     "RULES:\n"
-    "- Show calculation methodology in calculation_notes.\n"
+    "- Return a STRUCTURED list of calculation_steps (not a paragraph). Every\n"
+    "  dimensional constraint that applies must be its own step with a clean\n"
+    "  formula, its input values, and the result. Each step must read like a\n"
+    "  math problem, not a sentence.\n"
+    "- Typical steps: (1) FAR capacity, (2) Lot coverage footprint,\n"
+    "  (3) Height / stories cap, (4) Density (units × min_lot_area),\n"
+    "  (5) Setback-envelope adjustment when it binds before FAR.\n"
+    "- Each step object must carry: label (short title), formula (symbolic,\n"
+    "  e.g. 'Lot SF × Max FAR'), inputs (list of 'Name = value' strings),\n"
+    "  result (final number with unit), and a one-sentence note on what this\n"
+    "  step reveals.\n"
     "- Calculate under CURRENT zoning only — no rezoning speculation.\n"
-    "- Identify the binding constraint when multiple standards apply.\n"
-    "- Return null with explanation if data is insufficient to calculate.\n"
+    "- Identify the BINDING constraint (the smallest-SF cap) in\n"
+    "  binding_constraint, and restate its result as binding_result.\n"
+    "- Return null (or an empty calculation_steps array) with explanation in\n"
+    "  data_gaps if inputs are insufficient to compute.\n"
     "Output ONLY valid JSON."
 )
 
@@ -1753,8 +1919,17 @@ _USER_3B = (
     "Zoning: {zoning_json}\n\n"
     "Return JSON:\n"
     '{{\n'
+    '  "calculation_steps": [\n'
+    '    {{"label": "FAR Capacity",\n'
+    '     "formula": "Lot SF × Max FAR",\n'
+    '     "inputs": ["Lot SF = 9,652", "Max FAR = 5.0"],\n'
+    '     "result": "48,260 SF gross buildable",\n'
+    '     "note": "Upper bound on total conditioned floor area."}}\n'
+    '  ],\n'
+    '  "binding_constraint": null,\n'
+    '  "binding_result": null,\n'
     '  "max_units_by_right": null, "max_buildable_sf": null,\n'
-    '  "max_buildable_stories": null, "binding_constraint": null,\n'
+    '  "max_buildable_stories": null,\n'
     '  "binding_constraint_explanation": null, "units_per_acre": null,\n'
     '  "current_units_vs_max": null, "existing_nonconformities": [],\n'
     '  "variance_required_for_proposed_use": null,\n'
@@ -1765,20 +1940,50 @@ _USER_3B = (
 
 
 def _apply_3b(data: dict, deal: DealData) -> None:
-    """Map Prompt 3B response onto DealData.zoning capacity fields."""
+    """Map Prompt 3B response onto DealData.zoning capacity fields.
+
+    Stores BOTH the structured calculation_steps (for the report's
+    math-problem layout) AND a fallback prose narrative (for legacy
+    consumers)."""
     z = deal.zoning
     z.max_buildable_units = data.get("max_units_by_right") or z.max_buildable_units
     z.max_buildable_sf    = data.get("max_buildable_sf") or z.max_buildable_sf
-    # calculation_notes is supposed to be a prose string but Sonnet occasionally
-    # returns a nested dict (step_1_*, step_2_*, …). Flatten structured output
-    # into readable bullet prose so the PDF doesn't show a raw repr.
+
+    # Structured calculation steps — shape each into a clean dict for
+    # Jinja to render as a math-problem layout. Tolerant of Sonnet
+    # variations (inputs may arrive as str or list, formula may be
+    # absent, etc.).
+    steps_raw = data.get("calculation_steps") or []
+    steps: List[Dict[str, Any]] = []
+    if isinstance(steps_raw, list):
+        for s in steps_raw:
+            if not isinstance(s, dict):
+                continue
+            inputs = s.get("inputs")
+            if isinstance(inputs, str):
+                inputs = [inputs]
+            elif not isinstance(inputs, list):
+                inputs = []
+            steps.append({
+                "label":   str(s.get("label")   or "").strip(),
+                "formula": str(s.get("formula") or "").strip(),
+                "inputs":  [str(x) for x in inputs if x is not None],
+                "result":  str(s.get("result")  or "").strip(),
+                "note":    str(s.get("note")    or "").strip(),
+            })
+    z.buildable_capacity_steps = steps
+    z.binding_constraint       = data.get("binding_constraint") or z.binding_constraint
+    z.binding_result           = data.get("binding_result")     or getattr(z, "binding_result", None)
+
+    # calculation_notes — prose fallback. Sonnet sometimes returns a nested
+    # dict; flatten it to readable bullet prose so the PDF doesn't show a
+    # raw repr when the structured `calculation_steps` path is absent.
     cn = data.get("calculation_notes")
     if isinstance(cn, dict):
         lines = []
         for k, v in cn.items():
             label = k.replace("_", " ").title()
             if isinstance(v, dict):
-                # Pull the most descriptive scalar fields, then the rest.
                 parts = []
                 for pk in ("formula", "inputs", "result_sf", "note"):
                     if pk in v and v[pk] is not None:
@@ -2000,55 +2205,91 @@ def _fetch_census_rents(state_fips: str, county_fips: str,
 def _fetch_craigslist_rentals(zip_code: str, city_slug: str,
                                deal: DealData,
                                max_results: int = 10) -> None:
-    """Craigslist 2BR RSS → append RentComp rows into deal.comps.rent_comps.
+    """Craigslist rental RSS → append RentComp rows for every bedroom tier
+    (Studio through 4BR) into deal.comps.rent_comps.
 
-    Craigslist frequently blocks non-browser user agents and has deprecated
-    many RSS endpoints, so this fetch is treated as best-effort and warnings
-    are not escalated.
+    The RSS endpoint accepts a bedrooms={0..4} query (0 = efficiency /
+    studio). Prior revisions hard-coded bedrooms=2, which starved the
+    comparable market analysis of Studio / 1BR / 3BR comps. We now loop
+    over every tier; each failing tier is logged but non-fatal so a
+    Cloudflare / 403 block on one tier still lets the others succeed.
+
+    Craigslist frequently blocks non-browser user agents and has
+    deprecated some RSS endpoints, so this fetch is treated as best
+    effort and warnings are not escalated.
     """
     if not city_slug:
         return
-    url = (
-        f"https://{city_slug}.craigslist.org/search/apa"
-        f"?postal={zip_code}&bedrooms=2&format=rss"
-    )
-    try:
-        resp = requests.get(
-            url, timeout=_REQUEST_TIMEOUT,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; DealDesk/1.0)"},
+    # bedrooms=0 yields studio/efficiency; 1..4 are self-explanatory.
+    # max_results is per tier, so the ceiling is max_results * 5.
+    per_tier_per_bedroom = {
+        0: "Studio",
+        1: "1BR",
+        2: "2BR",
+        3: "3BR",
+        4: "4BR+",
+    }
+    total_count = 0
+    for bedrooms, label in per_tier_per_bedroom.items():
+        url = (
+            f"https://{city_slug}.craigslist.org/search/apa"
+            f"?postal={zip_code}&bedrooms={bedrooms}&format=rss"
         )
-        resp.raise_for_status()
-        root = ET.fromstring(resp.content)
-        items = root.findall(".//item") or root.findall("channel/item")
-        count = 0
-        for item in items[:max_results]:
-            title_elem = item.find("title")
-            title = (title_elem.text if title_elem is not None else "") or ""
-            price_m = re.search(r"\$([0-9,]+)", title)
-            price = (
-                _safe_float(price_m.group(1).replace(",", ""))
-                if price_m else None
+        try:
+            resp = requests.get(
+                url, timeout=_REQUEST_TIMEOUT,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; DealDesk/1.0)"},
             )
-            br_m = re.search(
-                r"(\d)\s*(?:br|bed|bedroom)", title, re.IGNORECASE,
-            )
-            beds = int(br_m.group(1)) if br_m else 0
-            if price and price > 200:
-                # Use the existing Pydantic RentComp (models.py line 446).
-                # Field names: address, unit_type, beds, monthly_rent, source.
-                # Listing title goes into `source_notes` via source field.
-                deal.comps.rent_comps.append(RentComp(
-                    address=zip_code,
-                    unit_type=f"{beds}BR" if beds else "Unknown",
-                    beds=beds or None,
-                    monthly_rent=price,
-                    source=f"Craigslist: {title[:60]}",
-                ))
-                count += 1
-        logger.info("CRAIGSLIST: zip=%s fetched %d listings", zip_code, count)
-    except Exception as exc:
-        logger.warning("CRAIGSLIST failed (%s/%s): %s",
-                       city_slug, zip_code, exc)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.content)
+            items = root.findall(".//item") or root.findall("channel/item")
+            count = 0
+            for item in items[:max_results]:
+                title_elem = item.find("title")
+                title = (title_elem.text if title_elem is not None else "") or ""
+                price_m = re.search(r"\$([0-9,]+)", title)
+                price = (
+                    _safe_float(price_m.group(1).replace(",", ""))
+                    if price_m else None
+                )
+                # Title-level bedroom parse: CL's query-param isn't always
+                # honored precisely (1BR returns often mix with studio).
+                # Prefer the title parse; fall back to the query param.
+                br_m = re.search(
+                    r"(\d)\s*(?:br|bed|bedroom)", title, re.IGNORECASE,
+                )
+                if br_m:
+                    title_beds = int(br_m.group(1))
+                else:
+                    title_beds = bedrooms
+                # Normalize label from the title-derived bed count so the
+                # RentComp's unit_type matches what the market-rent engine
+                # expects (Studio / 1BR / ... / 4BR+).
+                if title_beds == 0:
+                    comp_label = "Studio"
+                elif title_beds >= 4:
+                    comp_label = "4BR+"
+                else:
+                    comp_label = f"{title_beds}BR"
+                if price and price > 200:
+                    # Use the existing Pydantic RentComp (models.py line 446).
+                    # Field names: address, unit_type, beds, monthly_rent, source.
+                    deal.comps.rent_comps.append(RentComp(
+                        address=zip_code,
+                        unit_type=comp_label,
+                        beds=title_beds or None,
+                        monthly_rent=price,
+                        source=f"Craigslist: {title[:60]}",
+                    ))
+                    count += 1
+            total_count += count
+            logger.info("CRAIGSLIST: zip=%s tier=%s fetched %d listings",
+                        zip_code, label, count)
+        except Exception as exc:
+            logger.warning("CRAIGSLIST failed (%s/%s tier=%s): %s",
+                           city_slug, zip_code, label, exc)
+    logger.info("CRAIGSLIST: zip=%s total %d listings across 5 bedroom tiers",
+                zip_code, total_count)
 
 
 def _fetch_opa_nearby_sales(lat: float, lon: float, deal: DealData) -> None:
@@ -2258,11 +2499,50 @@ def _compute_market_rents(deal: DealData) -> None:
             ((computed_rent - census_rent) / census_rent * 100),
         )
 
+    # Write PER-UNIT market_rent + monthly_rent so every row gets the
+    # FMR that matches its own bedroom count × tier_multiplier. The
+    # dominant-bedroom value is kept as the deal-level
+    # quality_adjusted_market_rent headline (a single number for summary
+    # contexts), but individual rows MUST carry their own bedroom tier
+    # so downstream GPR sums match what the Excel rent roll writes.
+    def _fmr_for_unit(u: dict) -> Optional[float]:
+        br = u.get("beds") or u.get("bedrooms")
+        if br is None:
+            ut = str(u.get("unit_type", ""))
+            m = re.search(r"(\d)", ut)
+            br = int(m.group(1)) if m else None
+            if br is None and "studio" in ut.lower():
+                br = 0
+        try:
+            br = int(br) if br is not None else None
+        except (TypeError, ValueError):
+            br = None
+        if br is None:
+            return None
+        # Cap at 3BR — HUD doesn't publish >3BR for most metros; 4BR+
+        # uses the 3BR value with a residual upcharge we skip here.
+        if br > 3:
+            br = 3
+        return fmr_map.get(br)
+
+    filled = 0
     for u in units:
-        u["market_rent"] = computed_rent
+        per_unit_fmr = _fmr_for_unit(u)
+        if per_unit_fmr and per_unit_fmr > 0:
+            per_unit_rent = round(float(per_unit_fmr) * multiplier, 0)
+        else:
+            per_unit_rent = computed_rent  # fall back to dominant rent
+        u["market_rent"] = per_unit_rent
+        # Only overwrite monthly_rent when the extractor/user hasn't
+        # provided one — preserving the upload path's first-populated-wins
+        # semantics across the rest of the pipeline.
+        if not u.get("monthly_rent"):
+            u["monthly_rent"] = per_unit_rent
+            filled += 1
     logger.info(
-        "MARKET RENTS: wrote $%.0f market_rent to %d units",
-        computed_rent, len(units),
+        "MARKET RENTS: wrote per-unit market_rent to %d units "
+        "(%d units had monthly_rent back-filled from FMR × tier)",
+        len(units), filled,
     )
 
 
@@ -2386,7 +2666,9 @@ def fetch_commercial_density(deal: DealData) -> dict:
                 + summary.get("bank", 0)
                 + summary.get("pharmacy", 0)
                 + summary.get("gym", 0))
-    grocery  = summary.get("grocery_or_supermarket", 0)
+    grocery  = (summary.get("supermarket", 0)
+                + summary.get("grocery_store", 0)
+                + summary.get("grocery_or_supermarket", 0))  # legacy fallback
     schools  = summary.get("school", 0)
     parks    = summary.get("park", 0)
     total    = sum(summary.values())
@@ -2682,12 +2964,31 @@ def enrich_market_data(deal: DealData) -> DealData:
     else:
         logger.info("Skipping Prompt 3A — no zoning code text available")
 
-    # Zoning fallback: scrape failed (e.g. amlegal 403) but the parcel
-    # adapter populated deal.zoning.zoning_code (e.g. "RM1" from Philly OPA).
-    # Ask the LLM to return standards from its training knowledge using the
-    # district code as the authoritative input. Strictly gated on having a
-    # real district code AND no scraped text already applied.
-    if not zoning_code_text and deal.zoning.zoning_code:
+    # Zoning fallback: runs when EITHER the scrape failed entirely OR
+    # the scrape succeeded but yielded too little district-specific
+    # content for Prompt 3A to populate the standards table. Example:
+    # amlegal's Title 14 root URL returns the chapter TOC (~35 KB) but
+    # no section-level dimensional rules, so Prompt 3A returns mostly
+    # null and the report's Zoning Standards table comes out empty.
+    # Require at least 4 of 9 core dimensional fields before we consider
+    # the scrape sufficient.
+    _zp = deal.zoning
+    _dim_fields = [
+        _zp.max_height_ft, _zp.max_stories, _zp.min_lot_area_sf,
+        _zp.max_lot_coverage_pct, _zp.max_far,
+        _zp.front_setback_ft, _zp.rear_setback_ft, _zp.side_setback_ft,
+        _zp.min_parking_spaces,
+    ]
+    _populated = sum(1 for v in _dim_fields if v not in (None, ""))
+    _scrape_insufficient = zoning_code_text and _populated < 4
+    if _scrape_insufficient:
+        logger.info(
+            "Zoning fallback TRIGGERED: scrape ran but only %d/9 dimensional "
+            "fields populated — falling through to LLM training-knowledge "
+            "fallback for authoritative district standards",
+            _populated,
+        )
+    if (not zoning_code_text or _scrape_insufficient) and deal.zoning.zoning_code:
         zcode = deal.zoning.zoning_code
         zcity = addr.city or "unknown"
         zstate = addr.state or "unknown"
@@ -2766,6 +3067,13 @@ def enrich_market_data(deal: DealData) -> DealData:
             "    max_height_ft=38, max_stories=3, min_lot_area_sf=1440,\n"
             "    max_lot_coverage_pct=0.75, max_far=2.0, front_setback_ft=0,\n"
             "    rear_setback_ft=9, side_setback_ft=0.\n"
+            "- Philadelphia ICMX (Industrial Commercial Mixed-Use, §14-704):\n"
+            "    max_height_ft=58 (buildings must be ≤ 58'), max_stories=null,\n"
+            "    min_lot_area_sf=1440 (residential uses only; commercial/industrial\n"
+            "    have no minimum lot area), max_lot_coverage_pct=0.75 (residential)\n"
+            "    or null (industrial/commercial — no coverage cap),\n"
+            "    max_far=5.0, front_setback_ft=0, rear_setback_ft=0 (abutting\n"
+            "    non-residential) / 9 (abutting residential), side_setback_ft=0.\n"
             "- Philadelphia IMX: same as IRMX except max_far=3.0.\n"
             "- Philadelphia I-1 (Light Industrial, §14-704): max_height_ft=58,\n"
             "    max_stories=null, min_lot_area_sf=null, max_lot_coverage_pct=0.75,\n"
@@ -3032,6 +3340,39 @@ def enrich_market_data(deal: DealData) -> DealData:
         deal.provenance.failed_sources.extend(failed)
         logger.warning("DATA QUALITY: %d external-source failure(s) — %s",
                        len(failed), [f["service"] for f in failed])
+
+    # ── STEP 10: Historical / landmark status ─────────────────────
+    # Populates DealData.historical_designation / historic_district /
+    # historic_preservation_notes / historic_tax_credits_eligible by
+    # combining NRHP + local designations. Primary path uses Sonnet's
+    # training-knowledge of the National Register and city landmark
+    # databases; an extensible hook exists for direct ArcGIS spatial
+    # queries where NPS/city endpoints are reliably available.
+    try:
+        logger.info("Step 10: Historical registry lookup...")
+        _fetch_historical_status(deal)
+    except Exception as _e:
+        logger.warning("Historical status lookup failed (non-fatal): %s", _e)
+
+    # ── Re-synthesize rent roll now that HUD FMR / ACS / ZORI are
+    #    populated. Stage 2 (deal_data) synthesized a rent roll BEFORE
+    #    market data was fetched, so any deal that fell back to the
+    #    hardcoded $1,200 default needs to be rebuilt from real FMR.
+    try:
+        from deal_data import _synthesize_rent_roll
+        _synthesize_rent_roll(deal)
+    except Exception as _e:
+        logger.warning("Post-market rent-roll re-synth failed (non-fatal): %s", _e)
+
+    # ── Mixed-use tail: if the deal is Mixed-Use and no commercial
+    #    tenant row exists (extractor missed or OM didn't break it out),
+    #    append a synthetic ground-floor retail placeholder. Runs after
+    #    re-synth so it sees the final unit_mix.
+    try:
+        from deal_data import _synthesize_commercial_for_mixed_use
+        _synthesize_commercial_for_mixed_use(deal)
+    except Exception as _e:
+        logger.warning("Post-market commercial synth failed (non-fatal): %s", _e)
 
     logger.info("Market data enrichment complete for %s", deal.deal_id)
     return deal

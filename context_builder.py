@@ -12,13 +12,14 @@ Public entry point:
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 import re
 import time
 from collections import defaultdict
-from typing import Optional
+from typing import Dict, List, Optional
 
 import anthropic
 
@@ -940,12 +941,75 @@ def build_context(deal: DealData) -> dict:
     ]
     logger.info("GANTT: %d phases across %d months", len(_gantt_phases), _total_m)
 
-    # Insurance
+    # Insurance — surface the structured data from risk.py (Prompt 4B)
+    # for the report's Property Insurance subsection. Prior revision
+    # stringified kpi_strip / summary_table to "" which silenced the
+    # entire block.
     ctx["insurance_narrative_p1"] = ins.insurance_narrative_p1 or ""
     ctx["insurance_narrative_p2"] = ins.insurance_narrative_p2 or ""
     ctx["insurance_narrative_p3"] = ins.insurance_narrative_p3 or ""
-    ctx["insurance_kpi_strip"] = ""
-    ctx["insurance_summary_table"] = ""
+
+    # KPI strip (6 metrics) — pre-format dollar / yes-no / flag values
+    # so the template just emits cell text.
+    _kpi_src = ins.insurance_kpi_strip or {}
+    def _ins_money(v):
+        try:
+            f = float(v or 0)
+        except (TypeError, ValueError):
+            return "—"
+        return f"${f:,.0f}" if f else "—"
+    def _ins_bool(v):
+        if v in (None, ""):
+            return "—"
+        if isinstance(v, bool):
+            return "Yes" if v else "No"
+        s = str(v).strip().lower()
+        if s in ("true", "yes", "required", "1"):
+            return "Yes"
+        if s in ("false", "no", "not required", "0"):
+            return "No"
+        return str(v)
+    def _ins_text(v):
+        return str(v) if v not in (None, "") else "—"
+
+    ctx["insurance_kpi_rows"] = [
+        {"label": "FEMA Flood Zone",              "value": _ins_text(_kpi_src.get("flood_zone"))},
+        {"label": "Flood Insurance Required",     "value": _ins_bool(_kpi_src.get("flood_insurance_required"))},
+        {"label": "Est. Property Insurance / Yr", "value": _ins_money(_kpi_src.get("est_property_insurance_annual"))},
+        {"label": "Est. Flood Insurance / Yr",    "value": _ins_money(_kpi_src.get("est_flood_insurance_annual"))},
+        {"label": "Est. Total Insurance / Yr",    "value": _ins_money(_kpi_src.get("est_total_insurance_annual"))},
+        {"label": "Coverage Gaps Flagged",        "value": _ins_text(_kpi_src.get("coverage_gaps_flagged"))},
+    ]
+    ctx["insurance_kpi_strip"] = _kpi_src  # raw dict for downstream callers
+
+    # Summary table (one row per coverage type) — pre-format cost and
+    # required fields so the template uses consistent display.
+    _rows = []
+    for row in (ins.insurance_summary_table or []):
+        if not isinstance(row, dict):
+            continue
+        _rows.append({
+            "coverage_type": _ins_text(row.get("coverage_type")),
+            "required":      _ins_bool(row.get("required")),
+            "est_annual_cost": _ins_money(row.get("est_annual_cost")),
+            "notes":          _ins_text(row.get("notes")),
+            "flag":           _ins_text(row.get("flag")),
+        })
+    ctx["insurance_summary_table"] = _rows
+    ctx["has_insurance_analysis"] = bool(
+        _rows
+        or ins.insurance_narrative_p1
+        or ins.insurance_narrative_p2
+        or ins.insurance_narrative_p3
+        or (_kpi_src and any(v not in (None, "") for v in _kpi_src.values()))
+    )
+    logger.info(
+        "INSURANCE CTX: narratives=%s kpi_keys=%d table_rows=%d proforma=$%s",
+        sum(1 for n in (ins.insurance_narrative_p1, ins.insurance_narrative_p2,
+                        ins.insurance_narrative_p3) if n),
+        len(_kpi_src), len(_rows),
+        f"{ins.insurance_proforma_line_item or 0:,.0f}",
+    )
 
     # DD Flags
     ctx["dd_flags"] = [f.model_dump() for f in deal.dd_flags]
@@ -1098,6 +1162,49 @@ def build_context(deal: DealData) -> dict:
     ctx["unit_mix"] = ext.unit_mix or []
     ctx["occupancy_rate"] = ext.occupancy_rate
     ctx["image_placements"] = ext.image_placements or {}
+
+    # Photos extracted from the uploaded OM PDF. Encode as base64 so the
+    # Playwright renderer doesn't need file:// URLs (which it blocks in
+    # some configurations). Cap at 12 so the gallery page stays paginated
+    # cleanly.
+    # Downscale each photo to max 1200px on the long edge and JPEG-encode
+    # at quality 82 before base64-embedding. PyMuPDF extracts PNGs at full
+    # source resolution (often 3-5 MB each), and embedding 12 of them
+    # raw produced a 22 MB PDF in prior runs. JPEG at 1200px / q=82 yields
+    # ~150–300 KB per image at no visible quality loss for an 8.5×11 PDF.
+    from io import BytesIO
+    try:
+        from PIL import Image
+    except ImportError:
+        Image = None
+
+    _pdf_photos_b64: List[Dict[str, str]] = []
+    for _idx, _p in enumerate(ext.pdf_photo_paths[:12]):
+        try:
+            if Image is not None:
+                with Image.open(_p) as _img:
+                    _img = _img.convert("RGB")
+                    _img.thumbnail((1200, 1200), Image.LANCZOS)
+                    _buf = BytesIO()
+                    _img.save(_buf, format="JPEG", quality=82, optimize=True)
+                    _bytes = _buf.getvalue()
+                _mime = "image/jpeg"
+            else:
+                # PIL unavailable — fall back to raw PNG embed (accepts size cost).
+                with open(_p, "rb") as _fh:
+                    _bytes = _fh.read()
+                _mime = "image/png"
+            _b = base64.b64encode(_bytes).decode("ascii")
+            _pdf_photos_b64.append({
+                "src": f"data:{_mime};base64,{_b}",
+                "caption": f"Figure 2.{_idx + 2} — Property photograph from offering memorandum",
+            })
+        except Exception as _pe:
+            logger.warning("PDF photo encode failed for %s: %s", _p, _pe)
+    ctx["pdf_photos"] = _pdf_photos_b64
+    logger.info("PDF photos: %d embedded, total base64 payload ~%d KB",
+                len(_pdf_photos_b64),
+                sum(len(p["src"]) for p in _pdf_photos_b64) // 1024)
 
     # Provenance
     ctx["provenance"] = deal.provenance.model_dump()
@@ -1315,13 +1422,82 @@ def build_context(deal: DealData) -> dict:
     ctx["sensitivity_cap_axis"]  = [f"{c:.1%}" for c in cap_axis]
 
     # ── Monte Carlo / Risk-Weighted Return (section 12.6) ─────────
-    ctx["monte_carlo_results"] = fo.monte_carlo_results or {}
-    ctx["monte_carlo_narrative"] = (
-        fo.monte_carlo_narrative
-        or "Risk-weighted return analysis requires stabilized NOI. "
-           "This analysis will be completed upon lease execution and "
-           "confirmation of stabilized operating assumptions."
+    # Structured three-part layout: method → calculation → interpretation.
+    # `monte_carlo_stat_rows` feeds a clean percentile table in the
+    # template; the LLM narrative is kept as the interpretation
+    # paragraph but both method + stats now render deterministically.
+    _mc = fo.monte_carlo_results or {}
+    ctx["monte_carlo_results"] = _mc
+    ctx["has_monte_carlo"]     = bool(_mc and _mc.get("n_valid"))
+
+    def _fmt_pct(v, digits=1):
+        try:
+            return f"{float(v) * 100:.{digits}f}%" if v is not None else "—"
+        except (TypeError, ValueError):
+            return "—"
+
+    def _fmt_em(v):
+        try:
+            return f"{float(v):.2f}x" if v is not None else "—"
+        except (TypeError, ValueError):
+            return "—"
+
+    _target_irr = getattr(deal.assumptions, "target_lp_irr", 0.15) or 0.15
+
+    ctx["monte_carlo_stat_rows"] = [
+        {"label": "Downside (P10)",   "irr": _fmt_pct(_mc.get("p10_irr")),    "em": _fmt_em(_mc.get("p10_em")),    "note": "Worst 10% of simulated outcomes"},
+        {"label": "Lower Quartile (P25)", "irr": _fmt_pct(_mc.get("p25_irr")), "em": "—",                            "note": "Below-median scenario"},
+        {"label": "Median (P50)",     "irr": _fmt_pct(_mc.get("median_irr")), "em": _fmt_em(_mc.get("median_em")),  "note": "Expected outcome (risk-weighted)"},
+        {"label": "Upper Quartile (P75)", "irr": _fmt_pct(_mc.get("p75_irr")), "em": "—",                            "note": "Above-median scenario"},
+        {"label": "Upside (P90)",     "irr": _fmt_pct(_mc.get("p90_irr")),    "em": _fmt_em(_mc.get("p90_em")),    "note": "Best 10% of simulated outcomes"},
+    ]
+    ctx["monte_carlo_target_irr"]      = _fmt_pct(_target_irr, digits=0)
+    ctx["monte_carlo_prob_above_tgt"]  = _fmt_pct(_mc.get("prob_above_target"))
+    ctx["monte_carlo_mean_irr"]        = _fmt_pct(_mc.get("mean_irr"))
+    ctx["monte_carlo_std_irr"]         = _fmt_pct(_mc.get("std_irr"))
+    ctx["monte_carlo_n_valid"]         = int(_mc.get("n_valid") or 0)
+    ctx["monte_carlo_dominant_var"]    = (_mc.get("dominant_variable") or "—").replace("_", " ").title()
+    ctx["monte_carlo_dominant_r2"]     = (
+        f"{float(_mc.get('dominant_variable_r2') or 0):.2f}"
+        if _mc.get("dominant_variable_r2") is not None else "—"
     )
+    ctx["monte_carlo_shape"]           = (_mc.get("distribution_shape") or "—").replace("_", " ").title()
+
+    # Method blurb — deterministic, no LLM. Same every run so the reader
+    # always gets the same framing.
+    ctx["monte_carlo_method"] = (
+        "A 2,000-iteration Monte Carlo simulation stochastically varies "
+        "rent growth, exit cap rate, vacancy, and expense growth across "
+        "historical ranges, then computes LP IRR and equity multiple for "
+        "each iteration. Percentiles below summarize the resulting "
+        "distribution — the median is the risk-weighted expected outcome, "
+        "while P10 and P90 bracket downside and upside scenarios."
+    )
+
+    # Interpretation — LLM narrative if available, else a deterministic
+    # readout of the three headline takeaways.
+    _narr = fo.monte_carlo_narrative or ""
+    if not _narr.strip():
+        _prob = _mc.get("prob_above_target")
+        _prob_str = _fmt_pct(_prob) if _prob is not None else "—"
+        _med = _fmt_pct(_mc.get("median_irr"))
+        _dom = ctx["monte_carlo_dominant_var"]
+        _r2  = ctx["monte_carlo_dominant_r2"]
+        if _mc.get("n_valid"):
+            _narr = (
+                f"The simulation's median LP IRR is {_med} against a "
+                f"{ctx['monte_carlo_target_irr']} target ({_prob_str} of "
+                f"iterations clear the target). {_dom} is the dominant "
+                f"driver of outcomes (R² = {_r2}) — diligence and "
+                f"underwriting sensitivity should focus here."
+            )
+        else:
+            _narr = (
+                "Risk-weighted return analysis requires stabilized NOI. "
+                "This analysis will be completed upon lease execution "
+                "and confirmation of stabilized operating assumptions."
+            )
+    ctx["monte_carlo_narrative"] = _narr
 
     # ── Price solver (MC-backed purchase price at 15% median LP IRR) ─
     _ps = fo.price_solver_results or {}
@@ -1470,13 +1646,22 @@ def build_context(deal: DealData) -> dict:
     ctx["hbu_narrative"]           = z.hbu_narrative or ""
     ctx["hbu_conclusion"]          = z.hbu_conclusion or ""
     ctx["buildable_capacity_narrative"] = z.buildable_capacity_narrative or ""
+    # Structured math-problem steps. Template renders each step as a
+    # numbered calc block (label · formula · inputs list · result).
+    ctx["buildable_capacity_steps"]   = list(z.buildable_capacity_steps or [])
+    ctx["buildable_binding_constraint"] = z.binding_constraint or ""
+    ctx["buildable_binding_result"]     = z.binding_result or ""
 
     # ══════════════════════════════════════════════════════════════
     # DATA-GAP NOTES — professional placeholders for missing data
     # ══════════════════════════════════════════════════════════════
 
     # Section 2 — Photo Gallery
-    has_photos = bool(ext.image_placements)
+    # Consider the gallery "populated" when either real extracted PDF
+    # photos exist OR image metadata was captured. Prior code treated
+    # the always-truthy `{"images": []}` dict as "has photos", which
+    # suppressed the empty-state note even when no real images existed.
+    has_photos = bool(_pdf_photos_b64) or bool((ext.image_placements or {}).get("images"))
     if not has_photos:
         ctx["photo_gallery_note"] = (
             "No property photographs are on file as of the "
@@ -2235,28 +2420,50 @@ def build_context(deal: DealData) -> dict:
             "distance": "Zip-Level",
             "note":     f"Zillow ZORI {_zori_trend}".strip(),
         })
-    _c2br = getattr(md, "census_median_rent_2br", None)
-    if _c2br:
-        _benchmark_rows.append({
-            "property": "Census Tract Median",
-            "type":     "2BR",
-            "beds":     "2",
-            "rent_mo":  _fmt_rent_mo(_c2br),
-            "rent_sf":  "—",
-            "distance": "Tract-Level",
-            "note":     "Census ACS 2022 B25031",
-        })
-    _fmr_2br_raw = md.fmr_2br
-    if _fmr_2br_raw:
-        _benchmark_rows.append({
-            "property": "HUD Fair Market Rent",
-            "type":     "2BR",
-            "beds":     "2",
-            "rent_mo":  f"${_fmr_2br_raw:,.0f}/mo",
-            "rent_sf":  "—",
-            "distance": "MSA-Level",
-            "note":     "HUD FMR FY2025",
-        })
+    # Census ACS 2022 medians by bedroom tier (B25031_004E/5E/6E).
+    # Surface each tier that has a non-null value so the comparable market
+    # analysis shows rent across unit types, not just 2BR.
+    for _label, _beds, _attr in (
+        ("1BR", "1", "census_median_rent_1br"),
+        ("2BR", "2", "census_median_rent_2br"),
+        ("3BR", "3", "census_median_rent_3br"),
+    ):
+        _val = getattr(md, _attr, None)
+        if _val:
+            _benchmark_rows.append({
+                "property": "Census Tract Median",
+                "type":     _label,
+                "beds":     _beds,
+                "rent_mo":  _fmt_rent_mo(_val),
+                "rent_sf":  "—",
+                "distance": "Tract-Level",
+                "note":     "Census ACS 2022 B25031",
+            })
+
+    # HUD Fair Market Rent by bedroom tier (studio / 1BR / 2BR / 3BR).
+    # Same cross-tier emission so the report reflects the full local
+    # affordability ladder, not just a single 2BR datapoint.
+    for _label, _beds, _attr in (
+        ("Studio", "0", "fmr_studio"),
+        ("1BR",    "1", "fmr_1br"),
+        ("2BR",    "2", "fmr_2br"),
+        ("3BR",    "3", "fmr_3br"),
+    ):
+        _raw = getattr(md, _attr, None)
+        if _raw:
+            try:
+                _f = float(_raw)
+            except (TypeError, ValueError):
+                continue
+            _benchmark_rows.append({
+                "property": "HUD Fair Market Rent",
+                "type":     _label,
+                "beds":     _beds,
+                "rent_mo":  f"${_f:,.0f}/mo",
+                "rent_sf":  "—",
+                "distance": "MSA-Level",
+                "note":     "HUD FMR FY2025",
+            })
     _qamr = getattr(a, "quality_adjusted_market_rent", None)
     if _qamr:
         _benchmark_rows.append({
@@ -2270,28 +2477,45 @@ def build_context(deal: DealData) -> dict:
                 getattr(a, "renovation_tier", "") or "", "Computed"),
         })
 
-    # ── Active Craigslist listings (source prefix "Craigslist") ──
-    _cl_rows = []
-    for rc in _rent_comps[:6]:
+    # ── Active Craigslist listings (source prefix "Craigslist") ─────
+    # Group by bedroom tier and cap at 4 per tier so the report shows
+    # diversity across Studio / 1BR / 2BR / 3BR / 4BR+ rather than a
+    # slug of 2BR listings that crowd out other tiers.
+    _cl_by_tier: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    for rc in _rent_comps:
         src = str(getattr(rc, "source", "") or "")
         if not src.startswith("Craigslist"):
             continue
-        _cl_rows.append({
+        _tier = (rc.unit_type or "").strip() or "—"
+        if len(_cl_by_tier[_tier]) >= 4:
+            continue
+        _cl_by_tier[_tier].append({
             "property": (src.replace("Craigslist:", "").strip()[:40]
                          or "Active Listing"),
-            "type":     rc.unit_type or "—",
+            "type":     _tier if _tier != "—" else "—",
             "beds":     str(rc.beds) if rc.beds else "—",
             "rent_mo":  _fmt_rent_mo(rc.monthly_rent),
             "rent_sf":  "—",
             "distance": _fmt_dist(rc.distance_miles),
             "note":     "Craigslist Active",
         })
+    # Flatten in tier order (studio first, then 1BR, ...) so the
+    # rendered table reads Studio → 1BR → 2BR → 3BR → 4BR+ regardless
+    # of Craigslist's native response order.
+    _tier_order = ["Studio", "1BR", "2BR", "3BR", "4BR+"]
+    _cl_rows: List[Dict[str, str]] = []
+    for _t in _tier_order:
+        _cl_rows.extend(_cl_by_tier.get(_t, []))
+    for _t, _rows in _cl_by_tier.items():
+        if _t in _tier_order:
+            continue
+        _cl_rows.extend(_rows)
 
     ctx["rent_comp_rows"] = _benchmark_rows + _cl_rows
     ctx["has_rent_comps"] = len(ctx["rent_comp_rows"]) > 0
     ctx["zori_median_rent"]  = _fmt_rent_mo(_zori)
     ctx["zori_rent_trend"]   = _zori_trend or "N/A"
-    ctx["census_median_2br"] = _fmt_rent_mo(_c2br)
+    ctx["census_median_2br"] = _fmt_rent_mo(getattr(md, "census_median_rent_2br", None))
     ctx["quality_adjusted_market_rent"] = _fmt_rent_mo(_qamr)
     ctx["renovation_tier_label"] = _tier_labels.get(
         getattr(a, "renovation_tier", "") or "", "Renovation")

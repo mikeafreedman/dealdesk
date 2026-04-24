@@ -25,8 +25,13 @@ logger = logging.getLogger(__name__)
 # value columns; the value column varies by sheet (B for Returns Summary,
 # D for Cash Waterfall).
 _KPI_MAP = [
-    # Sources & Uses / equity
-    ("total_project_cost",   "total_project_cost",     "Returns Summary",  "B7"),
+    # Sources & Uses / equity. Returns Summary!B7 reads total USES
+    # (pre-financing cost + origination fee + construction interest) —
+    # the all-in capital deployed — which matches fo.total_uses, not the
+    # stricter fo.total_project_cost (pre-financing) that loan sizing is
+    # keyed off. Context_builder also surfaces total_uses as "TPC" on
+    # the report, so the validator must compare apples-to-apples.
+    ("total_project_cost",   "total_uses",             "Returns Summary",  "B7"),
     ("total_equity",         "total_equity_required",  "Cash Waterfall",   "D9"),
     ("gp_equity",            "gp_equity",              "Cash Waterfall",   "D7"),
     ("lp_equity",            "lp_equity",              "Cash Waterfall",   "D8"),
