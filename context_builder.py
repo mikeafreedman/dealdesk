@@ -19,14 +19,16 @@ import os
 import re
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import anthropic
 
 from config import (
     ANTHROPIC_API_KEY,
     MODEL_SONNET,
+    USE_4REC_SPECIALIST,
 )
+from financials import _compute_peak_funded_equity
 from models.models import DealData, RecommendationVerdict
 
 logger = logging.getLogger(__name__)
@@ -285,6 +287,858 @@ def _claude_call(client, **kwargs):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# PROMPT 4-REC — INVESTMENT RECOMMENDATION SPECIALIST (Sonnet)
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 1 of the prompt-architecture roadmap: pull the 8 recommendation
+# keys out of the monolithic 4-MASTER prompt and produce them with a
+# dedicated analytical brief. Prompt enforces a required
+# <reasoning>...</reasoning> block before the JSON so the decision path
+# is auditable. See _SYSTEM_4REC for the full reasoning procedure
+# (Beat 0 synthesis rule + Beats 1-6). Feature-gated behind
+# config.USE_4REC_SPECIALIST.
+# ───────────────────────────────────────────────────────────────────────────
+
+# Keys this specialist prompt owns. When USE_4REC_SPECIALIST is True,
+# these are removed from 4-MASTER Part 2 before its call and produced
+# by _run_4rec instead.
+_4REC_KEYS = [
+    "recommendation",
+    "recommendation_one_line",
+    "recommendation_narrative_p1",
+    "recommendation_narrative_p2",
+    "recommendation_pullquote",
+    "risk_1",
+    "risk_2",
+    "risk_3",
+]
+
+_SYSTEM_4REC = (
+    "You are a senior commercial real estate underwriter serving as the final\n"
+    "decision-writer on an institutional investment committee memo. Your sole\n"
+    "job in this call is to produce the Section 19 \"Investment Recommendation\"\n"
+    "block of a DealDesk underwriting report — nothing else.\n\n"
+    "You will receive a structured briefing on a single deal (the subject\n"
+    "property, the economics, the market, the risks, and the user's pre-set\n"
+    "decision threshold). You will return one JSON object with exactly these\n"
+    "eight keys and no others:\n\n"
+    "  recommendation               (verdict enum: \"GO\" | \"CONDITIONAL GO\" | \"NO-GO\")\n"
+    "  recommendation_one_line      (15-30 words)\n"
+    "  recommendation_narrative_p1  (100-130 words)\n"
+    "  recommendation_narrative_p2  (80-110 words)\n"
+    "  recommendation_pullquote     (15-25 words)\n"
+    "  risk_1                       (25-35 words)\n"
+    "  risk_2                       (25-35 words)\n"
+    "  risk_3                       (25-35 words)\n\n"
+    "═════════════════════════════════════════════════════════════════════\n"
+    "REASONING PROCEDURE — WORK THROUGH THESE BEATS BEFORE WRITING JSON\n"
+    "═════════════════════════════════════════════════════════════════════\n\n"
+    "Before emitting JSON, reason through the six beats below. Do your\n"
+    "reasoning in natural language BEFORE the JSON block, wrapped in\n"
+    "<reasoning>...</reasoning> tags. The Python client will strip\n"
+    "everything outside the JSON object before use. Example response\n"
+    "shape:\n\n"
+    "  <reasoning>\n"
+    "  Beat 1: ...\n"
+    "  Beat 2: ...\n"
+    "  ...\n"
+    "  Beat 6: ...\n"
+    "  </reasoning>\n"
+    "  {\n"
+    "    \"recommendation\": \"...\",\n"
+    "    ...\n"
+    "  }\n\n"
+    "The reasoning block is required — not optional — on every call. It is\n"
+    "logged for audit but does not appear in the final report.\n\n"
+    "BEAT 0 — VERDICT SYNTHESIS RULE (read before Beats 1-6)\n\n"
+    "The six beats produce signals that sometimes conflict. When they do,\n"
+    "apply this strict precedence to determine the final verdict:\n\n"
+    "  BEAT 1 CLEAR FAIL       → verdict is NO-GO. No override possible.\n"
+    "                            Even if DD flags are all green and MC is\n"
+    "                            strong, a deal that cannot clear 85% of\n"
+    "                            the hurdle cannot be GO or CONDITIONAL GO.\n\n"
+    "  BEAT 3 BINDING RED      → verdict is NO-GO. No override possible.\n"
+    "                            A binding red flag kills the deal\n"
+    "                            regardless of how the economics read.\n\n"
+    "  BEAT 1 CLEAR PASS +\n"
+    "  BEAT 2 CORROBORATED +\n"
+    "  BEAT 3 (0 RED, ≤2 AMBER) → verdict is GO.\n\n"
+    "  All other combinations   → verdict is CONDITIONAL GO. This is the\n"
+    "                             default when signals are mixed or when\n"
+    "                             workable contingencies exist that do\n"
+    "                             not rise to NO-GO but prevent a clean GO.\n\n"
+    "Apply this rule deterministically — do not substitute judgment for\n"
+    "the rule. The job of Beats 1-5 is to surface the signals; the job\n"
+    "of this rule is to convert signals into a verdict.\n\n"
+    "BEAT 1 — THRESHOLD TEST (verdict anchor)\n"
+    "   The user has pre-declared their Go/No-Go hurdle on the Assumptions\n"
+    "   screen. The briefing gives you:\n"
+    "     hurdle_metric  : \"project_irr\" | \"lp_irr\" | \"stab_cap_rate\" | \"stab_coc\"\n"
+    "     hurdle_value   : decimal (0.15 = 15%)\n"
+    "     realized_value : the actual computed value of that metric\n"
+    "   Classify the threshold test as:\n"
+    "     CLEAR PASS     — realized ≥ hurdle × 1.05\n"
+    "     MARGINAL PASS  — hurdle ≤ realized < hurdle × 1.05\n"
+    "     MARGINAL FAIL  — hurdle × 0.85 ≤ realized < hurdle\n"
+    "     CLEAR FAIL     — realized < hurdle × 0.85\n"
+    "     UNCOMPUTABLE   — realized is null (MC non-convergent, negative NOI)\n"
+    "   This is the PRIMARY anchor for the verdict — nothing else can\n"
+    "   override a CLEAR FAIL into a GO, and nothing else can drag a\n"
+    "   CLEAR PASS into a NO-GO.\n\n"
+    "BEAT 2 — RISK-ADJUSTED CORROBORATION (supporting signals)\n"
+    "   Even a CLEAR PASS on the hurdle metric is not sufficient if the\n"
+    "   risk-adjusted picture is broken. Review the secondary signals:\n"
+    "     dscr_yr1           — <1.20 = stressed; <1.00 = impaired\n"
+    "     going_in_cap_rate  — compare to market cap rate if provided\n"
+    "     cash_on_cash_yr1   — <5% = weak; negative = distressed\n"
+    "     lp_equity_multiple — <1.80 = below typical institutional minimum\n"
+    "     mc_prob_above_tgt  — Monte Carlo probability the hurdle clears;\n"
+    "                          <40% = fragile, >70% = robust\n"
+    "     price_solver       — if MC-solved price is materially below\n"
+    "                          (>10%) the base purchase price, the deal\n"
+    "                          is priced above the MC-indicated value.\n"
+    "   Aggregate these into a single judgment: CORROBORATED / MIXED /\n"
+    "   CONTRADICTED. A CLEAR PASS + MIXED or CONTRADICTED is a\n"
+    "   CONDITIONAL GO candidate, not a straight GO.\n\n"
+    "BEAT 3 — DD FLAG ABSORPTION\n\n"
+    "   RED flag taxonomy:\n"
+    "     BINDING RED   = flag where no structural remediation exists at\n"
+    "                     the current purchase price. Examples: zoning\n"
+    "                     precludes intended use and rezoning infeasible;\n"
+    "                     environmental cleanup >15% of project cost;\n"
+    "                     title defects that cannot be insured over.\n"
+    "     WORKABLE RED  = flag with a clear remediation path but material\n"
+    "                     cost/time impact. Examples: Phase II ESA\n"
+    "                     required; single-tenant concentration with\n"
+    "                     renewal risk; mechanical systems at end-of-life\n"
+    "                     requiring immediate capex.\n\n"
+    "   Policy:\n"
+    "     1+ BINDING RED   → NO-GO required.\n"
+    "     1+ WORKABLE RED  → maximum verdict is CONDITIONAL GO.\n"
+    "     3+ AMBER         → maximum verdict is CONDITIONAL GO.\n"
+    "     0 RED / ≤2 AMBER → flags do not constrain verdict.\n\n"
+    "   If ambiguous whether a RED is binding or workable, treat as\n"
+    "   BINDING.\n\n"
+    "   Explicitly name RED and AMBER flags you are absorbing in your\n"
+    "   reasoning; they become risk_1/risk_2 in the output if material.\n\n"
+    "BEAT 4 — ASSET-TYPE / STRATEGY BRANCHING\n"
+    "   The verdict framing shifts based on asset_type × investment_strategy:\n"
+    "     Multifamily / Stabilized_hold:\n"
+    "        Primary lens = DSCR + stabilized cap rate vs market; rent\n"
+    "        growth durability; renewal retention.\n"
+    "     Multifamily / Value-add:\n"
+    "        Primary lens = lease-up risk + construction carry + exit\n"
+    "        cap expansion risk; stabilized year NOI vs base purchase.\n"
+    "     Mixed-Use / any:\n"
+    "        Primary lens = residential + commercial lease risk split;\n"
+    "        ground-floor retail absorption; mixed-use exit buyer pool.\n"
+    "     Office / any:\n"
+    "        Primary lens = WALT + tenant credit + leasing TI/commissions;\n"
+    "        flag sub-70% occupancy or <3-year WALT explicitly.\n"
+    "     Retail / any:\n"
+    "        Primary lens = tenant mix + co-tenancy + NNN pass-through;\n"
+    "        anchor status; center type.\n"
+    "     Industrial / any:\n"
+    "        Primary lens = clear height + dock count + last-mile\n"
+    "        geography; single-tenant credit if applicable.\n"
+    "     For_sale (opportunistic, any asset):\n"
+    "        Primary lens = exit price certainty + construction duration\n"
+    "        + carry cost; margin-of-safety on gross margin.\n"
+    "   Use the correct lens in recommendation_narrative_p1.\n\n"
+    "BEAT 5 — RISK TRIAGE (for risk_1, risk_2, risk_3)\n"
+    "   Select the three HIGHEST-consequence risks from what the briefing\n"
+    "   exposes. Rank by severity × probability (qualitative judgment).\n"
+    "   Priority order when multiple are present:\n"
+    "     1. Unresolved BINDING RED DD flag\n"
+    "     2. Unresolved WORKABLE RED DD flag\n"
+    "     3. Stressed DSCR (<1.20) or negative Year-1 NOI\n"
+    "     4. Hurdle-metric shortfall (MARGINAL/CLEAR FAIL)\n"
+    "     5. Construction / lease-up execution risk (value_add, for_sale)\n"
+    "     6. Market-level risks: supply pipeline, cap-rate expansion,\n"
+    "        tenant credit concentration\n"
+    "     7. Capital structure: refi timing, LTV stress, exit financing\n"
+    "     8. Entitlement / zoning / environmental risks (AMBER tier)\n"
+    "   Each risk_n is a STANDALONE, ACTIONABLE sentence naming the risk,\n"
+    "   the magnitude, and one mitigation or watch-item. Risks MUST be\n"
+    "   coherent with the verdict — do not produce three dealbreakers\n"
+    "   alongside a GO recommendation.\n\n"
+    "BEAT 6 — COHERENCE + WORD COUNT CHECK\n"
+    "   Before emitting JSON, confirm:\n"
+    "     - recommendation verdict matches the BEAT 0 synthesis rule exactly\n"
+    "       given the Beat 1, 2, and 3 classifications\n"
+    "     - recommendation_one_line names the verdict + the single\n"
+    "       strongest supporting datapoint\n"
+    "     - p1 opens with the verdict, explains the PRIMARY rationale\n"
+    "       (beat 1 + beat 4's asset-specific lens), names 2-3 of the\n"
+    "       most important numeric metrics verbatim\n"
+    "     - p2 addresses the top risks (tie to risk_1/2/3) and states\n"
+    "       the immediate next action the IC should take\n"
+    "     - pullquote is quotable, declarative, no hedging\n"
+    "     - all word counts within ±15% of targets\n"
+    "     - nothing contradicts (e.g. GO verdict + risk_1 = \"zoning\n"
+    "       precludes the intended use\")\n\n"
+    "═════════════════════════════════════════════════════════════════════\n"
+    "GLOBAL WRITING RULES (hardline)\n"
+    "═════════════════════════════════════════════════════════════════════\n\n"
+    "- Voice: senior analyst to IC. Precise, data-grounded, no hedging.\n"
+    "- Never say: \"pleased to present\", \"exciting opportunity\", \"unique\n"
+    "  opportunity\", \"best-in-class\", \"a solid play\", \"well-positioned\".\n"
+    "- Never use words: \"synergy\", \"holistic\", \"turnkey\".\n"
+    "- Never use hedge phrases: \"generally speaking\", \"in most cases\",\n"
+    "  \"typically\", \"could potentially\", \"may be positioned to\", \"should\n"
+    "  be able to\". Replace with declarative statements; if uncertain,\n"
+    "  state the uncertainty explicitly (\"Monte Carlo non-convergent\")\n"
+    "  rather than hedging the language.\n"
+    "- Never say: \"market leader\", \"strong demographics\", \"durable cash\n"
+    "  flow\", \"supply-constrained market\". Unfalsifiable marketing\n"
+    "  phrases. Cite the specific numbers instead.\n"
+    "- Numbers quoted verbatim. If the briefing gives lp_irr=0.1824, you\n"
+    "  write \"18.2%\" — never round further or paraphrase.\n"
+    "- When a metric is null (Monte Carlo non-convergent, MC not run,\n"
+    "  negative NOI), state so explicitly. Do not invent a placeholder.\n"
+    "- \"CONDITIONAL GO\" specifically means: \"the deal clears the hurdle\n"
+    "  but has one or more gating diligence items that must resolve\n"
+    "  before commitment.\" Use it when the economics work but real\n"
+    "  contingencies exist.\n"
+    "- Never cite data not in the briefing.\n"
+    "- Return ONLY the JSON object after the <reasoning>...</reasoning>\n"
+    "  block. No markdown, no preamble outside the reasoning block, no\n"
+    "  trailing commentary after the JSON.\n\n"
+    "═════════════════════════════════════════════════════════════════════\n"
+    "DATA COMPLETENESS HANDLING\n"
+    "═════════════════════════════════════════════════════════════════════\n\n"
+    "The briefing may arrive with missing fields in three flavors:\n\n"
+    "  1. HURDLE METRIC UNCOMPUTABLE (e.g. negative NOI, MC non-convergent):\n"
+    "     - Verdict defaults to CONDITIONAL GO if the base-case\n"
+    "       deterministic math is directionally sound, else NO-GO.\n"
+    "     - p1 must explicitly state that the hurdle metric was\n"
+    "       non-convergent and why.\n\n"
+    "  2. DD FLAGS EMPTY OR ALL GREEN:\n"
+    "     - Do not manufacture risks. State that due diligence has not\n"
+    "       surfaced material flags, and draw risks (BEAT 5) from the\n"
+    "       market / financial / structural signals in the briefing.\n\n"
+    "  3. SENSITIVITY / MONTE CARLO MISSING:\n"
+    "     - Do not reference percentile bands you can't see. Rely on\n"
+    "       the deterministic metrics only and note the limitation.\n\n"
+    "═════════════════════════════════════════════════════════════════════\n"
+    "WORKED EXAMPLES (few-shot)\n"
+    "═════════════════════════════════════════════════════════════════════\n\n"
+    "EXAMPLE A — A clean GO\n"
+    "--------------------------\n"
+    "Input briefing (relevant slice, fully representative of the payload):\n"
+    "  asset_type: Multifamily\n"
+    "  investment_strategy: value_add\n"
+    "  purchase_price: $8,400,000\n"
+    "  hold_period: 10\n"
+    "  hurdle_metric: lp_irr\n"
+    "  hurdle_value: 0.15\n"
+    "  realized_value: 0.182\n"
+    "  threshold_test: CLEAR PASS (1.21× hurdle)\n\n"
+    "  lp_irr: 0.182\n"
+    "  project_irr: 0.165\n"
+    "  lp_equity_multiple: 2.41\n"
+    "  noi_yr1: $412,000\n"
+    "  dscr_yr1: 1.38\n"
+    "  cash_on_cash_yr1: 0.074\n"
+    "  going_in_cap_rate: 0.049\n"
+    "  stabilized_cap_rate: 0.061\n\n"
+    "  mc_median_irr: 0.162\n"
+    "  mc_p10_irr: 0.094\n"
+    "  mc_p90_irr: 0.228\n"
+    "  mc_prob_above_target: 0.68\n\n"
+    "  solver_price: $8,910,000\n"
+    "  solver_gap_pct: +6.1%\n\n"
+    "  total_project_cost: $8,950,000\n"
+    "  total_equity_required: $2,380,000\n"
+    "  initial_loan_amount: $6,570,000\n"
+    "  ltv_pct: 73.4%\n\n"
+    "  debt_type: senior acquisition + construction\n"
+    "  interest_rate_pct: 6.50%\n"
+    "  amortization_years: 30\n"
+    "  io_period_months: 24\n"
+    "  refi_event_count: 1\n"
+    "  max_refi_ltv_pct: 70.0%\n"
+    "  peak_funded_equity: $2,520,000\n\n"
+    "  exit_year: 10\n"
+    "  exit_cap_rate_pct: 6.00%\n"
+    "  gross_sale_price: $14,650,000\n"
+    "  net_to_equity: $8,340,000\n\n"
+    "  neighborhood_trend_narrative: \"Population +2.1% CAGR, MHI +3.4% CAGR,\n"
+    "    permit activity steady at 1.2 units per 1,000 population.\"\n"
+    "  supply_pipeline_narrative: \"Two comp projects (142 units total)\n"
+    "    expected to deliver in Year 2; 9-month lease-up band.\"\n\n"
+    "  dd_flag_summary: \"AMBER×1 (environmental: Phase I pending)\"\n\n"
+    "  sensitivity_snapshot: \"Base LP IRR 18.2%; −50 bps rent growth +\n"
+    "    +50 bps exit cap → 14.8%; verdict holds GO through 50 bps of\n"
+    "    cap widening.\"\n\n"
+    "Expected response shape:\n"
+    "<reasoning>\n"
+    "Beat 1: realized 18.2% vs 15% hurdle → 0.182 ≥ 0.15 × 1.05 (0.1575).\n"
+    "  CLEAR PASS at 1.21× hurdle.\n"
+    "Beat 2: DSCR 1.38 (healthy), CoC 7.4% (healthy), MC 68% above target\n"
+    "  (robust > 70% threshold but close), MC-solved price $8.91M vs\n"
+    "  $8.40M ask → +6% cushion, not contradicted. Judgment: CORROBORATED.\n"
+    "Beat 3: 1 AMBER flag (Phase I pending). 0 RED. Policy: flags do not\n"
+    "  constrain verdict. Phase I becomes a named risk, not a blocker.\n"
+    "Beat 4: Multifamily × Value-add lens → frame around lease-up,\n"
+    "  renovation carry, exit cap at Year 10.\n"
+    "Beat 5: Top risks (priority 5, 6, 8 respectively) =\n"
+    "  (1) lease-up risk during phased renovation,\n"
+    "  (2) exit cap expansion at Year 10,\n"
+    "  (3) Phase I environmental outcome (AMBER).\n"
+    "Beat 6: Verdict = GO. Word counts noted. No contradiction — the\n"
+    "  three risks have named mitigations and are not dealbreakers.\n"
+    "</reasoning>\n"
+    "{\n"
+    "  \"recommendation\": \"GO\",\n"
+    "  \"recommendation_one_line\": \"Proceed with the acquisition — underwritten 18.2% LP IRR exceeds the 15% hurdle by 320 bps with DSCR of 1.38x and Monte Carlo probability of 68% above target.\",\n"
+    "  \"recommendation_narrative_p1\": \"DealDesk recommends GO on this 10-year value-add multifamily acquisition. Underwritten LP IRR of 18.2% clears the 15% committee hurdle with a 320 bps cushion, supported by a stabilized Year-1 DSCR of 1.38x and 7.4% cash-on-cash. Monte Carlo analysis indicates a 68% probability of exceeding the 15% target across the modeled rent-growth and exit-cap-rate ranges. The DealDesk Monte Carlo price solver places fair value at $8.91M — approximately 6% above the $8.40M purchase price, leaving modest basis protection. Execution rests on achieving the pro forma renovation premium and a 12-month stabilization timeline.\",\n"
+    "  \"recommendation_narrative_p2\": \"Three risks drive the investment committee checklist: lease-up velocity during renovation, exit-cap expansion at year 10, and the pending Phase I environmental review. Each has a mapped mitigation path — renovation phasing preserves in-place NOI, the exit cap assumption is 50 bps wide of trailing comps, and Phase I is scheduled to clear before closing. Recommended next action: move to LOI at the asking price conditional on satisfactory Phase I, with closing contingent on verified rent roll.\",\n"
+    "  \"recommendation_pullquote\": \"An 18.2% LP IRR with 1.38x DSCR and MC-solved fair value 6% above ask — this clears committee.\",\n"
+    "  \"risk_1\": \"Lease-up risk during phased renovation — 15% of units offline at a time could compress Year-1 NOI if absorption slows; mitigated by phasing gate sequenced with vacancy.\",\n"
+    "  \"risk_2\": \"Exit cap expansion at Year 10 — 25 bps of cap widening reduces terminal value by approximately $680K; sensitivity matrix shows the deal holds a GO verdict through 50 bps of widening.\",\n"
+    "  \"risk_3\": \"Phase I environmental outcome pending — uncleared findings would trigger Phase II and potentially delay closing; broker has committed to report delivery within 21 days.\"\n"
+    "}\n\n"
+    "EXAMPLE B — A NO-GO\n"
+    "--------------------------\n"
+    "Input briefing:\n"
+    "  asset_type: Office\n"
+    "  investment_strategy: stabilized_hold\n"
+    "  purchase_price: $14,200,000\n"
+    "  hold_period: 7\n"
+    "  hurdle_metric: lp_irr\n"
+    "  hurdle_value: 0.12\n"
+    "  realized_value: 0.041\n"
+    "  threshold_test: CLEAR FAIL (0.34× hurdle)\n\n"
+    "  lp_irr: 0.041\n"
+    "  project_irr: 0.052\n"
+    "  lp_equity_multiple: 1.24\n"
+    "  noi_yr1: $780,000\n"
+    "  dscr_yr1: 0.94\n"
+    "  cash_on_cash_yr1: -0.018\n"
+    "  going_in_cap_rate: 0.055\n"
+    "  stabilized_cap_rate: 0.058\n\n"
+    "  mc_median_irr: 0.045\n"
+    "  mc_p10_irr: -0.012\n"
+    "  mc_p90_irr: 0.102\n"
+    "  mc_prob_above_target: 0.08\n\n"
+    "  solver_price: $9,800,000\n"
+    "  solver_gap_pct: -31.0%\n\n"
+    "  total_project_cost: $14,420,000\n"
+    "  total_equity_required: $5,720,000\n"
+    "  initial_loan_amount: $8,700,000\n"
+    "  ltv_pct: 61.3%\n\n"
+    "  debt_type: senior acquisition (permanent)\n"
+    "  interest_rate_pct: 7.00%\n"
+    "  amortization_years: 30\n"
+    "  io_period_months: 0\n"
+    "  refi_event_count: 0\n"
+    "  max_refi_ltv_pct: n/a\n"
+    "  peak_funded_equity: $5,720,000\n\n"
+    "  exit_year: 7\n"
+    "  exit_cap_rate_pct: 7.50%\n"
+    "  gross_sale_price: $13,540,000\n"
+    "  net_to_equity: $3,410,000\n\n"
+    "  neighborhood_trend_narrative: \"Office vacancy 18.2% with trend +120\n"
+    "    bps over trailing 12 months; negative net absorption.\"\n"
+    "  supply_pipeline_narrative: \"One 230K SF build-to-suit delivering\n"
+    "    Year 1; broader sublease supply growing.\"\n\n"
+    "  dd_flag_summary: \"RED×2 (tenant concentration 62% from Acme Corp\n"
+    "    with 2.1-year WALT — workable RED; no renewal commitment; deferred\n"
+    "    mechanical systems at end-of-life requiring $480K Year-1 capex —\n"
+    "    workable RED), AMBER×1 (HVAC cooling tower replacement deferred)\"\n\n"
+    "  sensitivity_snapshot: \"Base LP IRR 4.1%. No cell in the sensitivity\n"
+    "    matrix (rent growth 0-5%, exit cap 6.5-8.5%) produces an LP IRR\n"
+    "    above the 12% hurdle.\"\n\n"
+    "Expected response shape:\n"
+    "<reasoning>\n"
+    "Beat 1: realized 4.1% vs 12% hurdle → 0.041 < 0.12 × 0.85 (0.102).\n"
+    "  CLEAR FAIL at 0.34× hurdle.\n"
+    "Beat 2: DSCR 0.94 (impaired, below 1.00), CoC negative (distressed),\n"
+    "  MC 8% above target (fragile, well below 40%), MC-solved price\n"
+    "  $9.8M vs $14.2M ask → -31% gap (deal materially overpriced).\n"
+    "  Judgment: CONTRADICTED.\n"
+    "Beat 3: 2 RED flags (both workable). Policy: 1+ WORKABLE RED →\n"
+    "  maximum verdict is CONDITIONAL GO. BUT — Beat 1 already forces\n"
+    "  NO-GO via CLEAR FAIL, and Beat 2 is fully contradicted. Verdict\n"
+    "  floor from Beat 1 dominates. Verdict = NO-GO.\n"
+    "Beat 4: Office × Stabilized lens → WALT + tenant credit + TI\n"
+    "  exposure. 62% concentration + 2.1-year WALT is a disqualifying\n"
+    "  combination even in a fully-priced office market.\n"
+    "Beat 5: Top risks (priority 2, 3, 6) =\n"
+    "  (1) single-tenant concentration + WALT (WORKABLE RED),\n"
+    "  (2) Year-1 DSCR impairment (0.94),\n"
+    "  (3) MC fair-value gap of 31% vs ask.\n"
+    "Beat 6: Verdict = NO-GO. All signals aligned. Risks coherent with\n"
+    "  verdict. No rec_narrative hedging — this is a clean decline.\n"
+    "</reasoning>\n"
+    "{\n"
+    "  \"recommendation\": \"NO-GO\",\n"
+    "  \"recommendation_one_line\": \"Decline the acquisition — LP IRR of 4.1% falls 790 bps short of the 12% hurdle, Year-1 DSCR is 0.94x, and the MC-indicated fair value sits 31% below the $14.2M asking price.\",\n"
+    "  \"recommendation_narrative_p1\": \"DealDesk recommends NO-GO on this 7-year stabilized office acquisition. Underwritten LP IRR of 4.1% misses the 12% committee hurdle by 790 bps. Year-1 DSCR of 0.94x indicates the asset cannot service its debt on in-place cash flow without equity support. Cash-on-cash is negative in Year 1 and the Monte Carlo probability of clearing the hurdle across 2,000 iterations is 8%. The price solver indicates MC-supported fair value of $9.8M — a 31% gap to the $14.2M asking price. This is not a pricing re-trade candidate; the tenancy and market profile do not support the ask.\",\n"
+    "  \"recommendation_narrative_p2\": \"Two structural risks are unavoidable at the current basis: 62% of revenue is concentrated in a single tenant whose WALT is 2.1 years, and deferred maintenance surfaced in initial diligence will draw from the thin Year-1 cash flow. Neither has a workable mitigation at this purchase price. Recommended next action: issue a pass letter citing the concentration profile and DSCR; revisit only if the ask is revised to an MC-supported basis below $10M.\",\n"
+    "  \"recommendation_pullquote\": \"A 4.1% LP IRR, 0.94x DSCR, and MC fair value 31% below the ask — pass.\",\n"
+    "  \"risk_1\": \"Single-tenant concentration at 62% of revenue with a 2.1-year WALT — renewal exposure within the hold window would strand equity with no reliable back-fill path.\",\n"
+    "  \"risk_2\": \"Year-1 DSCR of 0.94x indicates the asset cannot service its debt on in-place cash flow; equity support would be required from acquisition through stabilization.\",\n"
+    "  \"risk_3\": \"Monte Carlo fair-value gap of 31% vs asking — the price solver places a supportable basis at $9.8M, and no cap-rate or rent-growth assumption in the modeled range closes the delta.\"\n"
+    "}\n\n"
+    "═════════════════════════════════════════════════════════════════════\n"
+    "FINAL CHECK — before emitting JSON, verify:\n"
+    "  - verdict string is exactly \"GO\", \"CONDITIONAL GO\", or \"NO-GO\"\n"
+    "  - output is a single JSON object with exactly 8 keys\n"
+    "  - reasoning block appears before the JSON inside\n"
+    "    <reasoning>...</reasoning> tags\n"
+    "  - no markdown fences, no preamble outside the reasoning block,\n"
+    "    no trailing commentary after the JSON\n"
+    "═════════════════════════════════════════════════════════════════════"
+)
+
+_USER_4REC = (
+    "Produce the Investment Recommendation block for the deal below.\n"
+    "Follow the six-beat reasoning procedure in your system prompt.\n"
+    "Emit the <reasoning>...</reasoning> block first, then the JSON\n"
+    "with exactly eight keys.\n\n"
+    "═══ DEAL IDENTITY ═══\n"
+    "Property:            {property_address}\n"
+    "Asset type:          {asset_type}\n"
+    "Investment strategy: {investment_strategy}\n"
+    "Purchase price:      {purchase_price}\n"
+    "Hold period:         {hold_period} years\n\n"
+    "═══ GO/NO-GO HURDLE (user-declared) ═══\n"
+    "Metric:              {hurdle_metric}\n"
+    "Target value:        {hurdle_value_pct}\n"
+    "Realized value:      {hurdle_realized}\n"
+    "Threshold test:      {threshold_test}\n\n"
+    "═══ DETERMINISTIC RETURNS ═══\n"
+    "LP IRR:              {lp_irr}\n"
+    "Project IRR:         {project_irr}\n"
+    "LP equity multiple:  {lp_equity_multiple}\n"
+    "Year-1 NOI:          {noi_yr1}\n"
+    "Year-1 DSCR:         {dscr_yr1}\n"
+    "Year-1 CoC:          {cash_on_cash_yr1}\n"
+    "Going-in cap rate:   {going_in_cap_rate}\n"
+    "Stabilized cap rate: {stabilized_cap_rate}\n\n"
+    "═══ MONTE CARLO ═══\n"
+    "MC median LP IRR:    {mc_median_irr}\n"
+    "MC P10 LP IRR:       {mc_p10_irr}\n"
+    "MC P90 LP IRR:       {mc_p90_irr}\n"
+    "Prob above target:   {mc_prob_above_target}\n\n"
+    "═══ PRICE SOLVER ═══\n"
+    "MC-solved price:     {solver_price}\n"
+    "Gap to base:         {solver_gap_pct}\n\n"
+    "═══ SOURCES & USES ═══\n"
+    "Total project cost:  {total_project_cost}\n"
+    "Total equity req'd:  {total_equity_required}\n"
+    "Initial loan amount: {initial_loan_amount}\n"
+    "LTV at acquisition:  {ltv_pct}\n\n"
+    "═══ FINANCING ═══\n"
+    "Debt type:           {debt_type}\n"
+    "Interest rate:       {interest_rate_pct}\n"
+    "Amortization:        {amortization_years}\n"
+    "IO period:           {io_period_months}\n"
+    "Refi events:         {refi_event_count}\n"
+    "Max refi LTV:        {max_refi_ltv_pct}\n"
+    "Peak funded equity:  {peak_funded_equity}\n\n"
+    "═══ EXIT ═══\n"
+    "Exit year:           {exit_year}\n"
+    "Exit cap rate:       {exit_cap_rate_pct}\n"
+    "Gross sale price:    {gross_sale_price}\n"
+    "Net to equity:       {net_to_equity}\n\n"
+    "═══ MARKET CONTEXT ═══\n"
+    "Neighborhood trend:  {neighborhood_trend_narrative}\n"
+    "Supply pipeline:     {supply_pipeline_narrative}\n\n"
+    "═══ DD FLAGS ═══\n"
+    "{dd_flag_summary}\n\n"
+    "═══ SENSITIVITY SNAPSHOT ═══\n"
+    "{sensitivity_snapshot}\n\n"
+    "Return the <reasoning>...</reasoning> block and then the JSON now."
+)
+
+
+# ── 4-REC payload assembler + orchestrator ──────────────────────────
+
+# Counter for the "first 5 runs" side-by-side diagnostic. Module-level
+# so it persists across calls within a single process.
+_4REC_DIAG_COUNT = 0
+_4REC_DIAG_LIMIT = 5
+
+
+def _fmt_money(v, default="non-convergent") -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    if f == 0:
+        return default
+    return f"${f:,.0f}"
+
+
+def _fmt_pct(v, digits=2, default="non-convergent") -> str:
+    if v is None:
+        return default
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return f"{f * 100:.{digits}f}%"
+
+
+def _fmt_num(v, digits=2, default="non-convergent") -> str:
+    if v is None:
+        return default
+    try:
+        return f"{float(v):.{digits}f}"
+    except (TypeError, ValueError):
+        return default
+
+
+def _fmt_text(v, default="N/A") -> str:
+    if v in (None, ""):
+        return default
+    return str(v)
+
+
+def _classify_threshold(realized, hurdle) -> str:
+    """Apply BEAT 1 bands — CLEAR PASS / MARGINAL PASS / MARGINAL FAIL /
+    CLEAR FAIL / UNCOMPUTABLE — so the model doesn't re-derive it."""
+    if realized is None or hurdle in (None, 0):
+        return "UNCOMPUTABLE"
+    try:
+        r = float(realized)
+        h = float(hurdle)
+    except (TypeError, ValueError):
+        return "UNCOMPUTABLE"
+    if h <= 0:
+        return "UNCOMPUTABLE"
+    ratio = r / h
+    if r >= h * 1.05:
+        return f"CLEAR PASS ({ratio:.2f}× hurdle)"
+    if r >= h:
+        return f"MARGINAL PASS ({ratio:.2f}× hurdle)"
+    if r >= h * 0.85:
+        return f"MARGINAL FAIL ({ratio:.2f}× hurdle)"
+    return f"CLEAR FAIL ({ratio:.2f}× hurdle)"
+
+
+def _realized_for_metric(metric: str, fo) -> Optional[float]:
+    """Pick the fo field that corresponds to the user's hurdle metric."""
+    m = (metric or "").strip().lower()
+    if m == "lp_irr":
+        return fo.lp_irr
+    if m == "project_irr":
+        return fo.project_irr
+    if m == "stab_cap_rate":
+        return fo.stabilized_cap_rate
+    if m == "stab_coc":
+        # fo doesn't persist a dedicated stabilized-Y2 CoC; use Y1 as
+        # proxy with an understanding that the model gets full context.
+        return fo.cash_on_cash_yr1
+    return None
+
+
+def _build_dd_flag_summary(deal) -> str:
+    """Compact color-grouped DD flag summary for the briefing.
+
+    Format: 'RED×N (title; title; title +K more), AMBER×M (title; title)'.
+    """
+    flags = deal.dd_flags or []
+    if not flags:
+        return "None surfaced"
+    buckets = {"RED": [], "AMBER": [], "GREEN": []}
+    for f in flags:
+        color = f.color.value if hasattr(f.color, "value") else str(f.color)
+        if color in buckets:
+            buckets[color].append(f.title or "unspecified")
+    parts = []
+    for color in ("RED", "AMBER", "GREEN"):
+        n = len(buckets[color])
+        if n == 0:
+            continue
+        shown = buckets[color][:10]
+        tail = "" if n <= 10 else f" +{n - 10} more"
+        parts.append(f"{color}×{n} ({'; '.join(shown)}{tail})")
+    return ", ".join(parts) if parts else "None surfaced"
+
+
+def _build_sensitivity_snapshot(fo) -> str:
+    """Compact sensitivity-matrix summary: base, best corner, worst corner."""
+    matrix = fo.sensitivity_matrix or []
+    numeric = []
+    for row in matrix:
+        for v in (row or []):
+            if isinstance(v, (int, float)):
+                numeric.append(v)
+    if not numeric:
+        return "Sensitivity matrix non-convergent or not populated."
+    lp = fo.lp_irr
+    base = _fmt_pct(lp, 1) if lp is not None else "non-convergent"
+    return (f"Base LP IRR {base}. Best corner {max(numeric) * 100:.1f}%. "
+            f"Worst corner {min(numeric) * 100:.1f}%. "
+            f"{len(numeric)} of {sum(len(r or []) for r in matrix)} cells "
+            "converged.")
+
+
+def _debt_type_label(deal) -> str:
+    from models.models import InvestmentStrategy
+    const_months = int(getattr(deal.assumptions, "const_period_months", 0) or 0)
+    if deal.investment_strategy == InvestmentStrategy.OPPORTUNISTIC:
+        return "for-sale carry + construction loan"
+    if const_months > 0:
+        return "senior acquisition + construction"
+    return "senior acquisition (permanent)"
+
+
+def _build_4rec_payload(deal) -> dict:
+    """Assemble the flat dict of formatted values consumed by _USER_4REC.
+
+    Every placeholder in the user-template resolves from here. Missing/
+    non-convergent values are substituted with 'non-convergent' for
+    financial metrics, 'N/A' for categorical fields, per spec.
+    """
+    a = deal.assumptions
+    fo = deal.financial_outputs
+    addr = deal.address
+
+    # Hurdle test
+    hurdle_metric = getattr(a, "hurdle_metric", "lp_irr") or "lp_irr"
+    hurdle_value = getattr(a, "hurdle_value", None)
+    realized = _realized_for_metric(hurdle_metric, fo)
+    threshold_test = _classify_threshold(realized, hurdle_value)
+
+    # Price solver
+    ps = fo.price_solver_results or {}
+    solver_price_val = ps.get("solved_purchase_price")
+    solver_gap_val = ps.get("price_adjustment_pct")
+
+    # Monte Carlo
+    mc = fo.monte_carlo_results or {}
+
+    # Refi
+    refis = [r for r in (a.refi_events or []) if getattr(r, "active", False)]
+    max_refi_ltv = max((getattr(r, "ltv", 0) or 0 for r in refis), default=None)
+
+    peak_eq = _compute_peak_funded_equity(deal)
+
+    return {
+        # Deal identity
+        "property_address":       _fmt_text(addr.full_address, default="N/A"),
+        "asset_type":             deal.asset_type.value if deal.asset_type else "N/A",
+        "investment_strategy":    deal.investment_strategy.value if deal.investment_strategy else "N/A",
+        "purchase_price":         _fmt_money(a.purchase_price),
+        "hold_period":            a.hold_period or 0,
+
+        # Go/No-Go hurdle
+        "hurdle_metric":          hurdle_metric,
+        "hurdle_value_pct":       _fmt_pct(hurdle_value, 2, default="N/A"),
+        "hurdle_realized":        _fmt_pct(realized, 2, default="non-convergent"),
+        "threshold_test":         threshold_test,
+
+        # Deterministic returns
+        "lp_irr":                 _fmt_pct(fo.lp_irr, 2),
+        "project_irr":            _fmt_pct(fo.project_irr, 2),
+        "lp_equity_multiple":     (f"{fo.lp_equity_multiple:.2f}x" if fo.lp_equity_multiple else "non-convergent"),
+        "noi_yr1":                _fmt_money(fo.noi_yr1),
+        "dscr_yr1":               (f"{fo.dscr_yr1:.2f}x" if fo.dscr_yr1 else "non-convergent"),
+        "cash_on_cash_yr1":       _fmt_pct(fo.cash_on_cash_yr1, 2),
+        "going_in_cap_rate":      _fmt_pct(fo.going_in_cap_rate, 2),
+        "stabilized_cap_rate":    _fmt_pct(fo.stabilized_cap_rate, 2),
+
+        # Monte Carlo
+        "mc_median_irr":          _fmt_pct(mc.get("median_irr"), 2),
+        "mc_p10_irr":             _fmt_pct(mc.get("p10_irr"), 2),
+        "mc_p90_irr":             _fmt_pct(mc.get("p90_irr"), 2),
+        "mc_prob_above_target":   _fmt_pct(mc.get("prob_above_target"), 1),
+
+        # Price solver
+        "solver_price":           _fmt_money(solver_price_val),
+        "solver_gap_pct":         (f"{solver_gap_val * 100:+.1f}%" if solver_gap_val is not None else "N/A"),
+
+        # Sources & Uses
+        "total_project_cost":     _fmt_money(fo.total_project_cost or fo.total_uses),
+        "total_equity_required":  _fmt_money(fo.total_equity_required),
+        "initial_loan_amount":    _fmt_money(fo.initial_loan_amount),
+        "ltv_pct":                _fmt_pct(a.ltv_pct, 1, default="N/A"),
+
+        # Financing
+        "debt_type":              _debt_type_label(deal),
+        "interest_rate_pct":      _fmt_pct(a.interest_rate, 2, default="N/A"),
+        "amortization_years":     (f"{a.amort_years} yrs" if a.amort_years else "N/A"),
+        "io_period_months":       (f"{a.io_period_months} mo" if a.io_period_months is not None else "N/A"),
+        "refi_event_count":       len(refis),
+        "max_refi_ltv_pct":       _fmt_pct(max_refi_ltv, 1, default="n/a"),
+        "peak_funded_equity":     _fmt_money(peak_eq),
+
+        # Exit
+        "exit_year":              a.hold_period or 0,
+        "exit_cap_rate_pct":      _fmt_pct(getattr(a, "exit_cap_rate", None), 2, default="N/A"),
+        "gross_sale_price":       _fmt_money(fo.gross_sale_price),
+        "net_to_equity":          _fmt_money(fo.net_equity_at_exit),
+
+        # Market narratives (from 4-MASTER Part 1 if it ran first)
+        "neighborhood_trend_narrative": _fmt_text(
+            deal.narratives.neighborhood_trend_narrative,
+            default="Not yet generated",
+        ),
+        "supply_pipeline_narrative":    _fmt_text(
+            deal.narratives.supply_pipeline_narrative,
+            default="Not yet generated",
+        ),
+
+        # DD flags
+        "dd_flag_summary":        _build_dd_flag_summary(deal),
+
+        # Sensitivity
+        "sensitivity_snapshot":   _build_sensitivity_snapshot(fo),
+    }
+
+
+def _call_sonnet_raw(system: str, user_msg: str,
+                     max_tokens: int = 4096,
+                     temperature: float = 0.3) -> Optional[str]:
+    """Sonnet call that returns raw text (not parsed JSON).
+
+    4-REC responses are shaped as <reasoning>...</reasoning> followed by
+    a JSON object — _call_sonnet's json.loads-everything approach would
+    fail immediately. _parse_4rec_response handles the split.
+    """
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    try:
+        response = _claude_call(
+            client,
+            model=MODEL_SONNET,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user_msg}],
+            temperature=temperature,
+        )
+        return response.content[0].text
+    except anthropic.AuthenticationError as auth_err:
+        logger.error("4-REC AUTH ERROR (401): %s", auth_err)
+        return None
+    except anthropic.APIStatusError as status_err:
+        logger.error("4-REC API STATUS ERROR: status=%s body=%s",
+                     status_err.status_code, status_err.message)
+        return None
+    except (anthropic.APIError, IndexError, KeyError) as exc:
+        logger.error("4-REC CALL FAILED: %s | type=%s", exc, type(exc).__name__)
+        return None
+
+
+def _parse_4rec_response(raw: str) -> Tuple[str, Optional[dict]]:
+    """Split the 4-REC response into (reasoning_text, parsed_json).
+
+    Extracts the first <reasoning>...</reasoning> block (case-insensitive,
+    multi-line), logs it at INFO for audit, then strips it out and finds
+    the first '{' and last '}' in the remainder to parse the JSON object.
+    Returns (reasoning, parsed_dict) or (reasoning, None) on parse failure.
+    """
+    if not raw:
+        return "", None
+    reasoning_text = ""
+    m = re.search(r"<reasoning>(.*?)</reasoning>", raw,
+                  flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        reasoning_text = m.group(1).strip()
+        logger.info("4-REC REASONING:\n%s", reasoning_text)
+    else:
+        logger.warning("4-REC: no <reasoning>...</reasoning> block found "
+                       "in response — model did not follow protocol")
+
+    # Strip the reasoning block (and any accidental preamble) before
+    # locating JSON. Tolerant of the model wrapping the whole response
+    # in ```json fences or adding markdown.
+    body = re.sub(r"<reasoning>.*?</reasoning>", "", raw,
+                  flags=re.DOTALL | re.IGNORECASE)
+    body = body.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+    first = body.find("{")
+    last = body.rfind("}")
+    if first == -1 or last == -1 or last <= first:
+        logger.error("4-REC: no JSON object found in response body "
+                     "(len=%d) — parse failed", len(body))
+        return reasoning_text, None
+    try:
+        parsed = json.loads(body[first:last + 1])
+        if not isinstance(parsed, dict):
+            logger.error("4-REC: parsed payload is %s, not dict",
+                         type(parsed).__name__)
+            return reasoning_text, None
+        return reasoning_text, parsed
+    except json.JSONDecodeError as exc:
+        logger.error("4-REC JSON parse failed at pos %d: %s",
+                     getattr(exc, "pos", -1), exc)
+        return reasoning_text, None
+
+
+def _run_4rec(deal) -> Tuple[str, dict]:
+    """Run the 4-REC specialist prompt. Returns (reasoning, parsed_dict).
+
+    Up to 2 retries on transient errors or JSON parse failures. Always
+    returns a tuple; on total failure the dict is empty and caller is
+    expected to fall back to 4-MASTER for the rec keys.
+    """
+    global _4REC_DIAG_COUNT
+
+    logger.info("4-REC: building payload for deal %s...", deal.deal_id)
+    payload = _build_4rec_payload(deal)
+    try:
+        user_msg = _USER_4REC.format(**payload)
+    except KeyError as exc:
+        logger.error("4-REC: payload missing placeholder %s — aborting", exc)
+        return "", {}
+
+    reasoning = ""
+    parsed: Optional[dict] = None
+    last_error = None
+
+    for attempt in range(1, 3):
+        logger.info("4-REC: calling Sonnet (attempt %d of 2)...", attempt)
+        raw = _call_sonnet_raw(_SYSTEM_4REC, user_msg,
+                               max_tokens=4096, temperature=0.3)
+        if raw is None:
+            last_error = "api_call_returned_none"
+            continue
+        reasoning, parsed = _parse_4rec_response(raw)
+        if parsed is not None:
+            break
+        last_error = "json_parse_failed"
+        logger.warning("4-REC attempt %d: JSON parse failed — retrying",
+                       attempt)
+
+    if parsed is None:
+        logger.error("4-REC: all attempts failed (last error: %s)",
+                     last_error)
+        return reasoning, {}
+
+    # Validate key shape — every expected key should be present and a
+    # string (verdict is also a string).
+    missing = [k for k in _4REC_KEYS if k not in parsed]
+    extra = [k for k in parsed.keys() if k not in _4REC_KEYS]
+    if missing:
+        logger.warning("4-REC: response missing keys %s", missing)
+    if extra:
+        logger.info("4-REC: response has %d extra keys (will be ignored): %s",
+                    len(extra), extra)
+
+    # Side-by-side diagnostic for the first 5 runs
+    if _4REC_DIAG_COUNT < _4REC_DIAG_LIMIT:
+        _4REC_DIAG_COUNT += 1
+        summary_lines = []
+        for k in _4REC_KEYS:
+            v = parsed.get(k, "")
+            if isinstance(v, str) and len(v) > 120:
+                v = v[:117] + "..."
+            summary_lines.append(f"    {k}: {v!r}")
+        logger.info(
+            "4-REC DIAG (run %d/%d):\n  REASONING:\n%s\n  OUTPUT KEYS:\n%s",
+            _4REC_DIAG_COUNT, _4REC_DIAG_LIMIT,
+            reasoning,
+            "\n".join(summary_lines),
+        )
+
+    return reasoning, parsed
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # PROMPT 4-MASTER — ALL REPORT NARRATIVE SECTIONS (Sonnet)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -521,6 +1375,17 @@ def _call_sonnet(system: str, user_msg: str, max_tokens: int = 8192) -> Optional
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _apply_narrative_result(deal: DealData, result: dict) -> None:
+    """Write any string-valued keys in `result` onto deal.narratives where
+    a matching field exists. Used between 4-MASTER Part 1 and 4-REC so
+    the specialist prompt sees the market context narratives that just
+    ran (neighborhood_trend_narrative, supply_pipeline_narrative)."""
+    narr = deal.narratives
+    for key, value in result.items():
+        if hasattr(narr, key) and isinstance(value, str):
+            setattr(narr, key, value)
+
+
 def _generate_narratives(deal: DealData) -> None:
     """Run Prompt 4-MASTER to populate all narrative fields on DealData."""
     logger.info("Running Prompt 4-MASTER — all report narratives...")
@@ -543,11 +1408,44 @@ def _generate_narratives(deal: DealData) -> None:
         return out or {}
 
     part1 = _run_part(_4MASTER_KEYS_PART1, "Part 1 (executive/property/location/market)")
-    part2 = _run_part(_4MASTER_KEYS_PART2, "Part 2 (financial/risk/recommendation)")
+
+    # Phase-1 specialist-prompt split: when USE_4REC_SPECIALIST is on,
+    # 4-MASTER Part 2 no longer generates the 8 Investment-Recommendation
+    # keys. Those are produced by the dedicated _run_4rec() below,
+    # merged into the same result dict used by the existing apply loop.
+    part2_keys = list(_4MASTER_KEYS_PART2)
+    if USE_4REC_SPECIALIST:
+        part2_keys = [k for k in part2_keys if k not in _4REC_KEYS]
+        logger.info("4-REC specialist enabled — removed %d rec keys from "
+                    "Part 2 (%d keys remain)",
+                    len(_4REC_KEYS), len(part2_keys))
+
+    part2 = _run_part(part2_keys, "Part 2 (financial/risk/conclusion)")
+
+    # Specialist call runs AFTER Part 1 (so neighborhood_trend_narrative +
+    # supply_pipeline_narrative are on deal.narratives and can flow into
+    # the 4-REC user-briefing). We apply Part 1 results to the model
+    # now so 4-REC sees them.
+    _apply_narrative_result(deal, part1)
+
+    rec_payload: dict = {}
+    rec_reasoning = ""
+    if USE_4REC_SPECIALIST:
+        rec_reasoning, rec_payload = _run_4rec(deal)
+        if not rec_payload:
+            # Fallback: re-run Part 2 with the rec keys restored so the
+            # report isn't left with empty recommendation fields. Belt
+            # and suspenders per the rollout plan.
+            logger.warning("4-REC specialist returned empty — falling "
+                           "back to 4-MASTER Part 2 with rec keys restored")
+            fallback = _run_part(_4REC_KEYS,
+                                 "Part 2 rec-keys fallback")
+            rec_payload = fallback or {}
 
     result: dict = {}
     result.update(part1)
     result.update(part2)
+    result.update(rec_payload)
 
     if not result:
         logger.error("Prompt 4-MASTER failed twice — narratives will be empty strings")

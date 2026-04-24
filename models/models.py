@@ -585,6 +585,40 @@ class FinancialAssumptions(BaseModel):
         return self
 
 
+class ScenarioResult(BaseModel):
+    """One named scenario (Base / Upside / Downside) — results from
+    financials._run_scenario_core. Populated by run_financials after
+    the base run has completed. The five deltas are echoed back so
+    the narrative specialist can cite the assumption pressure that
+    produced each metric.
+    """
+    scenario_name:              str                   # "base" | "upside" | "downside"
+    note:                       Optional[str] = None  # surfaces reasons a metric is None, or skip-reason on non-applicable strategies
+
+    # Applied deltas (bps for rates; decimal for pct; int for months)
+    rent_growth_delta_bps:      float
+    vacancy_delta_bps:          float
+    exit_cap_delta_bps:         float
+    hard_cost_delta_pct:        float
+    delivery_delta_months:      int
+
+    # Resolved inputs after deltas (post-clamp) — audit trail
+    annual_rent_growth:         float
+    vacancy_rate:               float
+    exit_cap_rate:              float
+    const_hard:                 float
+    const_period_months:        int
+
+    # Seven scenario output metrics
+    lp_irr:                     Optional[float] = None
+    project_irr:                Optional[float] = None
+    lp_equity_multiple:         Optional[float] = None
+    peak_funded_equity:         Optional[float] = None
+    dscr_yr3:                   Optional[float] = None
+    dscr_yr10:                  Optional[float] = None
+    stabilized_debt_yield:      Optional[float] = None
+
+
 class FinancialOutputs(BaseModel):
     """Computed financial results — populated by financials.py."""
     total_uses:              Optional[float] = None
@@ -630,6 +664,7 @@ class FinancialOutputs(BaseModel):
     sensitivity_stabilized_year: Optional[int]   = None
     sensitivity_stabilized_noi:  Optional[float] = None
     sensitivity_note:            Optional[str]   = None
+    scenario_results:            Optional[Dict[str, ScenarioResult]] = None
 
 
 

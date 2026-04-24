@@ -39,7 +39,8 @@ from config import MODEL_SONNET
 def _get_anthropic_api_key():
     return os.environ.get("ANTHROPIC_API_KEY", "") or None
 from models.models import (
-    AssetType, DealData, InvestmentStrategy, WaterfallType,
+    AssetType, DealData, FinancialOutputs, InvestmentStrategy,
+    ScenarioResult, WaterfallType,
     RenovationTier, RENOVATION_DOWNTIME_MONTHS,
 )
 
@@ -2426,6 +2427,213 @@ def _scale_expenses_for_asset_type(deal: DealData) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# §10  SCENARIO SUITE (Base / Upside / Downside)
+# ═══════════════════════════════════════════════════════════════════════════
+# Applied by _run_scenario_core after the base run completes. Source:
+# DealDesk Report Enhancement Strategy §3.2. Deltas are hardcoded at
+# module scope (not on FinancialAssumptions) so every deal in the system
+# reports against the same pressure-test envelope. Conventions:
+#   - rent_growth / vacancy / exit_cap deltas are in basis points (1 bp = 0.0001)
+#   - hard_cost_delta_pct is a decimal multiplier (+0.10 = +10%)
+#   - delivery_delta_months is integer months added to const_period_months
+# ═══════════════════════════════════════════════════════════════════════════
+SCENARIO_DELTAS: Dict[str, Dict[str, float]] = {
+    "base": {
+        "rent_growth_delta_bps": 0,
+        "vacancy_delta_bps":     0,
+        "exit_cap_delta_bps":    0,
+        "hard_cost_delta_pct":   0.0,
+        "delivery_delta_months": 0,
+    },
+    "downside": {
+        "rent_growth_delta_bps": -150,
+        "vacancy_delta_bps":     +200,
+        "exit_cap_delta_bps":    +75,
+        "hard_cost_delta_pct":   +0.10,
+        "delivery_delta_months": +6,
+    },
+    "upside": {
+        "rent_growth_delta_bps": +100,
+        "vacancy_delta_bps":     -100,
+        "exit_cap_delta_bps":    -50,
+        "hard_cost_delta_pct":   -0.05,
+        "delivery_delta_months": -2,
+    },
+}
+
+
+def _compute_peak_funded_equity(deal: DealData) -> Optional[float]:
+    """Approximate peak equity funded: total_equity_required plus any
+    construction-interest carry that's paid out-of-pocket. Not a
+    perfect read of the cash trough but sufficient for IC context.
+
+    Migrated from context_builder.py (Phase 1 scenario work). The
+    computation is financial, so the function belongs here; the 4-REC
+    payload assembler now imports it from this module.
+    """
+    fo = deal.financial_outputs
+    eq = fo.total_equity_required or 0.0
+    carry = fo.construction_interest_carry or 0.0
+    return (eq + carry) if (eq or carry) else None
+
+
+def _run_scenario_core(deal: DealData,
+                       scenario_name: str,
+                       deltas: dict) -> ScenarioResult:
+    """Run stages 2–6 of the financial pipeline on a deep-copied deal
+    with the five scenario deltas applied, and return the seven
+    scenario metrics.
+
+    Pipeline stages re-run on the copy:
+        2. Sources & Uses           — picks up hard-cost + delivery deltas
+        3. Pro forma                — picks up rent / vacancy / delivery deltas
+        5. Project cashflows + IRR
+        6. LP/GP waterfall          — for LP IRR + LP EM
+
+    Stages NOT re-run (intentionally):
+        1. _scale_expenses_for_asset_type — already applied on base;
+           re-applying would double-scale.
+        4. Year-1 metric assignment       — we extract metrics locally.
+        7–9. Sensitivity / Monte Carlo / price solver / Prompt 5A —
+             scenario outputs are deterministic point estimates, not
+             distributions.
+    """
+    # Deep-copy so the scenario run cannot mutate base-run state.
+    # Sanity check (NOTE 2 from spec): Pydantic v2 model_copy(deep=True)
+    # should produce independent nested lists; assert it.
+    scn = deal.model_copy(deep=True)
+    assert scn.assumptions is not deal.assumptions, (
+        "deep copy: assumptions object shared with base deal"
+    )
+    assert scn.assumptions.refi_events is not deal.assumptions.refi_events, (
+        "deep copy: refi_events list shared with base deal"
+    )
+
+    a = scn.assumptions
+
+    # Apply deltas — bps → decimal (bp/10000); pct already decimal; months already int
+    a.annual_rent_growth  = a.annual_rent_growth + (deltas["rent_growth_delta_bps"] / 10000.0)
+    a.vacancy_rate        = max(0.0,  a.vacancy_rate   + (deltas["vacancy_delta_bps"]   / 10000.0))
+    a.exit_cap_rate       = max(0.02, a.exit_cap_rate  + (deltas["exit_cap_delta_bps"]  / 10000.0))
+    a.const_hard          = max(0.0, a.const_hard * (1.0 + deltas["hard_cost_delta_pct"]))
+    a.const_period_months = max(0,   a.const_period_months + deltas["delivery_delta_months"])
+
+    # Fresh FinancialOutputs on the copy so we don't read stale base values
+    scn.financial_outputs = FinancialOutputs()
+    sfo = scn.financial_outputs
+
+    note: Optional[str] = None
+
+    insurance = _get_insurance_expense(scn)
+
+    # Stage 2: Sources & Uses
+    su = _compute_sources_uses(scn)
+    sfo.total_uses                     = su["total_uses"]
+    sfo.total_sources                  = su["total_sources"]
+    sfo.total_equity_required          = su["total_equity_required"]
+    sfo.initial_loan_amount            = su["initial_loan"]
+    sfo.gp_equity                      = su["gp_equity"]
+    sfo.lp_equity                      = su["lp_equity"]
+    sfo.construction_interest_carry    = su["construction_interest_carry"]
+    sfo.construction_interest_schedule = su["construction_interest_schedule"]
+    sfo.total_project_cost             = su.get("total_project_cost", 0.0)
+
+    # Stage 3: Pro forma
+    proforma, exit_info = _build_proforma(scn, insurance, su)
+    sfo.pro_forma_years      = proforma
+    sfo.gross_sale_price     = exit_info["gross_sale_price"]
+    sfo.net_sale_proceeds    = exit_info["net_sale_proceeds"]
+    sfo.net_equity_at_exit   = exit_info["net_equity_at_exit"]
+    sfo.loan_balance_at_refi = exit_info.get("refi_balances")
+
+    # Stage 5: Project cashflows, IRR, EM
+    total_equity = su["total_equity_required"]
+    project_cfs  = _project_cashflows(proforma, exit_info, total_equity)
+    project_irr  = _safe_irr(project_cfs)
+
+    # Stage 6: Waterfall (LP IRR + LP EM)
+    wf = _compute_waterfall(project_cfs, scn)
+    lp_irr = wf.get("lp_irr")
+    lp_em  = round(wf["lp_em"], 2) if wf.get("lp_em") is not None else None
+
+    # ── Derive the seven scenario metrics ────────────────────────────
+    peak_eq = _compute_peak_funded_equity(scn)
+
+    hold = a.hold_period or 10
+
+    # Year-3 DSCR
+    dscr_yr3: Optional[float] = None
+    if len(proforma) >= 3:
+        yr3 = proforma[2]
+        ds3 = yr3.get("debt_service", 0) or 0
+        if ds3 > 0:
+            dscr_yr3 = round(yr3["noi"] / ds3, 2)
+
+    # Year-10 DSCR — strict definition. For shorter holds, keep None and
+    # surface final-year DSCR in note (per spec).
+    dscr_yr10: Optional[float] = None
+    if hold >= 10 and len(proforma) >= 10:
+        yr10 = proforma[9]
+        ds10 = yr10.get("debt_service", 0) or 0
+        if ds10 > 0:
+            dscr_yr10 = round(yr10["noi"] / ds10, 2)
+    elif proforma:
+        last = proforma[-1]
+        last_ds = last.get("debt_service", 0) or 0
+        if last_ds > 0:
+            final_dscr = last["noi"] / last_ds
+            note = (
+                f"Year 10 DSCR not computed; hold period is {hold} years. "
+                f"Final-year DSCR is {final_dscr:.2f}x."
+            )
+        else:
+            note = (
+                f"Year 10 DSCR not computed; hold period is {hold} years. "
+                f"Final-year debt service is non-positive."
+            )
+
+    # Stabilized debt yield = stabilized_noi / loan_balance_at_stabilization
+    stab_year: Optional[int] = None
+    stab_noi: float = 0.0
+    for _i, _yr in enumerate(proforma):
+        _noi = _yr.get("noi", 0) or 0
+        if _noi > 0:
+            stab_year = _i + 1
+            stab_noi = _noi
+            break
+
+    stab_dy: Optional[float] = None
+    if stab_year and stab_noi > 0 and su["initial_loan"] > 0:
+        bal_at_stab = _loan_balance(
+            su["initial_loan"], a.interest_rate, a.amort_years, stab_year * 12,
+        )
+        if bal_at_stab > 0:
+            stab_dy = round(stab_noi / bal_at_stab, 4)
+
+    return ScenarioResult(
+        scenario_name=scenario_name,
+        note=note,
+        rent_growth_delta_bps=deltas["rent_growth_delta_bps"],
+        vacancy_delta_bps=deltas["vacancy_delta_bps"],
+        exit_cap_delta_bps=deltas["exit_cap_delta_bps"],
+        hard_cost_delta_pct=deltas["hard_cost_delta_pct"],
+        delivery_delta_months=deltas["delivery_delta_months"],
+        annual_rent_growth=a.annual_rent_growth,
+        vacancy_rate=a.vacancy_rate,
+        exit_cap_rate=a.exit_cap_rate,
+        const_hard=a.const_hard,
+        const_period_months=a.const_period_months,
+        lp_irr=lp_irr,
+        project_irr=project_irr,
+        lp_equity_multiple=lp_em,
+        peak_funded_equity=peak_eq,
+        dscr_yr3=dscr_yr3,
+        dscr_yr10=dscr_yr10,
+        stabilized_debt_yield=stab_dy,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # §11  PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -2669,6 +2877,77 @@ def run_financials(deal: DealData) -> DealData:
                 "Simulation requires positive income and equity.",
                 _gpr_yr1(deal), su["total_equity_required"]
             )
+
+        # ── Scenario Suite (Base / Upside / Downside) ────────────────
+        # Runs AFTER the base pipeline is fully resolved. For hold
+        # strategies, loops SCENARIO_DELTAS and calls _run_scenario_core
+        # per name. For opportunistic / for-sale, emits a single base
+        # entry with a skip-reason note so the narrative specialist
+        # downstream knows why.
+        scenario_results: Dict[str, ScenarioResult] = {}
+        if is_sale:
+            _base_deltas = SCENARIO_DELTAS["base"]
+            scenario_results["base"] = ScenarioResult(
+                scenario_name="base",
+                note=(
+                    "Base/Upside/Downside scenarios not applicable for "
+                    "opportunistic/for-sale strategies; v1 supports hold "
+                    "strategies only."
+                ),
+                rent_growth_delta_bps=_base_deltas["rent_growth_delta_bps"],
+                vacancy_delta_bps=_base_deltas["vacancy_delta_bps"],
+                exit_cap_delta_bps=_base_deltas["exit_cap_delta_bps"],
+                hard_cost_delta_pct=_base_deltas["hard_cost_delta_pct"],
+                delivery_delta_months=_base_deltas["delivery_delta_months"],
+                annual_rent_growth=a.annual_rent_growth,
+                vacancy_rate=a.vacancy_rate,
+                exit_cap_rate=a.exit_cap_rate,
+                const_hard=a.const_hard,
+                const_period_months=a.const_period_months,
+            )
+            logger.info(
+                "SCENARIOS skipped — is_sale=True; emitted single "
+                "base entry with skip-reason note."
+            )
+        else:
+            for _scn_name, _scn_deltas in SCENARIO_DELTAS.items():
+                try:
+                    _result = _run_scenario_core(deal, _scn_name, _scn_deltas)
+                    scenario_results[_scn_name] = _result
+                    logger.info(
+                        "SCENARIO %s: LP IRR=%s, Project IRR=%s, "
+                        "LP EM=%s, Peak eq=%s, Yr3 DSCR=%s, "
+                        "Yr10 DSCR=%s, Stab DY=%s%s",
+                        _scn_name,
+                        f"{_result.lp_irr:.4f}" if _result.lp_irr is not None else "non-convergent",
+                        f"{_result.project_irr:.4f}" if _result.project_irr is not None else "non-convergent",
+                        _result.lp_equity_multiple,
+                        f"${_result.peak_funded_equity:,.0f}" if _result.peak_funded_equity is not None else "None",
+                        _result.dscr_yr3,
+                        _result.dscr_yr10,
+                        _result.stabilized_debt_yield,
+                        f" | note: {_result.note}" if _result.note else "",
+                    )
+                except Exception as _scn_exc:
+                    logger.warning(
+                        "SCENARIO %s: run failed (non-fatal): %s",
+                        _scn_name, _scn_exc,
+                    )
+                    scenario_results[_scn_name] = ScenarioResult(
+                        scenario_name=_scn_name,
+                        note=f"Scenario run failed: {type(_scn_exc).__name__}: {_scn_exc}",
+                        rent_growth_delta_bps=_scn_deltas["rent_growth_delta_bps"],
+                        vacancy_delta_bps=_scn_deltas["vacancy_delta_bps"],
+                        exit_cap_delta_bps=_scn_deltas["exit_cap_delta_bps"],
+                        hard_cost_delta_pct=_scn_deltas["hard_cost_delta_pct"],
+                        delivery_delta_months=_scn_deltas["delivery_delta_months"],
+                        annual_rent_growth=a.annual_rent_growth,
+                        vacancy_rate=a.vacancy_rate,
+                        exit_cap_rate=a.exit_cap_rate,
+                        const_hard=a.const_hard,
+                        const_period_months=a.const_period_months,
+                    )
+        fo.scenario_results = scenario_results
 
     except Exception:
         logger.error("run_financials FAILED:\n%s", traceback.format_exc())

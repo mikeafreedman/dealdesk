@@ -78,6 +78,21 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL_HAIKU  = "claude-haiku-4-5-20251001"
 MODEL_SONNET = "claude-sonnet-4-6"
 
+# ── Prompt-architecture feature flags ───────────────────────
+# Phase 1 rollout: specialist Prompt 4-REC replaces the eight
+# Investment-Recommendation keys inside 4-MASTER Part 2. When
+# True, 4-MASTER Part 2 no longer generates the rec keys and a
+# dedicated Sonnet call handles them. Flip to False to fall
+# back to the legacy behavior (rec keys produced by 4-MASTER).
+#
+# Validation — Run 1 (deal 7dad2c54, 2026-04-24): clean pass.
+#   - NO-GO verdict matched the 4-MASTER baseline
+#   - BEAT 0 precedence enforced (CLEAR FAIL → NO-GO, no override)
+#   - BEAT 3 taxonomy applied correctly (2 WORKABLE RED, 5 AMBER)
+# Diag counter at 1 of 5; consistency review at run 5.
+# Reference: outputs/4REC_reasoning_run1_7dad2c54.txt
+USE_4REC_SPECIALIST = True
+
 # ── HUD ──────────────────────────────────────────────────────
 HUD_API_KEY = os.environ.get("HUD_API_KEY", "")
 
