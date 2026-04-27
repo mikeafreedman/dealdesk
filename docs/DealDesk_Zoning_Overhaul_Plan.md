@@ -343,6 +343,11 @@ Mike will identify Deal B and Deal C addresses before Session 2 begins.
 **Risk:** A session's changes break existing single-scenario deals or existing report sections.
 **Mitigation:** Each session's gate criteria includes a backward compatibility check. Tag the repo at each gate pass for clean rollback if needed.
 
+### R7 — Working tree drift between sessions
+
+**Risk:** A session begins with uncommitted work in the tree from prior speculative work, causing scope-creep gate failures and schema collisions. Session 1 hit this and required a 1-hour surgical-reset detour before any planned work could begin.
+**Mitigation:** Every session's opening protocol now includes "verify `git status` returns clean before reading the spec." If not clean, identify what's preservable, commit it in isolation, restore the rest, and confirm clean state before proceeding.
+
 ---
 
 ## Session History Log
