@@ -31,8 +31,8 @@ This is the single source of truth for the DealDesk zoning analysis overhaul. It
 
 | Session | Layer | Status | Gate | Started | Completed |
 |---|---|---|---|---|---|
-| 1 | Schema (models.py) | NOT STARTED | Not yet evaluated | — | — |
-| 2 | Prompt design + approval | BLOCKED on Session 1 | Not yet evaluated | — | — |
+| 1 | Schema (models.py) | COMPLETED | PASSED (18/18 criteria) | 2026-04-27 | 2026-04-27 |
+| 2 | Prompt design + approval | READY (Session 1 gate passed) | Not yet evaluated | — | — |
 | 3 | Pipeline orchestration (market.py) | BLOCKED on Session 2 | Not yet evaluated | — | — |
 | 4 | Financial integration (financials.py + excel_builder.py) | BLOCKED on Session 3 | Not yet evaluated | — | — |
 | 5 | Rendering (report_template.html + report.css) | BLOCKED on Session 4 | Not yet evaluated | — | — |
@@ -356,6 +356,22 @@ Mike will identify Deal B and Deal C addresses before Session 2 begins.
 - Session 1 schema design document created
 - Word checkpoint produced for records
 - Next: Session 1 begins in Claude Code with `Session_1_Schema_Design.md` as the spec
+
+### April 27, 2026 — Session 1 (Schema) — COMPLETED
+- Implemented in `models\models.py` (package layout — spec referenced legacy `models.py` path)
+- 5 enums added: `ConfidenceLevel`, `ConformityStatus` (7 values per D4), `NonconformityType`, `ScenarioVerdict`, `ZoningPathwayType`
+- 7 sub-models added: `NonconformityItem`, `GrandfatheringStatus`, `ZoningPathway`, `EntitlementRiskFlag`, `UseAllocation`, `OverlayImpact`, `DevelopmentUpside`
+- 3 top-level models added: `ConformityAssessment` (with status↔grandfathering consistency validator), `DevelopmentScenario` (with `scenario_id` format + 30-char cap + rank 1-3 validators), `ZoningExtensions` (with use_flexibility_score 1-5 validator)
+- `DealData` extended with 3 optional fields (`conformity_assessment`, `scenarios`, `zoning_extensions`) plus `validate_scenarios_constraints` model_validator enforcing D2 cap, rank uniqueness, exactly-one-PREFERRED, PREFERRED-rank-1, and matching `preferred_scenario_id`
+- `mirror_preferred_to_legacy(deal)` utility added — D6's sole sanctioned write path from scenarios to legacy `deal.financial_outputs`
+- `model_rebuild()` calls added to resolve forward references
+- Test fixture written: `tests/fixtures/zoning_overhaul_session_1_fixture.json` (967-73 N. 9th St, 3 scenarios, full nonconformity/grandfathering/cross-scenario detail)
+- Pre-Session-1 housekeeping commit: prior speculative Phase 1/Phase 2/Phase 1.5a working-tree changes were discarded via `git restore` (they conflicted with Session 1's schema definitions and depended on the to-be-replaced 3C prompt). Step 4A Moody's MCP integration was preserved as a separate clean commit (`f73eabf`) prior to Session 1.
+- Gate verdict: PASSED — 18/18 criteria green (the spec's 19 items collapse to 18 distinct assertions because gate 13 splits into 13a/13b for zero-PREFERRED and multiple-PREFERRED). Validator rejection paths verified for all bad-input cases. Backward compatibility verified via legacy-shaped DealData deserialization.
+- Commit: `8a80f32` (`Session 1: Schema (models.py) — Add ConformityAssessment, DevelopmentScenario, ZoningExtensions`)
+- Tag: `zoning-overhaul-session-1-passed`
+- Open carry-forwards: spec referenced `models.py` at the project root, but the actual file is `models\models.py` (package layout). Session 2+ should expect this corrected path. Spec also referenced 8 sub-models in Section 1.1 prose but listed 7 in Section 2 (Section 2.8 is explicitly noted as "NOT a new model" — the cross-reference helper). Implemented the 7 actual sub-models.
+- Next: Session 2 (Prompt design + approval). Blocked only on Mike's go-ahead to begin draft-and-test cycle for `3C-CONF`, `3C-SCEN`, `3C-HBU`.
 
 ---
 
