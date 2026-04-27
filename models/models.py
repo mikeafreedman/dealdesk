@@ -252,6 +252,12 @@ class MarketData(BaseModel):
     first_street_fire:    Optional[float] = None
     first_street_heat:    Optional[float] = None
     first_street_wind:    Optional[float] = None
+    moodys_submarket_cap_rate:      Optional[float] = None  # e.g. 0.0625 = 6.25%
+    moodys_submarket_vacancy_rate:  Optional[float] = None  # e.g. 0.085 = 8.5%
+    moodys_submarket_rent_growth:   Optional[float] = None  # e.g. 0.032 = 3.2% annualized
+    moodys_market_name:             Optional[str]   = None  # e.g. 'Philadelphia Metro'
+    moodys_submarket_name:          Optional[str]   = None  # e.g. 'Center City'
+    moodys_data_as_of:              Optional[str]   = None  # e.g. '2026-Q1'
     supply_pipeline_narrative: Optional[str] = None
     debt_market_narrative:     Optional[str] = None   # Prompt 5B output
     transit_options:    List[dict] = Field(default_factory=list)

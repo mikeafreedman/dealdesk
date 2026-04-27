@@ -53,6 +53,7 @@ from models.models import (
 logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = 30  # seconds for all HTTP calls
+_MOODYS_MCP_URL = "https://api.moodys.com/genai-ready-data/m1/mcp"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -975,6 +976,167 @@ def _fetch_all_fred(deal: DealData) -> Dict[str, Optional[float]]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# STEP 4A — MOODY'S CRE MCP (submarket cap rates, vacancy, rent growth, comps)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _fetch_moodys_cre(deal: DealData) -> None:
+    """
+    Step 4A: Query the Moody's CRE MCP server for submarket intelligence.
+    Populates six new fields on deal.market_data and appends sale comps
+    to deal.comps.sale_comps.
+
+    Pipeline position: after FRED (Step 4), before Prompt 5B (Step 5).
+    On any failure: logs warning, records failed_sources, returns None.
+    Never crashes the pipeline.
+    """
+    addr = deal.address
+    md   = deal.market_data
+    asset_type = deal.asset_type.value
+
+    token = os.getenv("MOODYS_MCP_TOKEN")
+    if not token:
+        logger.warning("Moody's CRE MCP: MOODYS_MCP_TOKEN env var not set — skipping")
+        deal.provenance.failed_sources.append({
+            "service": "Moody's CRE MCP",
+            "stage":   "market.Step4A",
+            "reason":  "MOODYS_MCP_TOKEN env var not configured",
+        })
+        return
+
+    city  = (addr.city  or "").strip()
+    state = (addr.state or "").strip()
+    if not city or not state:
+        logger.warning("Moody's CRE MCP: missing city/state — skipping")
+        deal.provenance.failed_sources.append({
+            "service": "Moody's CRE MCP",
+            "stage":   "market.Step4A",
+            "reason":  "missing city/state on deal — cannot query submarket",
+        })
+        return
+
+    full_address = addr.full_address or f"{city}, {state}"
+    logger.info("Step 4A: Querying Moody's CRE MCP for %s (%s)...",
+                full_address, asset_type)
+
+    query = (
+        f"For a {asset_type} property at {full_address}: "
+        f"provide (1) current submarket cap rate, (2) submarket vacancy rate, "
+        f"(3) annual rent growth rate, (4) market name and submarket name, "
+        f"(5) up to 3 recent comparable sale transactions within 1 mile including "
+        f"address, sale price, number of units, price per unit, cap rate, and sale date, "
+        f"(6) supply pipeline: permitted and under-construction units within 1 mile. "
+        f"Return all numeric values as decimals (e.g. 0.065 for 6.5%). "
+        f"Return JSON only with these keys: submarket_cap_rate, submarket_vacancy_rate, "
+        f"rent_growth_rate, market_name, submarket_name, data_as_of, sale_comps (array), "
+        f"supply_pipeline (object with units_permitted and units_under_construction). "
+        f"Use null for any value not available."
+    )
+
+    try:
+        client = anthropic.Anthropic()
+        response = client.beta.messages.create(
+            model=MODEL_SONNET,
+            max_tokens=2000,
+            messages=[{"role": "user", "content": query}],
+            betas=["mcp-client-2025-04-04"],
+            mcp_servers=[{
+                "type": "url",
+                "url":  _MOODYS_MCP_URL,
+                "name": "moodys-cre",
+                "authorization_token": token,
+            }],
+        )
+    except Exception as exc:
+        logger.warning("Moody's CRE MCP: API call failed — %s", exc)
+        deal.provenance.failed_sources.append({
+            "service": "Moody's CRE MCP",
+            "stage":   "market.Step4A",
+            "reason":  str(exc)[:200],
+        })
+        return
+
+    raw_text = ""
+    for block in (response.content or []):
+        if getattr(block, "type", "") == "text":
+            raw_text += block.text
+        elif getattr(block, "type", "") == "mcp_tool_result":
+            for inner in (getattr(block, "content", []) or []):
+                if getattr(inner, "type", "") == "text":
+                    raw_text += inner.text
+
+    if not raw_text.strip():
+        logger.warning("Moody's CRE MCP: empty response — skipping")
+        return
+
+    import re as _re, json as _json
+    json_match = _re.search(r'\{.*\}', raw_text, _re.DOTALL)
+    if not json_match:
+        logger.warning("Moody's CRE MCP: no JSON found in response")
+        logger.debug("Moody's raw response: %s", raw_text[:500])
+        return
+
+    try:
+        data = _json.loads(json_match.group())
+    except _json.JSONDecodeError as exc:
+        logger.warning("Moody's CRE MCP: JSON parse failed — %s", exc)
+        return
+
+    cap_rate = _safe_float(data.get("submarket_cap_rate"))
+    if cap_rate and md.moodys_submarket_cap_rate is None:
+        md.moodys_submarket_cap_rate = cap_rate
+
+    vacancy = _safe_float(data.get("submarket_vacancy_rate"))
+    if vacancy and md.moodys_submarket_vacancy_rate is None:
+        md.moodys_submarket_vacancy_rate = vacancy
+
+    rent_growth = _safe_float(data.get("rent_growth_rate"))
+    if rent_growth and md.moodys_submarket_rent_growth is None:
+        md.moodys_submarket_rent_growth = rent_growth
+
+    if data.get("market_name"):
+        md.moodys_market_name = str(data["market_name"])
+    if data.get("submarket_name"):
+        md.moodys_submarket_name = str(data["submarket_name"])
+    if data.get("data_as_of"):
+        md.moodys_data_as_of = str(data["data_as_of"])
+
+    for comp in (data.get("sale_comps") or [])[:5]:
+        if not comp.get("address"):
+            continue
+        deal.comps.sale_comps.append(SaleComp(
+            address        = comp.get("address"),
+            sale_price     = _safe_float(comp.get("sale_price")),
+            price_per_unit = _safe_float(comp.get("price_per_unit")),
+            cap_rate       = _safe_float(comp.get("cap_rate")),
+            sale_date      = comp.get("sale_date"),
+            num_units      = comp.get("num_units"),
+            source         = "Moody's CRE",
+        ))
+
+    pipeline = data.get("supply_pipeline")
+    if pipeline and not md.supply_pipeline_narrative:
+        if isinstance(pipeline, dict):
+            units_permitted    = pipeline.get("units_permitted", "unknown")
+            units_construction = pipeline.get("units_under_construction", "unknown")
+            md.supply_pipeline_narrative = (
+                f"Moody's CRE data ({md.moodys_data_as_of or 'current'}): "
+                f"{units_permitted} units permitted and {units_construction} units "
+                f"under construction within 1 mile of subject property in the "
+                f"{md.moodys_submarket_name or 'subject submarket'}."
+            )
+        elif isinstance(pipeline, str):
+            md.supply_pipeline_narrative = pipeline
+
+    deal.provenance.field_sources["moodys_cre_mcp"] = "moodys_cre_genai_ready"
+    logger.info(
+        "Moody's CRE MCP: cap_rate=%s vacancy=%s rent_growth=%s market=%s submarket=%s comps=%d",
+        md.moodys_submarket_cap_rate, md.moodys_submarket_vacancy_rate,
+        md.moodys_submarket_rent_growth, md.moodys_market_name,
+        md.moodys_submarket_name, len(deal.comps.sale_comps),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # STEP 5 — PROMPT 5B: DEBT MARKET SNAPSHOT NARRATIVE (Sonnet)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1007,7 +1169,11 @@ _USER_5B = (
     "  Rate type: {rate_type} | LTV: {ltv}% | DSCR Yr1: {dscr_yr1}x\n"
     "  Amort: {amortization} yrs | Term: {loan_term} yrs\n"
     "\n"
-    "Write the debt market context paragraph now. Output plain text only."
+    "Moody's CRE submarket cap rate: {moodys_cap_rate}\n"
+    "Moody's CRE submarket vacancy: {moodys_vacancy}\n"
+    "\n"
+    "Write the debt market context paragraph now. Reference the Moody's submarket "
+    "cap rate and vacancy if available. Output plain text only."
 )
 
 
@@ -1037,6 +1203,8 @@ def _generate_debt_market_narrative(deal: DealData, data_pull_date: str) -> None
         dscr_yr1="TBD",
         amortization=assumptions.amort_years,
         loan_term=assumptions.loan_term,
+        moodys_cap_rate=f"{md.moodys_submarket_cap_rate:.2%}" if md.moodys_submarket_cap_rate else "not available",
+        moodys_vacancy=f"{md.moodys_submarket_vacancy_rate:.1%}" if md.moodys_submarket_vacancy_rate else "not available",
     )
 
     narrative = _call_llm_text(MODEL_SONNET, _SYSTEM_5B, user_msg)
@@ -2802,6 +2970,13 @@ def enrich_market_data(deal: DealData) -> DealData:
     logger.info("FRED: DGS10=%s, SOFR=%s, MTG30=%s, CPI=%s",
                 md.dgs10_rate, md.sofr_rate, md.mortgage30_rate, md.cpi_yoy)
 
+    # ── STEP 4A: Moody's CRE MCP (submarket intelligence) ───────────
+    logger.info("Step 4A: Moody's CRE submarket data...")
+    try:
+        _fetch_moodys_cre(deal)
+    except Exception as _moodys_exc:
+        logger.warning("Step 4A Moody's CRE: non-fatal error — %s", _moodys_exc)
+
     # ── STEP 5: Prompt 5B — Debt Market Snapshot (immediately after FRED) ─
     logger.info("Step 5: Prompt 5B — Debt Market Snapshot...")
     _generate_debt_market_narrative(deal, data_pull_date)
@@ -3313,6 +3488,10 @@ def enrich_market_data(deal: DealData) -> DealData:
     logger.info("  OPA parcel: %s", "found" if _opa_found else "not found")
     logger.info("  FEMA zone: %s", md.fema_flood_zone or "not determined")
     logger.info("  EPA flags: %d", len(md.epa_env_flags or []))
+    logger.info("  Moody's CRE: cap=%.2f%% vacancy=%.1f%% submarket=%s",
+                (md.moodys_submarket_cap_rate or 0) * 100,
+                (md.moodys_submarket_vacancy_rate or 0) * 100,
+                md.moodys_submarket_name or "not fetched")
     logger.info("===========================")
 
     # Record which data sources failed so context_builder can render a
@@ -3336,6 +3515,12 @@ def enrich_market_data(deal: DealData) -> DealData:
     if not md.dgs10_rate:
         failed.append({"service": "FRED", "stage": "market.Step4",
                        "reason": "macro rates unavailable — rate benchmark missing"})
+    if not md.moodys_submarket_cap_rate and not any(
+        f.get("service") == "Moody's CRE MCP"
+        for f in deal.provenance.failed_sources
+    ):
+        failed.append({"service": "Moody's CRE MCP", "stage": "market.Step4A",
+                       "reason": "submarket cap rate unavailable — comp data may be limited"})
     if failed:
         deal.provenance.failed_sources.extend(failed)
         logger.warning("DATA QUALITY: %d external-source failure(s) — %s",

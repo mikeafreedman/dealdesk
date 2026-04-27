@@ -1679,6 +1679,9 @@
       <tr><td>Demographics (population, income, rent)</td><td>Census ACS 5-Year</td><td>Census API</td><td>{{ provenance.census_data_year or "2022" }}</td></tr>
       <tr><td>Fair Market Rents</td><td>HUD FMR</td><td>HUD Data API</td><td>{{ provenance.fred_pull_date or report_date }}</td></tr>
       <tr><td>Macro interest rates</td><td>Federal Reserve Economic Data (FRED)</td><td>FRED API</td><td>{{ provenance.fred_pull_date or report_date }}</td></tr>
+      {% if moodys_available %}
+      <tr><td>Submarket Cap Rate / Vacancy / Supply Pipeline</td><td>Moody's CRE (Genai-Ready Data)</td><td>MCP Tool Call</td><td>{{ moodys_data_as_of or data_pull_date }}</td></tr>
+      {% endif %}
       <tr><td>Flood zone</td><td>FEMA National Flood Hazard Layer</td><td>ArcGIS REST /export</td><td>Live lookup</td></tr>
       <tr><td>Opportunity Zone status</td><td>Treasury / HUD OZ list</td><td>CSV (24h cache)</td><td>{{ provenance.census_data_year or "2022" }}</td></tr>
       <tr><td>Parcel / ownership records</td><td>Local assessor GIS (Philly OPA, DC OTR, NYC ACRIS, ArcGIS MapServers)</td><td>REST SQL / WMS</td><td>Live lookup</td></tr>

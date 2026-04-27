@@ -2537,6 +2537,15 @@ def build_context(deal: DealData) -> dict:
     ctx["fmr_2br"]    = f"${md.fmr_2br:,.0f}"    if md.fmr_2br    else "N/A"
     ctx["fmr_3br"]    = f"${md.fmr_3br:,.0f}"    if md.fmr_3br    else "N/A"
 
+    # Moody's CRE submarket data
+    ctx["moodys_cap_rate"]    = f"{md.moodys_submarket_cap_rate:.2%}" if md.moodys_submarket_cap_rate else None
+    ctx["moodys_vacancy"]     = f"{md.moodys_submarket_vacancy_rate:.1%}" if md.moodys_submarket_vacancy_rate else None
+    ctx["moodys_rent_growth"] = f"{md.moodys_submarket_rent_growth:.1%}" if md.moodys_submarket_rent_growth else None
+    ctx["moodys_market"]      = md.moodys_market_name
+    ctx["moodys_submarket"]   = md.moodys_submarket_name
+    ctx["moodys_data_as_of"]  = md.moodys_data_as_of
+    ctx["moodys_available"]   = bool(md.moodys_submarket_cap_rate)
+
     # ── Debt market narrative ─────────────────────────────────────
     ctx["debt_market_narrative"] = md.debt_market_narrative or ""
 
