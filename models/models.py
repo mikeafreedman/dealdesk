@@ -9,6 +9,7 @@ Status:   PENDING APPROVAL
 """
 
 from __future__ import annotations
+import re
 from enum import Enum
 from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -1072,6 +1073,20 @@ class DealData(BaseModel):
     # Zoning
     zoning: ZoningData = Field(default_factory=ZoningData)
 
+    # =========================================================================
+    # ZONING OVERHAUL — Session 1 additions (April 2026)
+    # =========================================================================
+    conformity_assessment: Optional[ConformityAssessment] = None
+    # ^^ Populated by 3C-CONF in Session 3. None on deals processed before
+    #    the overhaul shipped.
+
+    scenarios: List[DevelopmentScenario] = Field(default_factory=list)
+    # ^^ Populated by 3C-SCEN in Session 3. Empty list on legacy deals.
+    #    Master plan D2 caps at 3 entries.
+
+    zoning_extensions: Optional[ZoningExtensions] = None
+    # ^^ Populated by 3C-HBU in Session 3. None on legacy deals.
+
     # Market data
     market_data: MarketData = Field(default_factory=MarketData)
 
@@ -1167,6 +1182,58 @@ class DealData(BaseModel):
             return ['s16', 's17', 's22']
         return []
 
+    # =========================================================================
+    # ZONING OVERHAUL — Session 1: scenarios constraint validator
+    # =========================================================================
+    @model_validator(mode="after")
+    def validate_scenarios_constraints(self):
+        """Enforce master plan constraints on scenarios list."""
+        if not self.scenarios:
+            return self  # empty is fine — legacy deals or pre-3C-SCEN
+
+        # D2: hard cap of 3 scenarios
+        if len(self.scenarios) > 3:
+            raise ValueError(
+                f"DealData.scenarios cannot exceed 3 entries (got {len(self.scenarios)})"
+            )
+
+        # Rank uniqueness within the list
+        ranks = [s.rank for s in self.scenarios]
+        if len(set(ranks)) != len(ranks):
+            raise ValueError(
+                f"DealData.scenarios ranks must be unique, got {ranks}"
+            )
+
+        # Exactly one scenario must be PREFERRED
+        preferred_count = sum(
+            1 for s in self.scenarios if s.verdict == ScenarioVerdict.PREFERRED
+        )
+        if preferred_count != 1:
+            raise ValueError(
+                f"Exactly one scenario must have verdict=PREFERRED, got {preferred_count}"
+            )
+
+        # The PREFERRED scenario must have rank=1
+        preferred_scenario = next(
+            s for s in self.scenarios if s.verdict == ScenarioVerdict.PREFERRED
+        )
+        if preferred_scenario.rank != 1:
+            raise ValueError(
+                "The PREFERRED scenario must have rank=1"
+            )
+
+        # zoning_extensions.preferred_scenario_id must match a scenario
+        if self.zoning_extensions is not None:
+            scenario_ids = {s.scenario_id for s in self.scenarios}
+            if self.zoning_extensions.preferred_scenario_id not in scenario_ids:
+                raise ValueError(
+                    f"zoning_extensions.preferred_scenario_id "
+                    f"'{self.zoning_extensions.preferred_scenario_id}' "
+                    f"does not match any scenario in scenarios list"
+                )
+
+        return self
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONVENIENCE FACTORY
@@ -1191,3 +1258,361 @@ def create_deal(
     )
     deal.assumptions.purchase_price = purchase_price
     return deal
+
+
+# =============================================================================
+# ZONING OVERHAUL — Session 1 additions (April 2026)
+# Master plan: DealDesk_Zoning_Overhaul_Plan.md
+# Schema spec: Session_1_Schema_Design.md
+# =============================================================================
+
+# ── Enums ────────────────────────────────────────────────────────────────────
+
+class ConfidenceLevel(str, Enum):
+    """
+    Confidence in the underlying data supporting an assessment.
+
+    Used by the confidence gate (master plan D4) to determine whether
+    conformity analysis should run or fall back to INDETERMINATE.
+    """
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    INDETERMINATE = "INDETERMINATE"
+
+
+class ConformityStatus(str, Enum):
+    """
+    The conformity state of the property under current zoning.
+
+    Per master plan D4, this is the headline classification on every Section 06.
+    The CONFORMITY_INDETERMINATE value is the mandatory fallback when the
+    confidence gate fails (insufficient zoning data).
+    """
+    CONFORMING = "CONFORMING"
+    LEGAL_NONCONFORMING_USE = "LEGAL_NONCONFORMING_USE"
+    LEGAL_NONCONFORMING_DENSITY = "LEGAL_NONCONFORMING_DENSITY"
+    LEGAL_NONCONFORMING_DIMENSIONAL = "LEGAL_NONCONFORMING_DIMENSIONAL"
+    MULTIPLE_NONCONFORMITIES = "MULTIPLE_NONCONFORMITIES"
+    ILLEGAL_NONCONFORMING = "ILLEGAL_NONCONFORMING"
+    CONFORMITY_INDETERMINATE = "CONFORMITY_INDETERMINATE"
+
+
+class NonconformityType(str, Enum):
+    """
+    The specific zoning dimension along which a property fails to conform.
+
+    Multiple instances may apply to one property (captured as a list of
+    NonconformityItem records on the ConformityAssessment).
+    """
+    USE = "USE"
+    DENSITY = "DENSITY"
+    HEIGHT = "HEIGHT"
+    FAR = "FAR"
+    SETBACKS = "SETBACKS"
+    LOT_COVERAGE = "LOT_COVERAGE"
+    PARKING = "PARKING"
+    LOT_AREA = "LOT_AREA"
+
+
+class ScenarioVerdict(str, Enum):
+    """
+    The recommendation status of a development scenario within a deal.
+
+    Exactly one scenario per deal must have verdict PREFERRED.
+    """
+    PREFERRED = "PREFERRED"
+    ALTERNATE = "ALTERNATE"
+    REJECT = "REJECT"
+
+
+class ZoningPathwayType(str, Enum):
+    """
+    The regulatory pathway required to execute a development scenario.
+
+    Maps to entitlement timeline, cost, and risk in downstream analysis.
+    """
+    BY_RIGHT = "BY_RIGHT"
+    CONDITIONAL_USE = "CONDITIONAL_USE"
+    SPECIAL_EXCEPTION = "SPECIAL_EXCEPTION"
+    VARIANCE = "VARIANCE"
+    REZONE = "REZONE"
+
+
+# ── Sub-models (referenced by top-level models) ──────────────────────────────
+
+class NonconformityItem(BaseModel):
+    """
+    A single instance of nonconformity. A property with multiple nonconformities
+    has a list of these on its ConformityAssessment.
+    """
+    nonconformity_type: NonconformityType
+    existing_value: str
+    permitted_value: str
+    magnitude_description: str
+    triggers_loss_of_grandfathering: List[str] = Field(default_factory=list)
+
+
+class GrandfatheringStatus(BaseModel):
+    """
+    The grandfathering posture of a nonconforming property.
+
+    Only populated when ConformityStatus is one of the LEGAL_NONCONFORMING_*
+    or MULTIPLE_NONCONFORMITIES values. None for CONFORMING and INDETERMINATE.
+    """
+    is_documented: bool
+    documentation_source: Optional[str] = None
+    presumption_basis: Optional[str] = None
+    confirmation_action_required: str
+    risk_if_denied: str
+
+
+class ZoningPathway(BaseModel):
+    """
+    The regulatory pathway a scenario must traverse to be approvable.
+    Each DevelopmentScenario carries one of these.
+    """
+    pathway_type: ZoningPathwayType
+    approval_body: Optional[str] = None
+    estimated_timeline_months: Optional[int] = None
+    estimated_soft_cost_usd: Optional[float] = None
+    success_probability_pct: Optional[int] = None
+    fallback_if_denied: Optional[str] = None
+
+
+class EntitlementRiskFlag(BaseModel):
+    """
+    A material entitlement risk flag attached to a scenario.
+
+    Optional — only populated for scenarios where entitlement is a real risk
+    (typically anything other than BY_RIGHT). None for clean by-right scenarios.
+    """
+    severity: str  # "LOW" | "MEDIUM" | "HIGH"
+    risk_summary: str
+    diligence_required: List[str] = Field(default_factory=list)
+
+
+class UseAllocation(BaseModel):
+    """
+    Floor area allocation by use category within a scenario.
+    A scenario can have multiple of these (mixed-use deals).
+    """
+    use_category: str
+    square_feet: float
+    unit_count: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class OverlayImpact(BaseModel):
+    """
+    A single overlay district's impact on the property's development envelope.
+    A property can have zero or more overlays.
+    """
+    overlay_name: str
+    overlay_type: str
+    impact_summary: str
+    triggers_review: bool
+    additional_diligence: List[str] = Field(default_factory=list)
+
+
+class DevelopmentUpside(BaseModel):
+    """
+    Captures how much development capacity remains unused on the parcel.
+    Useful for assessing future expansion potential.
+    """
+    far_remaining_sf: Optional[float] = None
+    units_remaining: Optional[int] = None
+    height_remaining_ft: Optional[float] = None
+    summary: str
+
+
+# ── Top-level models ─────────────────────────────────────────────────────────
+
+class ConformityAssessment(BaseModel):
+    """
+    The headline conformity classification for the deal's property.
+
+    Master plan D4: this assessment is rendered as a prominent callout at the
+    top of Section 06 on every report. When the confidence gate fails, the
+    status is set to CONFORMITY_INDETERMINATE with explicit explanation.
+    """
+    status: ConformityStatus
+    confidence: ConfidenceLevel
+    confidence_reasons: List[str] = Field(default_factory=list)
+
+    nonconformity_details: List[NonconformityItem] = Field(default_factory=list)
+    grandfathering_status: Optional[GrandfatheringStatus] = None
+
+    risk_summary: str
+    diligence_actions_required: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_status_consistency(self):
+        """Enforce semantic consistency between status and other fields."""
+        if self.status == ConformityStatus.CONFORMING:
+            if self.nonconformity_details:
+                raise ValueError(
+                    "CONFORMING status cannot have nonconformity_details"
+                )
+            if self.grandfathering_status is not None:
+                raise ValueError(
+                    "CONFORMING status cannot have grandfathering_status"
+                )
+
+        if self.status in {
+            ConformityStatus.LEGAL_NONCONFORMING_USE,
+            ConformityStatus.LEGAL_NONCONFORMING_DENSITY,
+            ConformityStatus.LEGAL_NONCONFORMING_DIMENSIONAL,
+            ConformityStatus.MULTIPLE_NONCONFORMITIES,
+        }:
+            if not self.nonconformity_details:
+                raise ValueError(
+                    f"{self.status.value} requires at least one nonconformity_details entry"
+                )
+            if self.grandfathering_status is None:
+                raise ValueError(
+                    f"{self.status.value} requires grandfathering_status to be populated"
+                )
+
+        if self.status == ConformityStatus.CONFORMITY_INDETERMINATE:
+            if self.confidence != ConfidenceLevel.INDETERMINATE:
+                raise ValueError(
+                    "CONFORMITY_INDETERMINATE status must have INDETERMINATE confidence"
+                )
+
+        return self
+
+
+class DevelopmentScenario(BaseModel):
+    """
+    A single development/business-plan scenario for the property.
+
+    Master plan D1 defines what counts as a scenario. Master plan D2 caps
+    the count at 3 per deal. Master plan D7 specifies the filename pattern
+    that consumes scenario_id and rank.
+    """
+    # Identity
+    scenario_id: str
+    rank: int
+    scenario_name: str
+    business_thesis: str
+    verdict: ScenarioVerdict
+
+    # Physical configuration
+    unit_count: int = 0
+    building_sf: float = 0.0
+    use_mix: List[UseAllocation] = Field(default_factory=list)
+
+    # Operating strategy
+    operating_strategy: str
+
+    # Zoning pathway
+    zoning_pathway: ZoningPathway
+
+    # Per-scenario assumption deltas (applied to baseline assumptions in financials.py)
+    construction_budget_delta_usd: Optional[float] = None
+    rent_delta_pct: Optional[float] = None
+    timeline_delta_months: Optional[int] = None
+
+    # Outputs (populated by financials.py in Session 4 — None until then)
+    financial_outputs: Optional["FinancialOutputs"] = None
+    excel_filename: Optional[str] = None
+
+    # Risk
+    key_risks: List[str] = Field(default_factory=list)
+    entitlement_risk_flag: Optional[EntitlementRiskFlag] = None
+
+    @field_validator("scenario_id")
+    @classmethod
+    def validate_scenario_id_format(cls, v: str) -> str:
+        """Enforce snake_case, 30-char cap, no special chars."""
+        if not re.match(r"^[a-z][a-z0-9_]*$", v):
+            raise ValueError(
+                f"scenario_id must be snake_case starting with a letter, got '{v}'"
+            )
+        if len(v) > 30:
+            raise ValueError(
+                f"scenario_id max length is 30 chars, got {len(v)}"
+            )
+        return v
+
+    @field_validator("rank")
+    @classmethod
+    def validate_rank_range(cls, v: int) -> int:
+        """Rank must be 1, 2, or 3."""
+        if v not in {1, 2, 3}:
+            raise ValueError(f"rank must be 1, 2, or 3 — got {v}")
+        return v
+
+
+class ZoningExtensions(BaseModel):
+    """
+    Zoning analysis layers that are properties of the parcel as a whole,
+    not of any one scenario.
+    """
+    use_flexibility_score: int
+    use_flexibility_explanation: str
+
+    overlay_impact_assessment: List[OverlayImpact] = Field(default_factory=list)
+    development_upside: Optional[DevelopmentUpside] = None
+
+    cross_scenario_recommendation: str
+    preferred_scenario_id: str
+
+    @field_validator("use_flexibility_score")
+    @classmethod
+    def validate_flexibility_score(cls, v: int) -> int:
+        if v < 1 or v > 5:
+            raise ValueError(f"use_flexibility_score must be 1-5, got {v}")
+        return v
+
+
+# ── Utility function ─────────────────────────────────────────────────────────
+
+def mirror_preferred_to_legacy(deal: DealData) -> None:
+    """
+    Mirror the preferred scenario's financial_outputs to deal.financial_outputs.
+
+    Per master plan D6: deal.financial_outputs is a derived field on the new
+    multi-scenario path. This function is the only sanctioned write path.
+    Direct writes to deal.financial_outputs should be avoided in new code.
+
+    Args:
+        deal: The DealData object to update. Mutates in place.
+
+    Raises:
+        ValueError: If deal has no scenarios, or if no scenario is PREFERRED,
+                    or if the preferred scenario has no financial_outputs yet.
+    """
+    if not deal.scenarios:
+        raise ValueError(
+            "Cannot mirror: deal.scenarios is empty. "
+            "This function should only be called after scenarios are populated."
+        )
+
+    preferred = next(
+        (s for s in deal.scenarios if s.verdict == ScenarioVerdict.PREFERRED),
+        None,
+    )
+    if preferred is None:
+        raise ValueError(
+            "Cannot mirror: no scenario has verdict=PREFERRED. "
+            "DealData validators should have caught this."
+        )
+
+    if preferred.financial_outputs is None:
+        raise ValueError(
+            f"Cannot mirror: preferred scenario '{preferred.scenario_id}' "
+            f"has no financial_outputs populated yet. "
+            f"Call this AFTER financials.py fan-out completes."
+        )
+
+    deal.financial_outputs = preferred.financial_outputs
+
+
+# ── Forward reference resolution ─────────────────────────────────────────────
+# Resolve forward references introduced in Session 1
+DevelopmentScenario.model_rebuild()
+ConformityAssessment.model_rebuild()
+ZoningExtensions.model_rebuild()
+DealData.model_rebuild()

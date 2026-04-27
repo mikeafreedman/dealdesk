@@ -1,0 +1,174 @@
+{
+  "deal_id": "session_1_test_fixture",
+  "address": {
+    "full_address": "967-73 N. 9th Street, Philadelphia, PA 19123"
+  },
+
+  "conformity_assessment": {
+    "status": "LEGAL_NONCONFORMING_DENSITY",
+    "confidence": "HIGH",
+    "confidence_reasons": [
+      "ICMX zoning code source-verified from Philadelphia Title 14",
+      "5 of 6 dimensional standards populated",
+      "13 permitted uses listed"
+    ],
+    "nonconformity_details": [
+      {
+        "nonconformity_type": "DENSITY",
+        "existing_value": "21 units",
+        "permitted_value": "6 units (1,440 SF/unit min × 9,652 SF lot)",
+        "magnitude_description": "Existing density exceeds by-right cap by 250%",
+        "triggers_loss_of_grandfathering": [
+          "Substantial improvement (>50% of replacement cost)",
+          "Change of use category",
+          "Abandonment of use for more than 12 consecutive months"
+        ]
+      }
+    ],
+    "grandfathering_status": {
+      "is_documented": false,
+      "documentation_source": null,
+      "presumption_basis": "Building constructed 1930, predates current ICMX density standards",
+      "confirmation_action_required": "Zoning verification letter from Philadelphia L&I confirming grandfathered nonconforming residential density",
+      "risk_if_denied": "Property reverts to 6-unit by-right cap, collapsing the 21-unit underwriting thesis and reducing stabilized NOI by approximately 71%"
+    },
+    "risk_summary": "The property's existing 21-unit residential configuration exceeds the ICMX district's by-right density cap of 6 units (calculated from the 1,440 SF minimum lot area per unit standard applied to the 9,652 SF lot). The use is presumptively grandfathered as a legal nonconforming density given the 1930 construction date, which predates current ICMX standards. However, no certificate of nonconforming use is on file. The proposed renovation must remain within Philadelphia's substantial-improvement threshold (typically 50% of replacement cost) to preserve grandfathering. A zoning verification letter from L&I is a non-negotiable pre-closing deliverable.",
+    "diligence_actions_required": [
+      "Submit formal request to Philadelphia L&I for zoning verification letter",
+      "Confirm renovation budget remains under substantial-improvement threshold",
+      "Verify no period of abandonment over 12 months in property's recent history"
+    ]
+  },
+
+  "scenarios": [
+    {
+      "scenario_id": "asbuilt_reno_21u",
+      "rank": 1,
+      "scenario_name": "As-Built Renovation (21 Units)",
+      "business_thesis": "Renovate the existing 1930 mixed-use building to deliver 21 residential units across floors 2-4 while preserving two ground-floor commercial tenants. Relies on grandfathered nonconforming density status.",
+      "verdict": "PREFERRED",
+      "unit_count": 21,
+      "building_sf": 26424,
+      "use_mix": [
+        {"use_category": "residential", "square_feet": 21668, "unit_count": 21, "notes": "floors 2-4"},
+        {"use_category": "commercial", "square_feet": 4756, "unit_count": null, "notes": "ground floor, two tenants"}
+      ],
+      "operating_strategy": "Lease residential as market-rate apartments; retain existing commercial tenants on month-to-month leases at $2,000 and $2,200/month",
+      "zoning_pathway": {
+        "pathway_type": "BY_RIGHT",
+        "approval_body": "Philadelphia Department of Licenses and Inspections",
+        "estimated_timeline_months": 3,
+        "estimated_soft_cost_usd": 25000,
+        "success_probability_pct": 85,
+        "fallback_if_denied": "If L&I rules grandfathering is lost, fall back to Scenario 2 (by-right rebuild at 6 units)"
+      },
+      "construction_budget_delta_usd": null,
+      "rent_delta_pct": null,
+      "timeline_delta_months": null,
+      "financial_outputs": null,
+      "excel_filename": null,
+      "key_risks": [
+        "Grandfathering confirmation from L&I is a gating diligence item",
+        "Substantial improvement threshold must not be exceeded",
+        "Two existing commercial tenants on month-to-month — limited income predictability"
+      ],
+      "entitlement_risk_flag": {
+        "severity": "MEDIUM",
+        "risk_summary": "While the pathway is by-right contingent on grandfathered status, the absence of a documented nonconforming use certificate creates moderate risk that L&I could deny the verification letter. If denied, the deal collapses to Scenario 2 economics.",
+        "diligence_required": [
+          "Pre-meeting with L&I planner before LOI execution",
+          "Title search for any prior abandonment-of-use claims",
+          "Insurance ordinance-and-law endorsement to address rebuild risk"
+        ]
+      }
+    },
+    {
+      "scenario_id": "byright_rebuild_6u",
+      "rank": 2,
+      "scenario_name": "By-Right Rebuild (6 Units)",
+      "business_thesis": "Demolish the existing structure and rebuild a new 6-unit mixed-use building under current ICMX by-right standards. Eliminates grandfathering risk but reduces unit count by 71%.",
+      "verdict": "ALTERNATE",
+      "unit_count": 6,
+      "building_sf": 12000,
+      "use_mix": [
+        {"use_category": "residential", "square_feet": 9000, "unit_count": 6, "notes": "floors 2-3"},
+        {"use_category": "commercial", "square_feet": 3000, "unit_count": null, "notes": "ground floor"}
+      ],
+      "operating_strategy": "New construction with modern unit finishes targeting market-rate Northern Liberties rents; lease ground floor commercial as artisan industrial or retail",
+      "zoning_pathway": {
+        "pathway_type": "BY_RIGHT",
+        "approval_body": "Philadelphia Department of Licenses and Inspections",
+        "estimated_timeline_months": 6,
+        "estimated_soft_cost_usd": 75000,
+        "success_probability_pct": 95,
+        "fallback_if_denied": "Not applicable — by-right under current ICMX"
+      },
+      "construction_budget_delta_usd": 1500000,
+      "rent_delta_pct": 0.10,
+      "timeline_delta_months": 12,
+      "financial_outputs": null,
+      "excel_filename": null,
+      "key_risks": [
+        "71% reduction in unit count materially compresses NOI vs. preferred",
+        "Demolition and ground-up construction adds 12 months to timeline",
+        "Higher per-unit construction cost on new build vs. renovation"
+      ],
+      "entitlement_risk_flag": null
+    },
+    {
+      "scenario_id": "variance_15u",
+      "rank": 3,
+      "scenario_name": "Variance Pathway (15 Units)",
+      "business_thesis": "Pursue a density variance from the Philadelphia Zoning Board of Adjustment for 15 units — splitting the difference between the by-right 6 and the existing 21. Eliminates grandfathering risk while preserving most of the unit economics.",
+      "verdict": "ALTERNATE",
+      "unit_count": 15,
+      "building_sf": 22000,
+      "use_mix": [
+        {"use_category": "residential", "square_feet": 18000, "unit_count": 15, "notes": "floors 2-4"},
+        {"use_category": "commercial", "square_feet": 4000, "unit_count": null, "notes": "ground floor"}
+      ],
+      "operating_strategy": "Renovate-and-rebuild hybrid: preserve facade and structure where possible while reconfiguring upper floors to accommodate 15 units",
+      "zoning_pathway": {
+        "pathway_type": "VARIANCE",
+        "approval_body": "Philadelphia Zoning Board of Adjustment",
+        "estimated_timeline_months": 9,
+        "estimated_soft_cost_usd": 150000,
+        "success_probability_pct": 60,
+        "fallback_if_denied": "Fall back to Scenario 2 (by-right rebuild at 6 units)"
+      },
+      "construction_budget_delta_usd": 750000,
+      "rent_delta_pct": 0.05,
+      "timeline_delta_months": 9,
+      "financial_outputs": null,
+      "excel_filename": null,
+      "key_risks": [
+        "Variance approval is at ZBA discretion — 60% success probability",
+        "9-month entitlement timeline carries significant carry cost",
+        "$150k variance soft cost is sunk if denied"
+      ],
+      "entitlement_risk_flag": {
+        "severity": "HIGH",
+        "risk_summary": "Variance approvals in Philadelphia are subject to a hardship test that is increasingly difficult to meet. The 60% success probability reflects the corridor's recent ZBA precedent on density variances; recent denials in adjacent submarkets create headline risk.",
+        "diligence_required": [
+          "Pre-application meeting with ZBA staff",
+          "Community engagement with Northern Liberties Neighbors Association",
+          "Comparable variance precedent research within 1-mile radius"
+        ]
+      }
+    }
+  ],
+
+  "zoning_extensions": {
+    "use_flexibility_score": 5,
+    "use_flexibility_explanation": "ICMX zoning permits the broadest range of uses among Philadelphia's commercial districts including residential, light industrial, artisan, office, retail, and restaurant — providing maximum flexibility for repositioning",
+    "overlay_impact_assessment": [],
+    "development_upside": {
+      "far_remaining_sf": 21836,
+      "units_remaining": -15,
+      "height_remaining_ft": 22,
+      "summary": "FAR cap of 5.0 leaves substantial theoretical capacity (21,836 SF), but density and height caps bind well below FAR. Existing 21 units exceeds by-right density cap by 15 units."
+    },
+    "cross_scenario_recommendation": "Scenario 1 (As-Built Renovation, 21 units) is the preferred path given its by-right entitlement assuming grandfathering confirms, its lower construction cost vs. ground-up rebuild, and its preservation of the 1930 building's character which may qualify for federal Historic Tax Credits. The $1.1M acquisition basis at $41/SF makes this scenario decisively accretive at the 21-unit economics, with stabilized Year 2 NOI of $343,605 supporting an LP IRR of 37.1%.\n\nScenario 2 (By-Right Rebuild, 6 units) is the recommended fallback if grandfathering is denied. While unit economics are dramatically reduced, the by-right pathway eliminates entitlement risk and preserves capital. This scenario should be modeled and pre-funded as an insurance policy.\n\nScenario 3 (Variance Pathway, 15 units) is mathematically attractive but operationally fragile. The 60% success probability, 9-month timeline, and $150k sunk-cost-on-denial make this option higher-risk than its IRR suggests. Recommended only if Scenario 1 grandfathering is denied AND the sponsor has demonstrated variance success in the corridor.",
+    "preferred_scenario_id": "asbuilt_reno_21u"
+  }
+}
