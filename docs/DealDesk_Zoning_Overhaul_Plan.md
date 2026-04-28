@@ -35,8 +35,8 @@ This is the single source of truth for the DealDesk zoning analysis overhaul. It
 | 1.5 | Schema bridge (models.py — WorkflowControls + Encumbrance) | COMPLETED (commit `827149a`, tag `zoning-overhaul-session-1-5-passed`) | PASSED (8/8 criteria) | 2026-04-28 | 2026-04-28 |
 | 1.6 | Schema realignment (models.py — drift resolution) | COMPLETED (commit `ad849cd`, tag `zoning-overhaul-session-1-6-passed`) | PASSED (13/13 criteria) | 2026-04-28 | 2026-04-28 |
 | 2 | Prompt design + approval (claude.ai) | COMPLETED (commit `eab540c`, tag `zoning-overhaul-session-2-passed`) | PASSED (11/11 criteria) | 2026-04-27 | 2026-04-27 |
-| 3 | Pipeline orchestration (market.py) | READY (awaiting Mike approval to resume; original kickoff sheet remains valid) | Not yet evaluated | — | — |
-| 4 | Financial integration (financials.py + excel_builder.py) | BLOCKED on Session 3 | Not yet evaluated | — | — |
+| 3 | Pipeline orchestration (market.py) | COMPLETED (commit `62c76e4`, tag `zoning-overhaul-session-3-passed`) | PASSED (13/13 criteria) | 2026-04-28 | 2026-04-28 |
+| 4 | Financial integration (financials.py + excel_builder.py) | READY (awaiting Mike approval to begin; kickoff sheet pending) | Not yet evaluated | — | — |
 | 5 | Rendering (report_template.html + report.css) | BLOCKED on Session 4 | Not yet evaluated | — | — |
 
 *The Current Session Status table above is the canonical view of where the project is right now. The Session History Log below is the audit trail of how we got here. Both must be updated as part of every session-close docs commit; the table reflects current state, the log reflects history.*
@@ -464,6 +464,43 @@ Mike will identify Deal B and Deal C addresses before Session 2 begins.
 - Code commit: `ad849cd` (`Session 1.6: Schema realignment — Resolve drift between Session 1 schema and Session 2 prompts`)
 - Tag: `zoning-overhaul-session-1-6-passed`
 - Next: Session 3 resumes from its existing plan summary unchanged. The bridging logic the agent would have invented in `_apply_3c_*` functions becomes unnecessary — apply functions are now straightforward Pydantic constructions with no field translation. The Session 3 kickoff sheet at `docs/Session_3_Claude_Code_Kickoff.md` remains the operative instruction set.
+
+### April 28, 2026 — Session 3 (Pipeline orchestration in market.py) — COMPLETED
+- Implemented the three-prompt zoning synthesis chain in `market.py`, replacing the legacy single Prompt 3C with sequential `3C-CONF` → `3C-SCEN` → `3C-HBU` orchestration per D9. Pure pipeline-wiring session — no schema changes; all field shapes consumed exactly as Session 1.6 realigned them. Spec sources of truth: `docs/Session_2_Prompt_Specification.md` (Sections 2/3/4 for prompt text, Section 5 for orchestration logic) and `docs/FINAL_APPROVED_Prompt_Catalog_v5.md`.
+- Total diff: +1,244 / −68 across `market.py` (+1,191 / −68) and two new fixture files (+49 Belmont, +72 Indian Queen).
+- Shipped across four checkpoints (CP1 — confidence gate + 3C-CONF; CP2 — 3C-SCEN; CP3 — 3C-HBU; CP4 — orchestrator + integration into `enrich_market_data`):
+  - CP1 deliverables: `_confidence_gate_passes(deal)` implementing the four-criterion check from spec §5 (zoning_code populated, ≥3 permitted_uses, ≥4 of 6 dimensional fields populated, lot_sf populated and >0); `_SYSTEM_3C_CONF` and `_USER_3C_CONF` prompt constants (verbatim from Session 2 spec §§2.3/2.4); `_build_3c_conf_user(deal)` user-template builder; `_apply_3c_conf(data, deal)` apply function writing to `deal.conformity_assessment`; `_indeterminate_conformity_assessment(deal)` typed-empty fallback constructor; `_call_llm_with_retry(...)` retry helper (one retry on parse failure, raises on persistent failure — does NOT return None).
+  - CP2 deliverables: `_SYSTEM_3C_SCEN` and `_USER_3C_SCEN` prompt constants (verbatim from Session 2 spec §§3.3/3.4); `_build_3c_scen_user(deal)` builder; `_apply_3c_scen(data, deal)` writing to `deal.scenarios`; `_fallback_as_submitted_scenario(deal)` typed-empty fallback constructor.
+  - CP3 deliverables: `_SYSTEM_3C_HBU` and `_USER_3C_HBU` prompt constants (verbatim from Session 2 spec §§4.3/4.4); `_build_3c_hbu_user(deal)` builder; `_apply_3c_hbu(data, deal)` writing to `deal.zoning_extensions`; `_minimal_zoning_extensions(deal)` typed-empty fallback constructor.
+  - CP4 deliverables: `run_zoning_synthesis_chain(deal)` orchestrator (sequential per D9, isolated retry per prompt — a parse failure on 3C-CONF does not abort 3C-SCEN/3C-HBU, typed-empty fallback per prompt); legacy `_SYSTEM_3C`, `_USER_3C`, `_apply_3c` removed (cleanly — no `_DEPRECATED_` rename needed since the replacement is functionally complete); `enrich_market_data()` updated to call `run_zoning_synthesis_chain(deal)` in place of the legacy `_call_llm(MODEL_SONNET, _SYSTEM_3C, ...)` site.
+- New regression fixtures (CP4): `tests/fixtures/zoning_overhaul_session_3_fixture_belmont.json` (Reference Deal B — RSD-3 conforming multifamily) and `tests/fixtures/zoning_overhaul_session_3_fixture_indian_queen.json` (Reference Deal C — split-zoned RSA-1/RSA-5 with American Tower easement and Philadelphia stormwater easement, exercising `is_split_zoned` + 2 `Encumbrance` entries).
+- **Carry-forwards (six items surfaced across CP1–CP3 — must not get lost):**
+  - **Docs realignment (post-Session-3 patch):**
+    1. Catalog v5 §1 SCEN/HBU JSON schema re-sync — pre-Session-1.6 drift; spec was realigned but catalog wasn't fully re-synced for SCEN and HBU. Identified during Session 3's reading phase.
+    2. Spec §5.4 fallback-shape re-sync — `_minimal_zoning_extensions` shape in spec §5.4 still references nested `use_flexibility_score.score` and string `overlay_impact_assessment`. CP2 used `score=1` + empty overlay list as defensible fallback; spec needs re-sync to flat shape.
+    3. Spec §5.1 orchestrator pseudocode realignment — success-log line for 3C-HBU references nested `use_flexibility_score.score`; CP3 used flat `use_flexibility_score: int` with inline NOTE comment; spec needs realignment.
+  - **Session 1.8 schema additions (post-Session-3 micro-session):**
+    4. `is_split_zoned: bool = False` and `split_zoning_codes: List[str] = Field(default_factory=list)` on the `Zoning` sub-model. CP1 surfaced that the defensive `getattr` reads always return defaults due to Pydantic v2's default behavior; the prompts always receive `is_split_zoned=False`.
+    5. `investment_strategy: Optional[InvestmentStrategy]` on `DevelopmentScenario` for server-side validation against `workflow_controls.strategy_lock`. CP2 surfaced that the prompt's per-scenario `investment_strategy` field is silently dropped by Pydantic v2's `extra='ignore'`; LLM compliance with `strategy_lock` is not validated server-side.
+  - **Optimization (deferred to Session 4 or beyond):**
+    6. Gate-failure short-circuit to skip SCEN/HBU LLM calls when the confidence gate fails, writing fallbacks directly. Current behavior runs the LLM with essentially-empty zoning data and gets back guesses. CP3 surfaced this; current behavior matches spec.
+- Gate verdict: PASSED — 13/13 criteria green:
+  1. `market.py` imports cleanly with no syntax or type errors
+  2. All six new prompt constants exist as module-level strings and are non-empty
+  3. All three user-prompt builder functions exist, accept a `DealData`, and return a non-empty string
+  4. All three apply functions exist, accept `(data: dict, deal: DealData)`, and successfully populate the target field on a synthetic test deal
+  5. `_call_llm_with_retry` raises (does not return None) when the underlying call returns None twice
+  6. `_confidence_gate_passes` returns False when zoning_code is missing; returns False when fewer than 3 permitted_uses; returns False when fewer than 4 dimensional fields are populated; returns False when lot_sf is None or 0; returns True when all four criteria pass
+  7. All three typed-empty fallback constructors return fully-typed Pydantic models that round-trip through `model_dump_json()` / `model_validate_json()`
+  8. `run_zoning_synthesis_chain(deal)` does NOT raise even when the LLM returns None for all three prompts (fallback path runs cleanly)
+  9. Belmont fixture (Deal B) deserializes and includes a `RSD-3` zoning code
+  10. Indian Queen fixture (Deal C) deserializes and includes both encumbrances + the split-zoning indicator
+  11. Legacy `_SYSTEM_3C`, `_USER_3C`, `_apply_3c` are no longer present in `market.py`
+  12. `enrich_market_data()` calls `run_zoning_synthesis_chain(deal)` (not the old `_call_llm(MODEL_SONNET, _SYSTEM_3C, ...)`)
+  13. `git diff --stat` shows changes ONLY in `market.py` and the two new fixture files (no scope creep)
+- Code commit: `62c76e4` (`Session 3: market.py — Replace Prompt 3C with three-prompt synthesis chain`)
+- Tag: `zoning-overhaul-session-3-passed`
+- Next: Session 4 (Financial integration in `financials.py` + `excel_builder.py`) — fan out the existing pro forma / Excel builder logic across `DealData.scenarios[]`, write per-scenario `financial_outputs` back to each `DevelopmentScenario`, and update `mirror_preferred_to_legacy()` to copy the preferred scenario's financials to legacy `deal.financial_outputs`. Per Session 3 kickoff Step 4: do NOT auto-proceed into Session 4 — Mike will prepare the Session 4 kickoff sheet from claude.ai when ready.
 
 ---
 
