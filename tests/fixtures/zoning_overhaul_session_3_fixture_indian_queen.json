@@ -1,0 +1,72 @@
+{
+  "deal_id": "session_3_test_fixture_indian_queen",
+  "deal_description": "42,420 SF warehouse on a 68,389 SF parcel in East Falls, Philadelphia, split between RSA-1 and RSA-5 residential zoning districts. Site burdened by two cell-tower encumbrances (American Tower easement; SBC Tower lease-to-easement). Opportunistic redevelopment thesis pursuing residential variance; CMA prepared three revised schemes (courtyard 95u, townhomes 88u, garden 84u).",
+
+  "address": {
+    "full_address": "3520 Indian Queen Lane, Philadelphia, PA 19129",
+    "street": "3520 Indian Queen Lane",
+    "city": "Philadelphia",
+    "state": "PA",
+    "zip_code": "19129"
+  },
+
+  "asset_type": "Industrial",
+  "investment_strategy": "opportunistic",
+
+  "zoning": {
+    "zoning_code": "RSA-5",
+    "zoning_district": "Residential Single-Family Attached, District 5 (parcel is split-zoned RSA-1 / RSA-5; RSA-5 is the more permissive of the two — captured here as the controlling district pending a future schema field for split-zoning per Session 3 carry-forward)",
+    "permitted_uses": [
+      "Single-family attached dwelling (by-right)",
+      "Single-family semi-detached dwelling (by-right)"
+    ],
+    "max_height_ft": 38,
+    "max_stories": 3,
+    "min_lot_area_sf": 1440,
+    "max_lot_coverage_pct": 0.75,
+    "front_setback_ft": 0,
+    "rear_setback_ft": 9,
+    "side_setback_ft": 0,
+    "source_verified": false,
+    "source_notes": "RSA-5 standards from Philadelphia Title 14; RSA-1 portion not separately captured in this fixture. The is_split_zoned / split_zoning_codes schema fields are deferred to a Session 1.8 micro-session per Session 3 carry-forward."
+  },
+
+  "assumptions": {
+    "purchase_price": 5000000,
+    "num_units": 0,
+    "gba_sf": 42420,
+    "lot_sf": 68389,
+    "year_built": null
+  },
+
+  "encumbrances": [
+    {
+      "type": "EASEMENT",
+      "doc_id": "53136944",
+      "grantee": "American Tower Asset Sub II, LLC",
+      "grantor": "Indian Queen Lane LLC",
+      "description": "Recorded perpetual easement (post-conversion from a prior ground lease) burdening the parcel for a cell tower installation. Withdraws an exclusive area from buildable use and adds a companion access/utility easement running from Indian Queen Lane frontage to the tower pad.",
+      "exclusive_area_sf": 2625,
+      "access_easement_width_ft": 20,
+      "term": "perpetual",
+      "expiration": null,
+      "right_of_first_refusal": false,
+      "annual_income_usd": null,
+      "notes": "American Tower Easement and Assignment Agreement, Doc Id 53136944. Tower height and exclusive footprint must be reflected in any rebuild scenario."
+    },
+    {
+      "type": "LEASE_TO_EASEMENT",
+      "doc_id": "52842941",
+      "grantee": "SBC Tower Holdings LLC",
+      "grantor": "Indian Queen Lane LLC",
+      "description": "Original cell tower ground lease with a conversion-to-easement provision; ROFR runs in favor of grantee. Companion encumbrance to the American Tower easement on a separate carrier installation.",
+      "exclusive_area_sf": null,
+      "access_easement_width_ft": null,
+      "term": null,
+      "expiration": "2064-11-30",
+      "right_of_first_refusal": true,
+      "annual_income_usd": null,
+      "notes": "SBC Tower Holdings ground-lease document, Doc Id 52842941. Distinct from the American Tower easement above; both encumbrances must be addressed in scenario generation."
+    }
+  ]
+}

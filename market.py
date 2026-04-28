@@ -48,6 +48,12 @@ from models.models import (
     DealData, MarketData, ParcelData, ZoningData,
     RentComp, SaleComp,
     RenovationTier, RENOVATION_TIER_MULTIPLIERS, RENOVATION_DOWNTIME_MONTHS,
+    # Session 3 (April 2026) — zoning synthesis chain (3C-CONF / SCEN / HBU).
+    ConformityAssessment, ConformityStatus, ConfidenceLevel,
+    DevelopmentScenario, ScenarioVerdict,
+    ZoningPathway, ZoningPathwayType,
+    EntitlementRiskFlag,
+    ZoningExtensions,
 )
 
 logger = logging.getLogger(__name__)
@@ -2170,52 +2176,7 @@ def _apply_3b(data: dict, deal: DealData) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PROMPT 3C — HIGHEST & BEST USE OPINION (Sonnet)
-# ═══════════════════════════════════════════════════════════════════════════
-
-_SYSTEM_3C = (
-    "You are a licensed MAI appraiser writing a highest and best use analysis for\n"
-    "a formal investment underwriting report.\n\n"
-    "Address all four HBU tests:\n"
-    "  1. Legally permissible: What does current zoning allow?\n"
-    "  2. Physically possible: What can the site support?\n"
-    "  3. Financially feasible: What uses are economically viable?\n"
-    "  4. Maximally productive: Which use generates the highest value?\n\n"
-    "RULES:\n"
-    "- Write in formal MAI appraisal report language. State conclusions directly.\n"
-    "- Base all conclusions on data provided. No speculation beyond the data.\n"
-    "- Acknowledge data limitations. Length: 3-4 paragraphs."
-)
-
-_USER_3C = (
-    "Property: {property_address} | Asset type: {asset_type}\n"
-    "Current use: {current_use} | Strategy: {investment_strategy}\n"
-    "Zoning: {zoning_json}\n"
-    "Buildable capacity: {buildable_capacity_json}\n"
-    "Market context: {market_context_summary}\n\n"
-    "Return JSON:\n"
-    '{{\n'
-    '  "hbu_conclusion": "AS VACANT: [x] / AS IMPROVED: [x]",\n'
-    '  "legally_permissible": null, "physically_possible": null,\n'
-    '  "financially_feasible": null, "maximally_productive": null,\n'
-    '  "hbu_narrative": null, "alternative_uses_considered": [],\n'
-    '  "confidence_level": "high|medium|low", "confidence_notes": null\n'
-    '}}'
-)
-
-
-def _apply_3c(data: dict, deal: DealData) -> None:
-    """Map Prompt 3C response onto DealData.zoning HBU fields."""
-    z = deal.zoning
-    z.hbu_narrative  = data.get("hbu_narrative") or z.hbu_narrative
-    z.hbu_conclusion = data.get("hbu_conclusion") or z.hbu_conclusion
-
-    deal.narratives.buildable_capacity = z.buildable_capacity_narrative
-    deal.narratives.highest_best_use   = z.hbu_narrative
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MARKET CONTEXT SUMMARY (for Prompt 3C)
+# MARKET CONTEXT SUMMARY (for Prompts 3C-SCEN and 3C-HBU)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _build_market_context(md: MarketData) -> str:
@@ -2232,6 +2193,1113 @@ def _build_market_context(md: MarketData) -> str:
     if md.unemployment_rate:
         parts.append(f"Unemployment: {md.unemployment_rate:.1%}")
     return " | ".join(parts) if parts else "Limited market data available"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROMPTS 3C-CONF / 3C-SCEN / 3C-HBU — Zoning Synthesis Chain (Sonnet)
+# Session 3 (April 2026). Replaces the legacy single Prompt 3C.
+# Master plan: D1 (scenario definition), D2 (≤3 scenarios), D4 (confidence
+# gate + INDETERMINATE fallback), D6 (legacy financial_outputs mirror),
+# D8 (always-new layout), D9 (strict sequential 3C-CONF → 3C-SCEN → 3C-HBU).
+# Implementation source of truth: docs/Session_2_Prompt_Specification.md.
+# Catalog cross-reference:        docs/FINAL_APPROVED_Prompt_Catalog_v5.md.
+# Prompt text below is VERBATIM from Session 2 spec §§2.3, 2.4, 3.3, 3.4,
+# 4.3, 4.4 — character-for-character. Do not "improve" or paraphrase.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Prompt 3C-CONF (Conformity Assessment) — Session 2 spec §2.3 / §2.4 ────
+
+_SYSTEM_3C_CONF = """\
+You are a senior land use attorney and zoning analyst preparing a formal
+conformity assessment for a commercial real estate underwriting report.
+Your audience is an investment committee and an institutional lender. The
+assessment will be relied upon to determine deal viability, insurance
+underwriting, and lender approval.
+
+YOUR TASK
+Determine the property's conformity status under current zoning, document
+each specific nonconformity with magnitude, assess grandfathering posture
+where applicable, and produce a one-paragraph risk summary plus a
+diligence action checklist.
+
+CONFORMITY STATUS — pick exactly ONE (describes the EXISTING condition)
+- CONFORMING: existing use AND all dimensional standards comply with
+  current zoning. No grandfathering required.
+- LEGAL_NONCONFORMING_USE: the use itself is not permitted under current
+  zoning, but is presumed grandfathered because it predates the current
+  code and has been continuously maintained. Dimensional standards may
+  also be nonconforming.
+- LEGAL_NONCONFORMING_DENSITY: the use is permitted, but unit count or
+  FAR exceeds current density caps, and the property is presumed
+  grandfathered. Use this status when density is the primary or only
+  nonconformity.
+- LEGAL_NONCONFORMING_DIMENSIONAL: the use is permitted, but one or more
+  dimensional standards (height, setbacks, lot coverage, parking) do not
+  comply, and the property is presumed grandfathered.
+- MULTIPLE_NONCONFORMITIES: two or more LEGAL_NONCONFORMING_* conditions
+  apply simultaneously (e.g., both use AND density, or both use AND
+  multiple dimensional standards). Use this when no single category
+  dominates.
+- ILLEGAL_NONCONFORMING: the configuration violates zoning AND there is
+  no defensible basis for grandfathering (e.g., post-code construction
+  without permits, discontinued use beyond the abandonment period).
+- CONFORMITY_INDETERMINATE: insufficient data to make a determination.
+  Use this status ONLY when explicitly instructed by the orchestrator.
+
+PROPOSED PATHWAY REQUIREMENT — separate output, optional
+The conformity status above describes the EXISTING condition. Separately,
+if the inputs describe a proposed business plan that requires a
+discretionary approval to execute, return a proposed_pathway_requirement
+value. If no proposed plan is articulated, or the proposed plan is
+by-right, return null.
+- null: no proposed plan, OR proposed plan is by-right (no discretionary
+  approval needed). Default for stabilized-hold scenarios.
+- NONE: assessed and confirmed no discretionary approval required. Use
+  this only when the inputs explicitly describe a by-right proposed plan
+  worth flagging.
+- VARIANCE_REQUIRED: proposed plan requires a use or dimensional variance
+  from the zoning board.
+- SPECIAL_EXCEPTION_REQUIRED: proposed plan requires a special exception
+  or conditional-use approval.
+- REZONE_REQUIRED: proposed plan requires legislative rezoning.
+
+CRITICAL RULES
+1. Base every conclusion on the data provided. Do not speculate beyond it.
+2. For each nonconformity, state the standard, the actual value, the
+   permitted value, and the magnitude of the gap (e.g., "21 units exceeds
+   6-unit by-right cap by 250%").
+3. Grandfathering is PRESUMED, not GUARANTEED. Always recommend that
+   counsel verify continuous use and confirm no triggering events have
+   occurred (substantial improvement, change of use, abandonment).
+4. The substantial improvement threshold in most jurisdictions is 50% of
+   pre-improvement structure value over a defined window. Flag this in
+   diligence_actions for any nonconforming property where renovation is
+   contemplated.
+5. If the parcel is split-zoned, address each district's standards
+   separately and identify which controls each part of the site.
+6. Do not invent jurisdiction-specific procedural details (variance
+   approval timelines, ZBA hearing schedules). Refer to local counsel.
+7. risk_summary is one paragraph (3-5 sentences) of plain English an
+   investment committee member can read in 30 seconds. No legal jargon.
+8. diligence_actions is an ordered list of concrete checklist items the
+   acquisitions team must complete before closing. Each item starts with
+   a verb ("Confirm...", "Obtain...", "Verify...").
+
+OUTPUT FORMAT
+Return ONLY the JSON object below. No preamble, no postamble, no markdown
+fences. All fields are required; use null for fields that do not apply
+(e.g., grandfathering_status when CONFORMING).
+"""
+
+_USER_3C_CONF = """\
+Property: {property_address}
+Asset type: {asset_type} | Investment strategy: {investment_strategy}
+Existing configuration:
+  - Current use: {current_use}
+  - Current units: {current_units}
+  - Building SF: {building_sf}
+  - Lot SF: {lot_sf}
+  - Year built: {year_built}
+
+Split-zoned: {is_split_zoned}
+Split zoning codes (if any): {split_zoning_codes}
+
+Zoning standards (Prompt 3A output):
+{zoning_json}
+
+Buildable capacity analysis (Prompt 3B output):
+{buildable_capacity_json}
+
+Return JSON in this exact shape:
+{{
+  "status": "CONFORMING|LEGAL_NONCONFORMING_USE|LEGAL_NONCONFORMING_DENSITY|LEGAL_NONCONFORMING_DIMENSIONAL|MULTIPLE_NONCONFORMITIES|ILLEGAL_NONCONFORMING|CONFORMITY_INDETERMINATE",
+  "confidence": "HIGH|MEDIUM|LOW|INDETERMINATE",
+  "confidence_reasons": ["reason 1", "reason 2"],
+  "nonconformity_details": [
+    {{
+      "nonconformity_type": "USE|DENSITY|HEIGHT|FAR|FRONT_SETBACK|REAR_SETBACK|SIDE_SETBACK|SETBACKS|LOT_COVERAGE|PARKING|LOT_AREA|OTHER",
+      "standard_description": "Brief plain-English label",
+      "permitted_value": "What zoning allows (with units)",
+      "actual_value": "What the property has (with units)",
+      "magnitude_description": "Plain-English magnitude statement"
+    }}
+  ],
+  "grandfathering_status": {{
+    "is_presumed_grandfathered": true|false,
+    "basis": "Built {{year}} predating current code; continuous use presumed",
+    "loss_triggers": ["Substantial improvement >50%", "Change of use", "Abandonment >12 months"],
+    "verification_required": true,
+    "confirmation_action_required": "Pull L&I rental license history and prior zoning permits",
+    "risk_if_denied": "Plain-English consequence if grandfathering is not confirmed"
+  }} | null,
+  "proposed_pathway_requirement": "NONE|VARIANCE_REQUIRED|SPECIAL_EXCEPTION_REQUIRED|REZONE_REQUIRED" | null,
+  "risk_summary": "One paragraph plain English for the IC.",
+  "diligence_actions_required": [
+    "Confirm with title that...",
+    "Obtain prior zoning permits showing..."
+  ]
+}}
+"""
+
+# ── Prompt 3C-SCEN (Scenario Generation) — Session 2 spec §3.3 / §3.4 ──────
+#
+# Note: _SYSTEM_3C_SCEN contains a literal {max_scenarios} placeholder (used
+# twice). Format at the orchestrator call site with
+# deal.workflow_controls.max_scenarios. The user template below carries the
+# same {max_scenarios} variable plus all other scenario-generation inputs;
+# _build_3c_scen_user fills them all in one .format() call.
+
+_SYSTEM_3C_SCEN = """\
+You are a senior development advisor at a top-tier real estate private
+equity firm. You are recommending business plans for an underwriting
+committee that will choose ONE plan to execute. Your reputation depends
+on offering only realistic, financeable options — never padding the list
+to look thorough.
+
+YOUR TASK
+Generate between 1 and {max_scenarios} development scenarios for this
+property. Each scenario is a meaningfully different business plan, not a
+sensitivity case. Rank them by expected risk-adjusted return, with rank 1
+being the recommended PREFERRED scenario.
+
+A SCENARIO IS MEANINGFULLY DIFFERENT WHEN IT HAS A DIFFERENT
+- physical configuration (unit count, building SF, or use mix), OR
+- operating strategy (stabilized hold vs. renovation vs. ground-up), OR
+- zoning pathway (by-right vs. variance vs. rezone)
+
+A SCENARIO IS NOT MEANINGFULLY DIFFERENT WHEN IT IS
+- the same business plan with different rent assumptions
+- the same business plan with different cap rates
+- the same business plan with different financing
+- a "do nothing" or "sell as-is" placeholder
+
+CRITICAL RULES — PADDING IS PROHIBITED
+1. If only one realistic business plan exists, return ONE scenario.
+   Returning fewer scenarios than requested is correct behavior, not a
+   failure. Padding the list with weak alternatives will be flagged in
+   review.
+2. The PREFERRED scenario (rank 1) is the one you would actually
+   recommend the firm execute. ALTERNATE scenarios (rank 2-3) are real
+   alternatives the committee might prefer over your recommendation,
+   not strawmen.
+3. Conformity drives pathway. If the conformity_assessment shows
+   LEGAL_NONCONFORMING_USE, do not generate a scenario that requires
+   demolition and rebuild "by-right" unless the rebuild use is permitted
+   under current zoning. If conformity is INDETERMINATE, default scenarios
+   to the existing configuration with a noted entitlement risk flag.
+4. If single_scenario_mode is True, return exactly ONE scenario marked
+   PREFERRED.
+5. If strategy_lock is set, every scenario's investment_strategy must
+   match strategy_lock.
+6. Each scenario's scenario_id is snake_case, max 30 characters, unique
+   within the deal, and descriptive enough to identify the scenario from
+   the ID alone (e.g., "asbuilt_reno_36u" or "demo_rebuild_byright_6u").
+7. The unit_count and building_sf in each scenario must be ACHIEVABLE
+   under the scenario's zoning_pathway. Scenarios proposing more units
+   than buildable_capacity allows must use a non-by-right pathway.
+8. Each scenario's business_thesis is 2-3 sentences explaining the
+   rationale. Each scenario's zoning_pathway has a pathway_type enum and
+   a candid success_probability_pct (0-100, your honest estimate).
+9. Express budget, rent, and timeline as deltas against the
+   baseline_assumptions provided. Specifically:
+   - construction_budget_delta_usd is the dollar delta vs. the baseline
+     construction budget. A delta of 0 means no change from baseline.
+     Use null only when not applicable (e.g., stabilized hold of
+     existing building with no construction).
+   - rent_delta_pct is the fractional delta vs. baseline rents (0.05 =
+     +5% premium; -0.10 = -10% concession). Use null when not applicable.
+   - timeline_delta_months is the integer month delta vs. baseline
+     timeline. Negative numbers shorten; positive numbers extend.
+   These delta fields drive the financial fan-out in Session 4. A
+   non-anchored absolute number will produce wrong NOI / IRR.
+
+OUTPUT FORMAT
+Return ONLY the JSON array of scenario objects below. No preamble, no
+postamble, no markdown fences. The array length is between 1 and
+{max_scenarios}. The first element is always rank 1 / PREFERRED.
+"""
+
+_USER_3C_SCEN = """\
+Property: {property_address}
+Asset type: {asset_type} | Submitted strategy: {investment_strategy}
+Existing configuration:
+  - Current use: {current_use}
+  - Current units: {current_units}
+  - Building SF: {building_sf}
+  - Lot SF: {lot_sf}
+
+Conformity assessment (Prompt 3C-CONF output):
+{conformity_assessment_json}
+
+Zoning standards (Prompt 3A output):
+{zoning_json}
+
+Buildable capacity (Prompt 3B output):
+{buildable_capacity_json}
+
+Baseline assumptions (user-submitted):
+{baseline_assumptions_json}
+
+Market context:
+{market_context_summary}
+
+Workflow controls:
+  - single_scenario_mode: {single_scenario_mode}
+  - strategy_lock: {strategy_lock}
+  - max_scenarios: {max_scenarios}
+
+Return a JSON object with this exact shape (note: physical config and
+assumption deltas are FLAT at the scenario level — no nested blocks):
+{{
+  "scenarios": [
+    {{
+      "scenario_id": "snake_case_max_30_chars",
+      "rank": 1,
+      "scenario_name": "Human-readable name (e.g., 'As-Built Renovation, 36 Units')",
+      "verdict": "PREFERRED",
+      "business_thesis": "2-3 sentences explaining the plan and why it leads.",
+      "investment_strategy": "stabilized_hold|value_add|opportunistic",
+
+      "unit_count": 36,
+      "building_sf": 20640,
+      "use_mix": [
+        {{"use_category": "residential", "sf": 20640, "share_pct": 100, "unit_count": 36, "notes": null}}
+      ],
+      "operating_strategy": "Plain-English operating strategy paragraph (formerly operating_strategy_note).",
+
+      "zoning_pathway": {{
+        "pathway_type": "BY_RIGHT|CONDITIONAL_USE|SPECIAL_EXCEPTION|VARIANCE|REZONE",
+        "rationale": "Why this pathway applies (1-2 sentences)",
+        "approval_body": "Plain-English approving body (e.g., 'Philadelphia ZBA')",
+        "estimated_timeline_months": 0,
+        "estimated_soft_cost_usd": 0,
+        "success_probability_pct": 95,
+        "fallback_if_denied": "Plain-English fallback strategy if approval not obtained, or null for BY_RIGHT"
+      }},
+
+      "construction_budget_delta_usd": 350000,
+      "rent_delta_pct": 0.08,
+      "timeline_delta_months": 12,
+
+      "key_risks": [
+        "Risk 1 — one-line description",
+        "Risk 2 — one-line description"
+      ],
+      "entitlement_risk_flag": {{
+        "severity": "LOW|MEDIUM|HIGH",
+        "risk_summary": "Plain-English entitlement risk paragraph (1-3 sentences)",
+        "diligence_required": [
+          "Concrete diligence action 1",
+          "Concrete diligence action 2"
+        ]
+      }} | null
+    }}
+  ]
+}}
+"""
+
+# ── Prompt 3C-HBU (Cross-Scenario Synthesis) — Session 2 spec §4.3 / §4.4 ──
+
+_SYSTEM_3C_HBU = """\
+You are the head of acquisitions at a $2B real estate private equity
+firm, writing the synthesis section of an investment committee memo. The
+prior analysis (conformity assessment + generated scenarios) is in front
+of you. Your job is to tell the committee what to do and why, in
+language they can act on.
+
+YOUR TASK
+Produce four outputs:
+
+1. cross_scenario_recommendation: 2-3 paragraphs of IC-grade synthesis
+   prose. Open with the recommendation. Justify it against the
+   alternatives. Acknowledge the trade-offs honestly. Close with the
+   single most important diligence item before close.
+
+2. preferred_scenario_id: The scenario_id of the scenario you recommend
+   the committee execute. This MUST match a scenario_id that appears in
+   the input scenarios array.
+
+3. use_flexibility_score: An integer 1-5 capturing how much zoning
+   optionality this parcel offers (1 = single-purpose, locked in; 5 =
+   highly flexible, multiple by-right uses, generous dimensions).
+
+4. overlay_impact_assessment: A short paragraph (2-4 sentences) on how
+   the parcel's overlay districts (if any) materially affect the
+   recommendation. If no overlays apply, state that explicitly.
+
+CRITICAL RULES
+1. Recommend the scenario marked rank 1 / PREFERRED unless you have a
+   substantive reason to disagree. If you disagree, you must override
+   the recommendation by setting preferred_scenario_id to a different
+   scenario in the array AND explaining the override in the synthesis
+   prose. Do not silently disagree.
+2. Tie every claim to data the committee can see. Do not introduce new
+   facts not present in the inputs.
+3. The use_flexibility_score is anchored to the parcel under current
+   zoning, NOT to any proposed scenario. A parcel that requires a
+   variance to do anything interesting is a 1 or 2, even if the variance
+   has good odds.
+4. Length discipline: cross_scenario_recommendation 2-3 paragraphs, NO
+   bullet lists, NO headers, no markdown. The PDF renders this as
+   continuous prose.
+5. If only ONE scenario was generated (no alternatives), the
+   cross_scenario_recommendation explains why no alternatives exist and
+   what conditions would unlock them.
+
+OUTPUT FORMAT
+Return ONLY the JSON below. No preamble, no postamble, no markdown
+fences.
+"""
+
+_USER_3C_HBU = """\
+Property: {property_address} | Asset type: {asset_type}
+
+Conformity assessment (3C-CONF output):
+{conformity_assessment_json}
+
+Generated scenarios (3C-SCEN output):
+{scenarios_json}
+
+Zoning standards (3A output):
+{zoning_json}
+
+Overlay districts: {overlay_districts}
+
+Market context:
+{market_context_summary}
+
+Return JSON in this exact shape (note: use_flexibility is FLAT at the top
+level; overlay_impact_assessment is a STRUCTURED LIST, one entry per
+overlay; return an empty list if no overlay districts apply to this
+parcel):
+{{
+  "cross_scenario_recommendation": "Two to three paragraphs of synthesis prose.",
+  "preferred_scenario_id": "must_match_a_scenario_id_in_input",
+  "use_flexibility_score": 3,
+  "use_flexibility_explanation": "1-2 sentence justification for the score.",
+  "overlay_impact_assessment": [
+    {{
+      "overlay_name": "MIH Overlay",
+      "overlay_type": "incentive|historic|environmental|design|transit|other",
+      "impact_summary": "1-2 sentences on materiality to the recommendation",
+      "triggers_review": false,
+      "additional_diligence": ["Concrete diligence action 1", "Concrete diligence action 2"]
+    }}
+  ]
+}}
+"""
+
+
+# ── Helpers used by the user-prompt builders ───────────────────────────────
+
+def _derive_current_use(deal: DealData) -> str:
+    """Plain-English description of the existing use for the conformity prompts.
+
+    Falls through, in order:
+      1. Extracted property description (first sentence, ≤200 chars)
+      2. "{N}-unit {asset_type} building" when num_units > 0
+      3. asset_type enum value
+      4. "Property" if asset_type is somehow unset
+    """
+    extracted = (deal.extracted_docs.description_extracted or "").strip()
+    if extracted:
+        first = extracted.split(".")[0].strip()
+        if first and len(first) <= 200:
+            return first
+    units = deal.assumptions.num_units
+    asset = deal.asset_type.value if deal.asset_type else "property"
+    if units and units > 0:
+        return f"{units}-unit {asset.lower()} building"
+    return asset
+
+
+def _build_buildable_capacity_json(deal: DealData) -> str:
+    """JSON serialization of zoning capacity fields (Prompt 3B output) for
+    inclusion in the 3C-CONF and 3C-SCEN user prompts."""
+    z = deal.zoning
+    return json.dumps({
+        "max_buildable_units": z.max_buildable_units,
+        "max_buildable_sf":    z.max_buildable_sf,
+        "binding_constraint":  z.binding_constraint,
+        "binding_result":      z.binding_result,
+        "capacity_narrative":  z.buildable_capacity_narrative,
+        "capacity_steps":      z.buildable_capacity_steps or [],
+    }, indent=2, default=str)
+
+
+# ── User-prompt builders (Session 2 spec §§2.2, 3.2, 4.2) ──────────────────
+
+def _build_3c_conf_user(deal: DealData) -> str:
+    """Assemble the user message for Prompt 3C-CONF (Conformity Assessment).
+
+    Variables per Session 2 spec §2.2. Split-zoning indicators are read
+    defensively via getattr — DealData does not yet carry first-class
+    is_split_zoned / split_zoning_codes fields, so deals that have those
+    derived elsewhere (e.g., parcel_fetcher) can surface them without a
+    schema change. Default: not split-zoned, empty list.
+    """
+    is_split_zoned = bool(getattr(deal, "is_split_zoned", False))
+    split_codes = getattr(deal, "split_zoning_codes", None) or []
+
+    a = deal.assumptions
+    return _USER_3C_CONF.format(
+        property_address=deal.address.full_address or "unknown",
+        asset_type=deal.asset_type.value if deal.asset_type else "unknown",
+        investment_strategy=deal.investment_strategy.value if deal.investment_strategy else "unknown",
+        current_use=_derive_current_use(deal),
+        current_units=a.num_units if a.num_units is not None else "unknown",
+        building_sf=a.gba_sf if a.gba_sf is not None else "unknown",
+        lot_sf=a.lot_sf if a.lot_sf is not None else "unknown",
+        year_built=a.year_built if a.year_built is not None else "unknown",
+        is_split_zoned=str(is_split_zoned).lower(),
+        split_zoning_codes=json.dumps(split_codes),
+        zoning_json=deal.zoning.model_dump_json(indent=2),
+        buildable_capacity_json=_build_buildable_capacity_json(deal),
+    )
+
+
+def _build_3c_scen_user(deal: DealData) -> str:
+    """Assemble the user message for Prompt 3C-SCEN (Scenario Generation).
+
+    Variables per Session 2 spec §3.2. Reads workflow controls from
+    deal.workflow_controls (defaulted at DealData() construction in
+    Session 1.5).
+    """
+    conf_json = (
+        deal.conformity_assessment.model_dump_json(indent=2)
+        if deal.conformity_assessment is not None else "null"
+    )
+    wc = deal.workflow_controls
+    strategy_lock = wc.strategy_lock.value if wc.strategy_lock else "null"
+
+    a = deal.assumptions
+    return _USER_3C_SCEN.format(
+        property_address=deal.address.full_address or "unknown",
+        asset_type=deal.asset_type.value if deal.asset_type else "unknown",
+        investment_strategy=deal.investment_strategy.value if deal.investment_strategy else "unknown",
+        current_use=_derive_current_use(deal),
+        current_units=a.num_units if a.num_units is not None else "unknown",
+        building_sf=a.gba_sf if a.gba_sf is not None else "unknown",
+        lot_sf=a.lot_sf if a.lot_sf is not None else "unknown",
+        conformity_assessment_json=conf_json,
+        zoning_json=deal.zoning.model_dump_json(indent=2),
+        buildable_capacity_json=_build_buildable_capacity_json(deal),
+        baseline_assumptions_json=a.model_dump_json(indent=2),
+        market_context_summary=_build_market_context(deal.market_data),
+        single_scenario_mode=str(wc.single_scenario_mode).lower(),
+        strategy_lock=strategy_lock,
+        max_scenarios=wc.max_scenarios,
+    )
+
+
+def _build_3c_hbu_user(deal: DealData) -> str:
+    """Assemble the user message for Prompt 3C-HBU (Cross-Scenario Synthesis).
+
+    Variables per Session 2 spec §4.2. Serializes deal.scenarios via Pydantic
+    model_dump(mode='json') so enums round-trip as their string values and
+    Optional[date] fields emit ISO strings.
+    """
+    conf_json = (
+        deal.conformity_assessment.model_dump_json(indent=2)
+        if deal.conformity_assessment is not None else "null"
+    )
+    scenarios_json = json.dumps(
+        [s.model_dump(mode="json") for s in deal.scenarios],
+        indent=2,
+        default=str,
+    )
+    overlays = deal.zoning.overlay_districts or []
+
+    return _USER_3C_HBU.format(
+        property_address=deal.address.full_address or "unknown",
+        asset_type=deal.asset_type.value if deal.asset_type else "unknown",
+        conformity_assessment_json=conf_json,
+        scenarios_json=scenarios_json,
+        zoning_json=deal.zoning.model_dump_json(indent=2),
+        overlay_districts=json.dumps(overlays),
+        market_context_summary=_build_market_context(deal.market_data),
+    )
+
+
+# ── Retry helper (Session 2 spec §5.3) ─────────────────────────────────────
+#
+# The existing _call_llm returns None on JSON / API failure rather than
+# raising. Session 2 spec §5.1's orchestrator pseudocode wraps each call
+# in `try/except Exception`, which assumes the call raises. This wrapper
+# bridges by issuing one retry with the strict-JSON reminder prepended to
+# the system prompt, then raising LLMChainCallFailed on persistent failure.
+# The orchestrator's catch-all then triggers the typed-empty fallback path.
+
+class LLMChainCallFailed(Exception):
+    """Raised by _call_llm_with_retry when _call_llm returns None on every
+    attempt (initial + retries). Caught by run_zoning_synthesis_chain (CP3)
+    to trigger the typed-empty fallback for the failing prompt."""
+
+
+# Spec §5.3 verbatim — prepended to the system prompt on retry.
+_RETRY_PREFIX = """\
+RETRY: The previous response failed JSON parsing. You MUST return ONLY
+valid JSON matching the exact schema below — no preamble, no markdown
+fences, no commentary. If you cannot match the schema, return the schema
+with all fields set to null/empty rather than malformed JSON.
+"""
+
+
+def _call_llm_with_retry(
+    model: str, system: str, user_msg: str, max_retries: int = 1,
+) -> dict:
+    """One retry on parse failure; raises LLMChainCallFailed on persistent
+    failure (Session 2 spec §5.3).
+
+    Args:
+        model: Anthropic model id.
+        system: System prompt (already fully formatted, e.g. with
+            max_scenarios filled in for 3C-SCEN).
+        user_msg: Fully assembled user message.
+        max_retries: Number of retries after the initial attempt. Default 1.
+
+    Returns:
+        Parsed JSON dict from a successful call.
+
+    Raises:
+        LLMChainCallFailed: every attempt returned None.
+    """
+    result = _call_llm(model, system, user_msg)
+    if result is not None:
+        return result
+
+    for attempt in range(1, max_retries + 1):
+        logger.warning(
+            "LLM retry %d/%d (model=%s) — prepending strict-JSON prefix",
+            attempt, max_retries, model,
+        )
+        retry_system = _RETRY_PREFIX + "\n" + system
+        result = _call_llm(model, retry_system, user_msg)
+        if result is not None:
+            return result
+
+    raise LLMChainCallFailed(
+        f"LLM call to {model} returned None on initial attempt + "
+        f"{max_retries} retries (persistent parse / API failure)."
+    )
+
+
+# ── Apply functions (Session 2 spec §§2.5, 3.5, 4.5) ───────────────────────
+#
+# Per Session 1.6 schema realignment, prompt JSON shapes match Pydantic
+# models field-for-field. Apply functions are straight Pydantic constructions
+# with no field translation. Pydantic v2's default extra='ignore' silently
+# drops any extras the prompt emits beyond what's on the model (e.g., the
+# scenarios prompt emits investment_strategy per scenario, which is not on
+# DevelopmentScenario; it's used to validate against workflow_controls.
+# strategy_lock and is otherwise discarded).
+#
+# Validation errors (bad enum values, missing required fields, cross-scenario
+# constraint violations) raise pydantic.ValidationError or ValueError, both
+# caught by the orchestrator's `except Exception` and routed to the typed-
+# empty fallback for the failing prompt.
+
+def _apply_3c_conf(data: dict, deal: DealData) -> None:
+    """Apply 3C-CONF response onto deal.conformity_assessment.
+
+    Mapping per Session 2 spec §2.5: one-to-one. Fields populated:
+        status                       → ConformityAssessment.status
+        confidence                   → ConformityAssessment.confidence
+        confidence_reasons           → ConformityAssessment.confidence_reasons
+        nonconformity_details        → ConformityAssessment.nonconformity_details
+            (each element → NonconformityItem via Pydantic recursion)
+        grandfathering_status        → ConformityAssessment.grandfathering_status
+            (dict → GrandfatheringStatus, or None)
+        proposed_pathway_requirement → ConformityAssessment.proposed_pathway_requirement
+            (Session 1.6 addition; null / NONE / VARIANCE_REQUIRED / etc.)
+        risk_summary                 → ConformityAssessment.risk_summary
+        diligence_actions_required   → ConformityAssessment.diligence_actions_required
+
+    The status↔grandfathering consistency validator on ConformityAssessment
+    runs at construction; bad combinations (e.g., CONFORMING with
+    nonconformity_details, or LEGAL_NONCONFORMING_* without grandfathering)
+    raise ValidationError into the orchestrator's except branch.
+    """
+    deal.conformity_assessment = ConformityAssessment(**data)
+
+
+def _apply_3c_scen(data: dict, deal: DealData) -> None:
+    """Apply 3C-SCEN response onto deal.scenarios.
+
+    Mapping per Session 2 spec §3.5: each element of `data["scenarios"]`
+    constructs one DevelopmentScenario, appended to deal.scenarios. Fields
+    populated per scenario:
+        scenario_id, rank, scenario_name, business_thesis, verdict
+        unit_count, building_sf, use_mix (each → UseAllocation)
+        operating_strategy
+        zoning_pathway → ZoningPathway (with rationale, approval_body, etc.)
+        construction_budget_delta_usd, rent_delta_pct, timeline_delta_months
+        key_risks, entitlement_risk_flag → EntitlementRiskFlag (or None)
+
+    Per-scenario validators on DevelopmentScenario (scenario_id format,
+    rank in {1,2,3}) run at construction. Cross-scenario constraints are
+    enforced explicitly here so failures surface immediately rather than
+    deferring to the next DealData round-trip:
+      - scenarios array is non-empty
+      - count ≤ workflow_controls.max_scenarios (truncated with warning)
+      - ranks are unique
+      - exactly one PREFERRED
+      - the PREFERRED scenario has rank=1
+      - scenario_ids are unique
+
+    Spec §3.6 edge case: LLM returns 0 scenarios → orchestrator falls back
+    via _fallback_as_submitted_scenario. This function raises in that case
+    so the orchestrator's except branch fires.
+    """
+    scenarios_raw = data.get("scenarios") or []
+    if not scenarios_raw:
+        raise ValueError(
+            "3C-SCEN response missing 'scenarios' or returned an empty array"
+        )
+
+    max_n = deal.workflow_controls.max_scenarios
+    if len(scenarios_raw) > max_n:
+        logger.warning(
+            "3C-SCEN: LLM returned %d scenarios; truncating to "
+            "max_scenarios=%d (workflow_controls)",
+            len(scenarios_raw), max_n,
+        )
+        scenarios_raw = scenarios_raw[:max_n]
+
+    # Per-scenario construction (runs scenario_id format + rank-range validators)
+    scenarios = [DevelopmentScenario(**s) for s in scenarios_raw]
+
+    # Cross-scenario constraints (mirrors DealData.validate_scenarios_constraints)
+    ranks = [s.rank for s in scenarios]
+    if len(set(ranks)) != len(ranks):
+        raise ValueError(f"3C-SCEN: scenario ranks not unique: {ranks}")
+
+    preferred = [s for s in scenarios if s.verdict == ScenarioVerdict.PREFERRED]
+    if len(preferred) != 1:
+        raise ValueError(
+            f"3C-SCEN: must have exactly one PREFERRED scenario, "
+            f"got {len(preferred)}"
+        )
+    if preferred[0].rank != 1:
+        raise ValueError(
+            f"3C-SCEN: the PREFERRED scenario must have rank=1, "
+            f"got rank={preferred[0].rank}"
+        )
+
+    scenario_ids = [s.scenario_id for s in scenarios]
+    if len(set(scenario_ids)) != len(scenario_ids):
+        raise ValueError(
+            f"3C-SCEN: scenario_ids not unique: {scenario_ids}"
+        )
+
+    deal.scenarios = scenarios
+
+
+def _apply_3c_hbu(data: dict, deal: DealData) -> None:
+    """Apply 3C-HBU response onto deal.zoning_extensions.
+
+    Mapping per Session 2 spec §4.5 (post-Session 1.6 realignment to flat
+    use_flexibility_score / use_flexibility_explanation + structured
+    overlay_impact_assessment list):
+        cross_scenario_recommendation → ZoningExtensions.cross_scenario_recommendation
+        preferred_scenario_id         → ZoningExtensions.preferred_scenario_id
+        use_flexibility_score (int)   → ZoningExtensions.use_flexibility_score
+        use_flexibility_explanation   → ZoningExtensions.use_flexibility_explanation
+        overlay_impact_assessment     → ZoningExtensions.overlay_impact_assessment
+            (each element → OverlayImpact via Pydantic recursion)
+
+    development_upside is not produced by 3C-HBU per spec §4.4; it stays
+    as None on ZoningExtensions (Optional[DevelopmentUpside] = None) until
+    a later prompt or manual entry populates it.
+
+    Validates preferred_scenario_id against deal.scenarios before
+    construction so a clear ValueError fires on mismatch. (DealData's
+    model-level validator would also catch this on round-trip, but raising
+    here gives a more specific error message.)
+    """
+    pref_id = data.get("preferred_scenario_id")
+    if not pref_id:
+        raise ValueError(
+            "3C-HBU response missing required 'preferred_scenario_id'"
+        )
+    valid_ids = {s.scenario_id for s in deal.scenarios}
+    if pref_id not in valid_ids:
+        raise ValueError(
+            f"3C-HBU: preferred_scenario_id '{pref_id}' does not match "
+            f"any scenario_id in deal.scenarios "
+            f"(valid: {sorted(valid_ids)})"
+        )
+
+    deal.zoning_extensions = ZoningExtensions(**data)
+
+
+# ── Confidence-gate reason helper (used by gate at CP3 + INDETERMINATE fallback) ──
+#
+# Returns the per-criterion reasons the confidence gate fails. Empty list
+# means the gate would pass. Defined in CP2 because the INDETERMINATE
+# fallback constructor needs the reasons to populate confidence_reasons
+# meaningfully. CP3 will add `_confidence_gate_passes(deal)` as a thin
+# wrapper: `return not _confidence_gate_reasons(deal)`.
+
+def _confidence_gate_reasons(deal: DealData) -> List[str]:
+    """Per-criterion failure reasons for the Session 2 spec §5.2 confidence
+    gate. Empty list means all four criteria pass.
+
+    Criteria:
+      1. deal.zoning.zoning_code is populated (not None / not empty)
+      2. deal.zoning.permitted_uses has ≥ 3 entries
+      3. ≥ 4 of 9 core dimensional fields populated (max_height_ft,
+         max_stories, min_lot_area_sf, max_lot_coverage_pct, max_far,
+         front_setback_ft, rear_setback_ft, side_setback_ft,
+         min_parking_spaces). 0 counts as populated (urban setbacks /
+         no-minimum-parking districts have legitimate 0 values).
+      4. deal.assumptions.lot_sf is populated and > 0
+    """
+    z = deal.zoning
+    a = deal.assumptions
+    reasons: List[str] = []
+
+    if not (z.zoning_code or "").strip():
+        reasons.append(
+            "Zoning district code (deal.zoning.zoning_code) is missing"
+        )
+
+    n_uses = len(z.permitted_uses or [])
+    if n_uses < 3:
+        reasons.append(
+            f"Permitted uses list has {n_uses} entries (gate requires ≥ 3)"
+        )
+
+    dim_fields = {
+        "max_height_ft":         z.max_height_ft,
+        "max_stories":           z.max_stories,
+        "min_lot_area_sf":       z.min_lot_area_sf,
+        "max_lot_coverage_pct":  z.max_lot_coverage_pct,
+        "max_far":               z.max_far,
+        "front_setback_ft":      z.front_setback_ft,
+        "rear_setback_ft":       z.rear_setback_ft,
+        "side_setback_ft":       z.side_setback_ft,
+        "min_parking_spaces":    z.min_parking_spaces,
+    }
+    populated = [k for k, v in dim_fields.items() if v not in (None, "")]
+    if len(populated) < 4:
+        reasons.append(
+            f"Dimensional standards: only {len(populated)}/9 fields "
+            f"populated (gate requires ≥ 4); populated = {populated}"
+        )
+
+    if not a.lot_sf or a.lot_sf <= 0:
+        reasons.append(
+            "Lot SF (deal.assumptions.lot_sf) is missing or zero"
+        )
+
+    return reasons
+
+
+# ── Typed-empty fallback constructors (Session 2 spec §§5.2, 5.4) ──────────
+#
+# Each fallback returns a fully-typed Pydantic model with explicit
+# placeholder content. Every field on the target model is populated, even
+# with sentinel values, so downstream rendering and the financial pipeline
+# never see partial / null-pocked models. The orchestrator (CP3) routes to
+# these on (a) confidence gate failure (CONF only), (b) LLM persistent
+# parse failure, or (c) Pydantic ValidationError in an apply function.
+
+def _indeterminate_conformity_assessment(deal: DealData) -> ConformityAssessment:
+    """Fully-typed CONFORMITY_INDETERMINATE assessment fallback (spec §5.2).
+
+    Fired when:
+      (a) _confidence_gate_passes returns False — confidence_reasons
+          enumerates which of the four gate criteria failed
+      (b) 3C-CONF persistently fails after retry — confidence_reasons
+          carries a parse-failure message
+
+    The status↔confidence consistency validator on ConformityAssessment
+    requires INDETERMINATE confidence whenever status is
+    CONFORMITY_INDETERMINATE; we set both consistently.
+    """
+    reasons = _confidence_gate_reasons(deal)
+    if not reasons:
+        # Gate would have passed; the call site is the 3C-CONF except branch.
+        reasons = [
+            "3C-CONF prompt persistently failed JSON parsing after retry",
+        ]
+
+    return ConformityAssessment(
+        status=ConformityStatus.CONFORMITY_INDETERMINATE,
+        confidence=ConfidenceLevel.INDETERMINATE,
+        confidence_reasons=reasons,
+        nonconformity_details=[],
+        grandfathering_status=None,
+        proposed_pathway_requirement=None,
+        risk_summary=(
+            "Conformity assessment could not be completed because the "
+            "underlying zoning data did not meet the confidence gate "
+            "threshold (master plan D4) or because the 3C-CONF prompt "
+            "failed parsing after retry. Status flagged as INDETERMINATE "
+            "so the report renders this prominently rather than silently. "
+            "Manual diligence is required before the deal can proceed past LOI."
+        ),
+        diligence_actions_required=[
+            "Retrieve the current municipal zoning ordinance for the "
+            "subject parcel and confirm zoning district code, permitted "
+            "uses, and full dimensional standards.",
+            "Confirm parcel lot square footage from the deed or survey.",
+            "Re-run the underwriting after populating the zoning fields "
+            "above so the conformity assessment can complete.",
+            "Engage local zoning counsel to verify the property's "
+            "existing-use status against the current ordinance.",
+        ],
+    )
+
+
+def _fallback_as_submitted_scenario(deal: DealData) -> DevelopmentScenario:
+    """Single 'as-submitted' fallback scenario (spec §5.4).
+
+    Fired when 3C-SCEN persistently fails. Reconstructs the user-submitted
+    baseline as a rank-1 PREFERRED DevelopmentScenario with HIGH entitlement
+    risk and a BY_RIGHT pathway sentinel, so downstream code (the financial
+    pipeline at Session 4, the renderer at Session 5) has a non-empty
+    scenarios list to operate on.
+
+    Caller (orchestrator) wraps this in a list:
+        deal.scenarios = [_fallback_as_submitted_scenario(deal)]
+    """
+    a = deal.assumptions
+    strategy = (
+        deal.investment_strategy.value
+        if deal.investment_strategy else "stabilized_hold"
+    )
+
+    return DevelopmentScenario(
+        scenario_id="as_submitted",
+        rank=1,
+        scenario_name="As-Submitted (Fallback)",
+        business_thesis=(
+            "Fallback scenario reconstructed from the user-submitted "
+            "baseline assumptions because the 3C-SCEN prompt failed to "
+            "produce a structured response after retry. This scenario "
+            "has not been evaluated for zoning conformity, market "
+            "positioning, or execution risk; it is included only so the "
+            "report renders and the financial pipeline can complete. "
+            "Manual review by an underwriting analyst is required before "
+            "any reliance on this scenario."
+        ),
+        verdict=ScenarioVerdict.PREFERRED,
+        unit_count=int(a.num_units) if a.num_units else 0,
+        building_sf=float(a.gba_sf) if a.gba_sf else 0.0,
+        use_mix=[],
+        operating_strategy=(
+            f"Baseline {strategy} strategy as submitted by the user; no "
+            f"scenario-specific operating plan was produced because the "
+            f"3C-SCEN prompt failed after retry."
+        ),
+        zoning_pathway=ZoningPathway(
+            pathway_type=ZoningPathwayType.BY_RIGHT,
+            rationale=(
+                "Pathway defaulted to BY_RIGHT because 3C-SCEN did not "
+                "produce a pathway analysis. This default is a sentinel — "
+                "verify with local zoning counsel before relying on it."
+            ),
+            approval_body=None,
+            estimated_timeline_months=None,
+            estimated_soft_cost_usd=None,
+            success_probability_pct=None,
+            fallback_if_denied=None,
+        ),
+        construction_budget_delta_usd=None,
+        rent_delta_pct=None,
+        timeline_delta_months=None,
+        financial_outputs=None,
+        excel_filename=None,
+        key_risks=[
+            "3C-SCEN scenario generation failed; this scenario is a "
+            "placeholder, not a real recommendation",
+            "Zoning pathway defaulted to BY_RIGHT without analysis",
+            "No alternate scenarios produced; cross-scenario comparison "
+            "is not available for this deal",
+        ],
+        entitlement_risk_flag=EntitlementRiskFlag(
+            severity="HIGH",
+            risk_summary=(
+                "Scenario generation failed; manual review required. The "
+                "BY_RIGHT pathway assumption has not been verified against "
+                "the zoning code; entitlement risk is unbounded until a "
+                "zoning analyst reviews the parcel manually."
+            ),
+            diligence_required=[
+                "Re-run 3C-SCEN with cleaned inputs and update the deal",
+                "Engage local zoning counsel to verify the BY_RIGHT pathway "
+                "assumption against the current ordinance",
+                "Generate alternate scenarios (variance, rezone) before "
+                "underwriting committee review",
+            ],
+        ),
+    )
+
+
+def _minimal_zoning_extensions(deal: DealData) -> ZoningExtensions:
+    """Minimal ZoningExtensions fallback (spec §5.4).
+
+    Fired when 3C-HBU persistently fails. Sets preferred_scenario_id to
+    the first scenario's id (which exists because the orchestrator runs
+    3C-HBU only after deal.scenarios has been populated by 3C-SCEN or its
+    fallback), and sentinel placeholder text for the synthesis prose.
+
+    NOTE on schema drift: spec §5.4 specifies use_flexibility_score=null
+    and overlay_impact_assessment="Not assessed." (string). The Session 1.6
+    realigned schema has use_flexibility_score: int with validator 1≤v≤5
+    and overlay_impact_assessment: List[OverlayImpact]. We use 1
+    ("single-purpose, locked in") as the most-defensible sentinel for the
+    score and an empty list for overlays; the explanation text explicitly
+    notes this is a fallback default, not a real assessment.
+    """
+    if not deal.scenarios:
+        # Orchestrator runs 3C-HBU only after 3C-SCEN (or its fallback) has
+        # populated deal.scenarios. Guard anyway for robustness.
+        raise ValueError(
+            "_minimal_zoning_extensions requires at least one scenario "
+            "in deal.scenarios; orchestrator must run 3C-SCEN (or its "
+            "fallback) before 3C-HBU."
+        )
+
+    return ZoningExtensions(
+        use_flexibility_score=1,
+        use_flexibility_explanation=(
+            "3C-HBU synthesis failed; use_flexibility_score defaulted to 1 "
+            "(single-purpose, locked in). This is a fallback sentinel, NOT "
+            "a real assessment of parcel flexibility — manual review of "
+            "the zoning standards is required to assign a real score."
+        ),
+        overlay_impact_assessment=[],
+        development_upside=None,
+        cross_scenario_recommendation=(
+            "Cross-scenario synthesis (3C-HBU) failed after retry. Refer "
+            "to the individual scenarios above for per-scenario analysis. "
+            "Manual review by an underwriting analyst is required to "
+            "produce a recommendation across scenarios."
+        ),
+        preferred_scenario_id=deal.scenarios[0].scenario_id,
+    )
+
+
+# ── Confidence gate (Session 2 spec §5.2) ──────────────────────────────────
+
+def _confidence_gate_passes(deal: DealData) -> bool:
+    """Return True only when all four spec §5.2 confidence-gate criteria
+    pass. Thin wrapper around _confidence_gate_reasons (which lists the
+    per-criterion failures and is reused by the INDETERMINATE fallback to
+    populate confidence_reasons).
+
+    The gate guards 3C-CONF only: 3C-SCEN and 3C-HBU always run. When the
+    gate fails (or 3C-CONF fails after retry), the INDETERMINATE conformity
+    feeds 3C-SCEN's "default to existing configuration with HIGH entitlement
+    risk" branch (spec §3.3 rule 3).
+    """
+    return not _confidence_gate_reasons(deal)
+
+
+# ── Orchestrator (Session 2 spec §5.1) ─────────────────────────────────────
+
+def run_zoning_synthesis_chain(deal: DealData) -> None:
+    """Run the three-prompt zoning synthesis chain on a deal in place.
+
+    Sequential per master plan D9: gate → 3C-CONF → 3C-SCEN → 3C-HBU.
+    Each prompt runs in its own try/except so a failure at any one prompt
+    routes to that prompt's typed-empty fallback and does NOT halt the
+    chain. This failure-isolation is the central reliability property of
+    the entire zoning overhaul (master plan D4).
+
+    Populates (always — fallbacks fill in if the LLM fails):
+        deal.conformity_assessment   (3C-CONF or INDETERMINATE fallback)
+        deal.scenarios               (3C-SCEN or single fallback scenario)
+        deal.zoning_extensions       (3C-HBU or minimal extensions fallback)
+
+    Called from enrich_market_data() after Prompt 3B completes. By design,
+    this function never raises; downstream code can rely on the three deal
+    fields being populated when control returns.
+    """
+    # ─── GATE: confidence check before 3C-CONF ─────────────────────────
+    if not _confidence_gate_passes(deal):
+        gate_reasons = _confidence_gate_reasons(deal)
+        logger.info(
+            "Zoning confidence gate FAILED (%d criterion(a)) — writing "
+            "INDETERMINATE conformity. Reasons: %s",
+            len(gate_reasons), gate_reasons,
+        )
+        deal.conformity_assessment = _indeterminate_conformity_assessment(deal)
+    else:
+        # ─── 3C-CONF (Conformity Assessment) ──────────────────────────
+        try:
+            data = _call_llm_with_retry(
+                MODEL_SONNET,
+                _SYSTEM_3C_CONF,
+                _build_3c_conf_user(deal),
+                max_retries=1,
+            )
+            _apply_3c_conf(data, deal)
+            logger.info(
+                "3C-CONF complete: status=%s confidence=%s",
+                deal.conformity_assessment.status.value,
+                deal.conformity_assessment.confidence.value,
+            )
+        except Exception as exc:
+            logger.error(
+                "3C-CONF failed (%s: %s) — writing INDETERMINATE fallback",
+                type(exc).__name__, exc,
+            )
+            deal.conformity_assessment = _indeterminate_conformity_assessment(deal)
+
+    # ─── 3C-SCEN (Scenario Generation) ─────────────────────────────────
+    # _SYSTEM_3C_SCEN carries {max_scenarios} placeholders (twice), filled
+    # at the call site from workflow_controls.max_scenarios — see CP1.
+    try:
+        sys_scen = _SYSTEM_3C_SCEN.format(
+            max_scenarios=deal.workflow_controls.max_scenarios,
+        )
+        data = _call_llm_with_retry(
+            MODEL_SONNET,
+            sys_scen,
+            _build_3c_scen_user(deal),
+            max_retries=1,
+        )
+        _apply_3c_scen(data, deal)
+        logger.info(
+            "3C-SCEN complete: %d scenarios written", len(deal.scenarios),
+        )
+    except Exception as exc:
+        logger.error(
+            "3C-SCEN failed (%s: %s) — writing single 'as-submitted' "
+            "fallback scenario",
+            type(exc).__name__, exc,
+        )
+        deal.scenarios = [_fallback_as_submitted_scenario(deal)]
+
+    # ─── 3C-HBU (Cross-Scenario Synthesis) ─────────────────────────────
+    try:
+        data = _call_llm_with_retry(
+            MODEL_SONNET,
+            _SYSTEM_3C_HBU,
+            _build_3c_hbu_user(deal),
+            max_retries=1,
+        )
+        _apply_3c_hbu(data, deal)
+        # NOTE: spec §5.1 pseudocode references
+        # deal.zoning_extensions.use_flexibility_score.score (old nested
+        # shape pre-Session-1.6). Session 1.6 realigned to flat
+        # use_flexibility_score: int — log accordingly.
+        logger.info(
+            "3C-HBU complete: preferred=%s use_flexibility_score=%s",
+            deal.zoning_extensions.preferred_scenario_id,
+            deal.zoning_extensions.use_flexibility_score,
+        )
+    except Exception as exc:
+        logger.error(
+            "3C-HBU failed (%s: %s) — writing minimal ZoningExtensions "
+            "fallback",
+            type(exc).__name__, exc,
+        )
+        deal.zoning_extensions = _minimal_zoning_extensions(deal)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3453,29 +4521,16 @@ def enrich_market_data(deal: DealData) -> DealData:
     else:
         logger.warning("Prompt 3B failed — continuing without buildable capacity")
 
-    # Prompt 3C — Highest & Best Use (Sonnet)
-    logger.info("Running Prompt 3C — Highest & Best Use Analysis...")
-    buildable_json = json.dumps({
-        "max_buildable_units": deal.zoning.max_buildable_units,
-        "max_buildable_sf":    deal.zoning.max_buildable_sf,
-        "capacity_narrative":  deal.zoning.buildable_capacity_narrative,
-    })
-    market_context = _build_market_context(md)
-    user_msg = _USER_3C.format(
-        property_address=addr.full_address,
-        asset_type=deal.asset_type.value,
-        current_use=deal.asset_type.value,
-        investment_strategy=deal.investment_strategy.value,
-        zoning_json=zoning_json,
-        buildable_capacity_json=buildable_json,
-        market_context_summary=market_context,
+    # ── STEP 9D: Zoning Synthesis Chain (3C-CONF + 3C-SCEN + 3C-HBU) ──
+    # Session 3 (April 2026): replaces the legacy single Prompt 3C with the
+    # three-prompt sequential synthesis chain per master plan D4 (confidence
+    # gate + INDETERMINATE fallback) and D9 (strict sequential execution).
+    # Failures at any prompt route to a typed-empty fallback; the chain
+    # never raises and the pipeline never halts here.
+    logger.info(
+        "Step 9D: Zoning Synthesis Chain (3C-CONF + 3C-SCEN + 3C-HBU)..."
     )
-    result = _call_llm(MODEL_SONNET, _SYSTEM_3C, user_msg)
-    if result:
-        _apply_3c(result, deal)
-        logger.info("Prompt 3C complete — HBU analysis written")
-    else:
-        logger.warning("Prompt 3C failed — continuing without HBU")
+    run_zoning_synthesis_chain(deal)
 
     # ── MARKET DATA SUMMARY ──────────────────────────────────────
     _opa_found = bool(deal.parcel_data and deal.parcel_data.parcel_id)

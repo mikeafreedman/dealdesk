@@ -1,0 +1,49 @@
+{
+  "deal_id": "session_3_test_fixture_belmont",
+  "deal_description": "36-unit multifamily walk-up in Wynnefield, Philadelphia. 1926 construction. Stabilized hold thesis on grandfathered legal nonconforming use under RSD-3 (single-family detached zoning).",
+
+  "address": {
+    "full_address": "2217 N 51st Street, Philadelphia, PA 19131",
+    "street": "2217 N 51st Street",
+    "city": "Philadelphia",
+    "state": "PA",
+    "zip_code": "19131"
+  },
+
+  "asset_type": "Multifamily",
+  "investment_strategy": "stabilized_hold",
+
+  "zoning": {
+    "zoning_code": "RSD-3",
+    "zoning_district": "Residential Single-Family Detached, District 3",
+    "permitted_uses": [
+      "Single-family detached dwelling (by-right)",
+      "Religious assembly (in completely enclosed detached building, with use registration permit)",
+      "Day care",
+      "Educational facility (special exception)",
+      "Public park"
+    ],
+    "max_height_ft": 38,
+    "max_stories": 3,
+    "min_lot_area_sf": 5000,
+    "max_lot_coverage_pct": 0.30,
+    "front_setback_ft": 8,
+    "rear_setback_ft": 30,
+    "side_setback_ft": 8,
+    "min_parking_spaces": 1,
+    "source_verified": true
+  },
+
+  "assumptions": {
+    "purchase_price": 0,
+    "num_units": 36,
+    "gba_sf": 20640,
+    "lot_sf": 10140,
+    "year_built": 1926
+  },
+
+  "extracted_docs": {
+    "total_monthly_rent": 41401.0,
+    "noi_t12": 230438.0
+  }
+}
