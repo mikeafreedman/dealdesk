@@ -106,26 +106,46 @@ each specific nonconformity with magnitude, assess grandfathering posture
 where applicable, and produce a one-paragraph risk summary plus a
 diligence action checklist.
 
-CONFORMITY STATUS — pick exactly ONE
-- CONFORMING: existing or proposed use AND all dimensional standards
-  comply with current zoning. No variances, special exceptions, or
-  grandfathering required.
+CONFORMITY STATUS — pick exactly ONE (describes the EXISTING condition)
+- CONFORMING: existing use AND all dimensional standards comply with
+  current zoning. No grandfathering required.
 - LEGAL_NONCONFORMING_USE: the use itself is not permitted under current
   zoning, but is presumed grandfathered because it predates the current
   code and has been continuously maintained. Dimensional standards may
   also be nonconforming.
+- LEGAL_NONCONFORMING_DENSITY: the use is permitted, but unit count or
+  FAR exceeds current density caps, and the property is presumed
+  grandfathered. Use this status when density is the primary or only
+  nonconformity.
 - LEGAL_NONCONFORMING_DIMENSIONAL: the use is permitted, but one or more
-  dimensional standards (height, FAR, density, setbacks, lot coverage,
-  parking) do not comply, and the property is presumed grandfathered.
+  dimensional standards (height, setbacks, lot coverage, parking) do not
+  comply, and the property is presumed grandfathered.
+- MULTIPLE_NONCONFORMITIES: two or more LEGAL_NONCONFORMING_* conditions
+  apply simultaneously (e.g., both use AND density, or both use AND
+  multiple dimensional standards). Use this when no single category
+  dominates.
 - ILLEGAL_NONCONFORMING: the configuration violates zoning AND there is
   no defensible basis for grandfathering (e.g., post-code construction
   without permits, discontinued use beyond the abandonment period).
-- VARIANCE_REQUIRED_FOR_PROPOSED: the existing configuration is conforming
-  or grandfathered, but the proposed business plan requires a variance.
-- SPECIAL_EXCEPTION_REQUIRED_FOR_PROPOSED: same, but the pathway is a
-  special exception or conditional use rather than a variance.
 - CONFORMITY_INDETERMINATE: insufficient data to make a determination.
   Use this status ONLY when explicitly instructed by the orchestrator.
+
+PROPOSED PATHWAY REQUIREMENT — separate output, optional
+The conformity status above describes the EXISTING condition. Separately,
+if the inputs describe a proposed business plan that requires a
+discretionary approval to execute, return a proposed_pathway_requirement
+value. If no proposed plan is articulated, or the proposed plan is
+by-right, return null.
+- null: no proposed plan, OR proposed plan is by-right (no discretionary
+  approval needed). Default for stabilized-hold scenarios.
+- NONE: assessed and confirmed no discretionary approval required. Use
+  this only when the inputs explicitly describe a by-right proposed plan
+  worth flagging.
+- VARIANCE_REQUIRED: proposed plan requires a use or dimensional variance
+  from the zoning board.
+- SPECIAL_EXCEPTION_REQUIRED: proposed plan requires a special exception
+  or conditional-use approval.
+- REZONE_REQUIRED: proposed plan requires legislative rezoning.
 
 CRITICAL RULES
 1. Base every conclusion on the data provided. Do not speculate beyond it.
@@ -178,12 +198,12 @@ Buildable capacity analysis (Prompt 3B output):
 
 Return JSON in this exact shape:
 {{
-  "status": "CONFORMING|LEGAL_NONCONFORMING_USE|LEGAL_NONCONFORMING_DIMENSIONAL|ILLEGAL_NONCONFORMING|VARIANCE_REQUIRED_FOR_PROPOSED|SPECIAL_EXCEPTION_REQUIRED_FOR_PROPOSED|CONFORMITY_INDETERMINATE",
+  "status": "CONFORMING|LEGAL_NONCONFORMING_USE|LEGAL_NONCONFORMING_DENSITY|LEGAL_NONCONFORMING_DIMENSIONAL|MULTIPLE_NONCONFORMITIES|ILLEGAL_NONCONFORMING|CONFORMITY_INDETERMINATE",
   "confidence": "HIGH|MEDIUM|LOW|INDETERMINATE",
   "confidence_reasons": ["reason 1", "reason 2"],
   "nonconformity_details": [
     {{
-      "nonconformity_type": "USE|DENSITY|HEIGHT|FAR|FRONT_SETBACK|REAR_SETBACK|SIDE_SETBACK|LOT_COVERAGE|PARKING|LOT_AREA",
+      "nonconformity_type": "USE|DENSITY|HEIGHT|FAR|FRONT_SETBACK|REAR_SETBACK|SIDE_SETBACK|SETBACKS|LOT_COVERAGE|PARKING|LOT_AREA|OTHER",
       "standard_description": "Brief plain-English label",
       "permitted_value": "What zoning allows (with units)",
       "actual_value": "What the property has (with units)",
@@ -194,8 +214,11 @@ Return JSON in this exact shape:
     "is_presumed_grandfathered": true|false,
     "basis": "Built {{year}} predating current code; continuous use presumed",
     "loss_triggers": ["Substantial improvement >50%", "Change of use", "Abandonment >12 months"],
-    "verification_required": true
+    "verification_required": true,
+    "confirmation_action_required": "Pull L&I rental license history and prior zoning permits",
+    "risk_if_denied": "Plain-English consequence if grandfathering is not confirmed"
   }} | null,
+  "proposed_pathway_requirement": "NONE|VARIANCE_REQUIRED|SPECIAL_EXCEPTION_REQUIRED|REZONE_REQUIRED" | null,
   "risk_summary": "One paragraph plain English for the IC.",
   "diligence_actions_required": [
     "Confirm with title that...",
@@ -206,7 +229,7 @@ Return JSON in this exact shape:
 
 ### Output schema mapping to DealData
 
-Every field in the JSON above maps to a field on `ConformityAssessment` (defined in `Session_1_Schema_Design.md`). The mapping is one-to-one; `_apply_3c_conf(data, deal)` constructs the Pydantic model and assigns it to `deal.conformity_assessment`.
+Every field in the JSON above maps to a field on `ConformityAssessment` (defined in `Session_1_Schema_Design.md`, realigned in Session 1.6 — see `Session_1_6_Drift_Report.md`). The mapping is one-to-one; `_apply_3c_conf(data, deal)` constructs the Pydantic model and assigns it to `deal.conformity_assessment`. Note: `proposed_pathway_requirement` is the new field added in Session 1.6 to separate the existing-condition status from the proposed-plan entitlement requirement.
 
 ### Edge cases & failure modes
 
@@ -638,7 +661,7 @@ The three reference deals form the regression test set. A change to any prompt t
 
 ## Deal A — 967-73 N. 9th St (21 units in 6-unit-cap district)
 
-**3C-CONF:** status `LEGAL_NONCONFORMING_DIMENSIONAL`; confidence `HIGH`; nonconformity_details includes one entry of type `DENSITY` with magnitude "21 units exceeds 6-unit by-right cap by 250%"; grandfathering_status.is_presumed_grandfathered = true; diligence_actions includes verification of continuous use and substantial-improvement threshold.
+**3C-CONF:** status `LEGAL_NONCONFORMING_DENSITY` (use itself is permitted under ICMX; density is the primary nonconformity); confidence `HIGH`; nonconformity_details includes one entry of type `DENSITY` with magnitude "21 units exceeds 6-unit by-right cap by 250%"; grandfathering_status.is_presumed_grandfathered = true; proposed_pathway_requirement = `null` (preferred plan is by-right contingent on grandfathering confirmation); diligence_actions includes verification of continuous use and substantial-improvement threshold.
 
 **3C-SCEN:** 2-3 scenarios; rank 1 PREFERRED = "asbuilt_reno_21u" (light cosmetic renovation, BY_RIGHT pathway within grandfathered config); rank 2 ALTERNATE = "variance_pathway_higher_value" (~60% success probability); rank 3 ALTERNATE optional = "demo_rebuild_byright_6u" (only if 6-unit economics work).
 
@@ -646,7 +669,7 @@ The three reference deals form the regression test set. A change to any prompt t
 
 ## Deal B — Belmont Apartments, 2217 N 51st St, RSD-3
 
-**3C-CONF:** status `LEGAL_NONCONFORMING_USE` (RSD-3 is single-family detached; 36-unit apartment is not permitted); confidence `HIGH`; nonconformity_details includes USE entry plus possibly density, setbacks, lot coverage; grandfathering_status.is_presumed_grandfathered = true (1926 build predates 2012 zoning code rewrite by 86 years); grandfathering_status.basis explicitly references 1926 build date; diligence_actions includes confirmation of continuous multifamily use, prior L&I records, no substantial improvements.
+**3C-CONF:** status `LEGAL_NONCONFORMING_USE` (RSD-3 is single-family detached; 36-unit apartment is not permitted); confidence `HIGH`; nonconformity_details includes USE entry plus possibly density, setbacks, lot coverage; grandfathering_status.is_presumed_grandfathered = true (1926 build predates 2012 zoning code rewrite by 86 years); grandfathering_status.basis explicitly references 1926 build date; proposed_pathway_requirement = `null` (preferred plan is stabilized hold within grandfathered envelope; no discretionary approval contemplated); diligence_actions includes confirmation of continuous multifamily use, prior L&I records, no substantial improvements.
 
 **3C-SCEN:** 1-2 scenarios; rank 1 PREFERRED = "stabilized_hold_36u" (operate as-is, no displacement, BY_RIGHT within grandfathered envelope); rank 2 ALTERNATE possible = "light_value_add_36u" (kitchen/bath upgrades on turnover, flagged with substantial-improvement-threshold risk if budget approaches 50% of structure value); NOT generated: "demo and rebuild" (RSD-3 max is single-family detached, so 36-unit rebuild is not by-right and economics are unworkable).
 
@@ -654,7 +677,7 @@ The three reference deals form the regression test set. A change to any prompt t
 
 ## Deal C — 3520 Indian Queen Lane, split-zoned RSA-1/RSA-5, existing warehouse + American Tower easement
 
-**3C-CONF:** status `LEGAL_NONCONFORMING_USE` (industrial warehouse in residential district); confidence `MEDIUM` (split zoning + easement complicate the assessment); nonconformity_details includes USE entry, possibly LOT_COVERAGE entry; is_split_zoned reflected in confidence_reasons; diligence_actions includes review of American Tower Easement and Assignment Agreement (Doc Id 53136944), confirmation of warehouse use continuity, lot survey to confirm RSA-1/RSA-5 boundary.
+**3C-CONF:** status `LEGAL_NONCONFORMING_USE` (industrial warehouse in residential district); confidence `MEDIUM` (split zoning + easement complicate the assessment); nonconformity_details includes USE entry, possibly LOT_COVERAGE entry; is_split_zoned reflected in confidence_reasons; proposed_pathway_requirement = `VARIANCE_REQUIRED` (any of the three CMA Revised Schemes — courtyard, townhomes, garden — requires a use variance to permit residential redevelopment in RSA-1/RSA-5); diligence_actions includes review of American Tower Easement and Assignment Agreement (Doc Id 53136944), confirmation of warehouse use continuity, lot survey to confirm RSA-1/RSA-5 boundary.
 
 **3C-SCEN:** 3 scenarios approximating the three CMA Revised Schemes:
 - "scheme_c_courtyard_95u" — apartment + courtyard concept, 95 units, pathway VARIANCE or REZONE (success_probability_pct ~50%)

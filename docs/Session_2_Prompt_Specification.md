@@ -113,26 +113,46 @@ each specific nonconformity with magnitude, assess grandfathering posture
 where applicable, and produce a one-paragraph risk summary plus a
 diligence action checklist.
 
-CONFORMITY STATUS — pick exactly ONE
-- CONFORMING: existing or proposed use AND all dimensional standards
-  comply with current zoning. No variances, special exceptions, or
-  grandfathering required.
+CONFORMITY STATUS — pick exactly ONE (describes the EXISTING condition)
+- CONFORMING: existing use AND all dimensional standards comply with
+  current zoning. No grandfathering required.
 - LEGAL_NONCONFORMING_USE: the use itself is not permitted under current
   zoning, but is presumed grandfathered because it predates the current
   code and has been continuously maintained. Dimensional standards may
   also be nonconforming.
+- LEGAL_NONCONFORMING_DENSITY: the use is permitted, but unit count or
+  FAR exceeds current density caps, and the property is presumed
+  grandfathered. Use this status when density is the primary or only
+  nonconformity.
 - LEGAL_NONCONFORMING_DIMENSIONAL: the use is permitted, but one or more
-  dimensional standards (height, FAR, density, setbacks, lot coverage,
-  parking) do not comply, and the property is presumed grandfathered.
+  dimensional standards (height, setbacks, lot coverage, parking) do not
+  comply, and the property is presumed grandfathered.
+- MULTIPLE_NONCONFORMITIES: two or more LEGAL_NONCONFORMING_* conditions
+  apply simultaneously (e.g., both use AND density, or both use AND
+  multiple dimensional standards). Use this when no single category
+  dominates.
 - ILLEGAL_NONCONFORMING: the configuration violates zoning AND there is
   no defensible basis for grandfathering (e.g., post-code construction
   without permits, discontinued use beyond the abandonment period).
-- VARIANCE_REQUIRED_FOR_PROPOSED: the existing configuration is conforming
-  or grandfathered, but the proposed business plan requires a variance.
-- SPECIAL_EXCEPTION_REQUIRED_FOR_PROPOSED: same, but the pathway is a
-  special exception or conditional use rather than a variance.
 - CONFORMITY_INDETERMINATE: insufficient data to make a determination.
   Use this status ONLY when explicitly instructed by the orchestrator.
+
+PROPOSED PATHWAY REQUIREMENT — separate output, optional
+The conformity status above describes the EXISTING condition. Separately,
+if the inputs describe a proposed business plan that requires a
+discretionary approval to execute, return a proposed_pathway_requirement
+value. If no proposed plan is articulated, or the proposed plan is
+by-right, return null.
+- null: no proposed plan, OR proposed plan is by-right (no discretionary
+  approval needed). Default for stabilized-hold scenarios.
+- NONE: assessed and confirmed no discretionary approval required. Use
+  this only when the inputs explicitly describe a by-right proposed plan
+  worth flagging.
+- VARIANCE_REQUIRED: proposed plan requires a use or dimensional variance
+  from the zoning board.
+- SPECIAL_EXCEPTION_REQUIRED: proposed plan requires a special exception
+  or conditional-use approval.
+- REZONE_REQUIRED: proposed plan requires legislative rezoning.
 
 CRITICAL RULES
 1. Base every conclusion on the data provided. Do not speculate beyond it.
@@ -185,12 +205,12 @@ Buildable capacity analysis (Prompt 3B output):
 
 Return JSON in this exact shape:
 {{
-  "status": "CONFORMING|LEGAL_NONCONFORMING_USE|LEGAL_NONCONFORMING_DIMENSIONAL|ILLEGAL_NONCONFORMING|VARIANCE_REQUIRED_FOR_PROPOSED|SPECIAL_EXCEPTION_REQUIRED_FOR_PROPOSED|CONFORMITY_INDETERMINATE",
+  "status": "CONFORMING|LEGAL_NONCONFORMING_USE|LEGAL_NONCONFORMING_DENSITY|LEGAL_NONCONFORMING_DIMENSIONAL|MULTIPLE_NONCONFORMITIES|ILLEGAL_NONCONFORMING|CONFORMITY_INDETERMINATE",
   "confidence": "HIGH|MEDIUM|LOW|INDETERMINATE",
   "confidence_reasons": ["reason 1", "reason 2"],
   "nonconformity_details": [
     {{
-      "nonconformity_type": "USE|DENSITY|HEIGHT|FAR|FRONT_SETBACK|REAR_SETBACK|SIDE_SETBACK|LOT_COVERAGE|PARKING|LOT_AREA",
+      "nonconformity_type": "USE|DENSITY|HEIGHT|FAR|FRONT_SETBACK|REAR_SETBACK|SIDE_SETBACK|SETBACKS|LOT_COVERAGE|PARKING|LOT_AREA|OTHER",
       "standard_description": "Brief plain-English label",
       "permitted_value": "What zoning allows (with units)",
       "actual_value": "What the property has (with units)",
@@ -201,8 +221,11 @@ Return JSON in this exact shape:
     "is_presumed_grandfathered": true|false,
     "basis": "Built {{year}} predating current code; continuous use presumed",
     "loss_triggers": ["Substantial improvement >50%", "Change of use", "Abandonment >12 months"],
-    "verification_required": true
+    "verification_required": true,
+    "confirmation_action_required": "Pull L&I rental license history and prior zoning permits",
+    "risk_if_denied": "Plain-English consequence if grandfathering is not confirmed"
   }} | null,
+  "proposed_pathway_requirement": "NONE|VARIANCE_REQUIRED|SPECIAL_EXCEPTION_REQUIRED|REZONE_REQUIRED" | null,
   "risk_summary": "One paragraph plain English for the IC.",
   "diligence_actions_required": [
     "Confirm with title that...",
@@ -229,10 +252,11 @@ Every field in the JSON above maps to a field on `ConformityAssessment` (defined
 ### 2.7 Test expectations per reference deal
 
 **Deal A — 967-73 N. 9th St (21 units in 6-unit-cap district)**
-- status: `LEGAL_NONCONFORMING_DIMENSIONAL` (use itself is permitted; density nonconforms)
+- status: `LEGAL_NONCONFORMING_DENSITY` (use itself is permitted under ICMX; density nonconforms — primary axis)
 - confidence: `HIGH`
 - nonconformity_details: at least one entry of type `DENSITY` with magnitude "21 units exceeds 6-unit by-right cap by 250%"
 - grandfathering_status.is_presumed_grandfathered: `true`
+- proposed_pathway_requirement: `null` (preferred plan is renovation within grandfathered envelope; by-right contingent on grandfathering confirmation)
 - diligence_actions: includes verification of continuous use and substantial-improvement threshold
 
 **Deal B — Belmont Apartments, 2217 N 51st St, RSD-3**
@@ -241,6 +265,7 @@ Every field in the JSON above maps to a field on `ConformityAssessment` (defined
 - nonconformity_details: at least one entry of type `USE`; possible additional entries for density, setbacks, lot coverage
 - grandfathering_status.is_presumed_grandfathered: `true` (1926 build predates 2012 zoning code rewrite by 86 years)
 - grandfathering_status.basis: explicit reference to 1926 build date
+- proposed_pathway_requirement: `null` (preferred plan is stabilized hold within grandfathered envelope; no discretionary approval contemplated)
 - diligence_actions: includes confirmation of continuous multifamily use, prior L&I records, no substantial improvements that would have triggered loss
 
 **Deal C — 3520 Indian Queen Lane, split-zoned RSA-1 / RSA-5, existing industrial warehouse + American Tower easement**
@@ -248,6 +273,7 @@ Every field in the JSON above maps to a field on `ConformityAssessment` (defined
 - confidence: `MEDIUM` (split zoning + easement complicate the assessment)
 - nonconformity_details: USE entry, possibly LOT_COVERAGE entry
 - is_split_zoned reflected in confidence_reasons
+- proposed_pathway_requirement: `VARIANCE_REQUIRED` (any of the three CMA Revised Schemes — courtyard, townhomes, garden — requires a use variance to permit residential redevelopment in RSA-1/RSA-5)
 - diligence_actions: includes review of American Tower Easement and Assignment Agreement (Doc Id 53136944), confirmation of warehouse use continuity, lot survey to confirm RSA-1 / RSA-5 boundary
 
 ---
@@ -337,6 +363,18 @@ CRITICAL RULES — PADDING IS PROHIBITED
 8. Each scenario's business_thesis is 2-3 sentences explaining the
    rationale. Each scenario's zoning_pathway has a pathway_type enum and
    a candid success_probability_pct (0-100, your honest estimate).
+9. Express budget, rent, and timeline as deltas against the
+   baseline_assumptions provided. Specifically:
+   - construction_budget_delta_usd is the dollar delta vs. the baseline
+     construction budget. A delta of 0 means no change from baseline.
+     Use null only when not applicable (e.g., stabilized hold of
+     existing building with no construction).
+   - rent_delta_pct is the fractional delta vs. baseline rents (0.05 =
+     +5% premium; -0.10 = -10% concession). Use null when not applicable.
+   - timeline_delta_months is the integer month delta vs. baseline
+     timeline. Negative numbers shorten; positive numbers extend.
+   These delta fields drive the financial fan-out in Session 4. A
+   non-anchored absolute number will produce wrong NOI / IRR.
 
 OUTPUT FORMAT
 Return ONLY the JSON array of scenario objects below. No preamble, no
@@ -375,7 +413,8 @@ Workflow controls:
   - strategy_lock: {strategy_lock}
   - max_scenarios: {max_scenarios}
 
-Return a JSON object with this exact shape:
+Return a JSON object with this exact shape (note: physical config and
+assumption deltas are FLAT at the scenario level — no nested blocks):
 {{
   "scenarios": [
     {{
@@ -385,29 +424,39 @@ Return a JSON object with this exact shape:
       "verdict": "PREFERRED",
       "business_thesis": "2-3 sentences explaining the plan and why it leads.",
       "investment_strategy": "stabilized_hold|value_add|opportunistic",
-      "physical_config": {{
-        "unit_count": 36,
-        "building_sf": 20640,
-        "use_mix": [
-          {{"use_label": "Residential", "sf": 20640, "share_pct": 100}}
-        ]
-      }},
+
+      "unit_count": 36,
+      "building_sf": 20640,
+      "use_mix": [
+        {{"use_category": "residential", "sf": 20640, "share_pct": 100, "unit_count": 36, "notes": null}}
+      ],
+      "operating_strategy": "Plain-English operating strategy paragraph (formerly operating_strategy_note).",
+
       "zoning_pathway": {{
         "pathway_type": "BY_RIGHT|CONDITIONAL_USE|SPECIAL_EXCEPTION|VARIANCE|REZONE",
         "rationale": "Why this pathway applies (1-2 sentences)",
-        "success_probability_pct": 95,
+        "approval_body": "Plain-English approving body (e.g., 'Philadelphia ZBA')",
         "estimated_timeline_months": 0,
-        "estimated_pathway_cost_usd": 0
+        "estimated_soft_cost_usd": 0,
+        "success_probability_pct": 95,
+        "fallback_if_denied": "Plain-English fallback strategy if approval not obtained, or null for BY_RIGHT"
       }},
-      "assumption_deltas": {{
-        "construction_budget_usd": 350000,
-        "rent_premium_pct_vs_baseline": 8.0,
-        "operating_strategy_note": "Light cosmetic refresh; no displacement.",
-        "timeline_months_to_stabilization": 12
-      }},
+
+      "construction_budget_delta_usd": 350000,
+      "rent_delta_pct": 0.08,
+      "timeline_delta_months": 12,
+
+      "key_risks": [
+        "Risk 1 — one-line description",
+        "Risk 2 — one-line description"
+      ],
       "entitlement_risk_flag": {{
-        "severity": "NONE|LOW|MEDIUM|HIGH",
-        "description": "Plain-English entitlement risk note, or null"
+        "severity": "LOW|MEDIUM|HIGH",
+        "risk_summary": "Plain-English entitlement risk paragraph (1-3 sentences)",
+        "diligence_required": [
+          "Concrete diligence action 1",
+          "Concrete diligence action 2"
+        ]
       }} | null
     }}
   ]
@@ -554,15 +603,24 @@ Overlay districts: {overlay_districts}
 Market context:
 {market_context_summary}
 
-Return JSON in this exact shape:
+Return JSON in this exact shape (note: use_flexibility is FLAT at the top
+level; overlay_impact_assessment is a STRUCTURED LIST, one entry per
+overlay; return an empty list if no overlay districts apply to this
+parcel):
 {{
   "cross_scenario_recommendation": "Two to three paragraphs of synthesis prose.",
   "preferred_scenario_id": "must_match_a_scenario_id_in_input",
-  "use_flexibility_score": {{
-    "score": 3,
-    "rationale": "1-2 sentence justification for the score."
-  }},
-  "overlay_impact_assessment": "Short paragraph on overlay materiality."
+  "use_flexibility_score": 3,
+  "use_flexibility_explanation": "1-2 sentence justification for the score.",
+  "overlay_impact_assessment": [
+    {{
+      "overlay_name": "MIH Overlay",
+      "overlay_type": "incentive|historic|environmental|design|transit|other",
+      "impact_summary": "1-2 sentences on materiality to the recommendation",
+      "triggers_review": false,
+      "additional_diligence": ["Concrete diligence action 1", "Concrete diligence action 2"]
+    }}
+  ]
 }}
 ```
 
@@ -574,11 +632,11 @@ The output populates `DealData.zoning_extensions`, which is a `ZoningExtensions`
 |---|---|
 | `cross_scenario_recommendation` | `deal.zoning_extensions.cross_scenario_recommendation` |
 | `preferred_scenario_id` | `deal.zoning_extensions.preferred_scenario_id` (validated against `[s.scenario_id for s in deal.scenarios]`) |
-| `use_flexibility_score.score` | `deal.zoning_extensions.use_flexibility_score.score` |
-| `use_flexibility_score.rationale` | `deal.zoning_extensions.use_flexibility_score.rationale` |
-| `overlay_impact_assessment` | `deal.zoning_extensions.overlay_impact_assessment` |
+| `use_flexibility_score` (flat int) | `deal.zoning_extensions.use_flexibility_score` |
+| `use_flexibility_explanation` (flat str) | `deal.zoning_extensions.use_flexibility_explanation` |
+| `overlay_impact_assessment` (list of OverlayImpact) | `deal.zoning_extensions.overlay_impact_assessment` |
 
-A model-level validator on `ZoningExtensions` ensures `preferred_scenario_id` is found in `[s.scenario_id for s in deal.scenarios]`. Mismatch raises a parse error and triggers retry.
+A model-level validator on `DealData` ensures `preferred_scenario_id` is found in `[s.scenario_id for s in deal.scenarios]`. Mismatch raises a parse error and triggers retry.
 
 ### 4.6 Edge cases and failure modes
 

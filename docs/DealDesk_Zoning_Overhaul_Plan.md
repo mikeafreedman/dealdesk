@@ -33,8 +33,9 @@ This is the single source of truth for the DealDesk zoning analysis overhaul. It
 |---|---|---|---|---|---|
 | 1 | Schema (models.py) | COMPLETED (commit `8a80f32`, tag `zoning-overhaul-session-1-passed`) | PASSED (18/18 criteria) | 2026-04-27 | 2026-04-27 |
 | 1.5 | Schema bridge (models.py — WorkflowControls + Encumbrance) | COMPLETED (commit `827149a`, tag `zoning-overhaul-session-1-5-passed`) | PASSED (8/8 criteria) | 2026-04-28 | 2026-04-28 |
+| 1.6 | Schema realignment (models.py — drift resolution) | COMPLETED (commit `ad849cd`, tag `zoning-overhaul-session-1-6-passed`) | PASSED (13/13 criteria) | 2026-04-28 | 2026-04-28 |
 | 2 | Prompt design + approval (claude.ai) | COMPLETED (commit `eab540c`, tag `zoning-overhaul-session-2-passed`) | PASSED (11/11 criteria) | 2026-04-27 | 2026-04-27 |
-| 3 | Pipeline orchestration (market.py) | READY (awaiting Mike approval to begin; kickoff sheet pending) | Not yet evaluated | — | — |
+| 3 | Pipeline orchestration (market.py) | READY (awaiting Mike approval to resume; original kickoff sheet remains valid) | Not yet evaluated | — | — |
 | 4 | Financial integration (financials.py + excel_builder.py) | BLOCKED on Session 3 | Not yet evaluated | — | — |
 | 5 | Rendering (report_template.html + report.css) | BLOCKED on Session 4 | Not yet evaluated | — | — |
 
@@ -429,6 +430,40 @@ Mike will identify Deal B and Deal C addresses before Session 2 begins.
 - Commit: `827149a` (`Session 1.5: Schema (models.py) — Add WorkflowControls + Encumbrance`)
 - Tag: `zoning-overhaul-session-1-5-passed`
 - Next: Session 3 (Pipeline orchestration in market.py) — wire `_SYSTEM_3C_CONF` / `_USER_3C_CONF` / `_apply_3c_conf` plus the 3C-SCEN and 3C-HBU equivalents, the `run_zoning_synthesis_chain` orchestrator, and the four-criterion confidence gate. Reads `Session_2_Prompt_Specification.md` and `FINAL_APPROVED_Prompt_Catalog_v5.md` as the implementation source of truth.
+
+### April 28, 2026 — Session 1.6 (Schema realignment micro-session) — COMPLETED
+- Bridge session inserted between Session 1.5 (schema foundation complete) and Session 3 (pipeline wiring, halted during read phase). Resolves 8 drift points + 1 cross-cutting Reference Deal A status contradiction surfaced during Session 3's reading phase.
+- Drift root cause: Session 2 prompt JSON shapes did not match Session 1 Pydantic models. Session 3 would have required bridging logic in `_apply_3c_*` apply functions to translate prompt shapes into schema shapes — a design responsibility that belonged with Mike, not the agent. Session 3 was halted before any code was written; the drift report (`docs/Session_1_6_Drift_Report.md`) was produced as the input artifact, reviewed in claude.ai with locked design decisions per drift point, and Session 1.6 was inserted to land the realignment.
+- Implemented in `models/models.py` (Session 1 ZONING OVERHAUL section; pure additive + rename, no destructive deletions):
+  - `NonconformityType` enum: added FRONT_SETBACK / REAR_SETBACK / SIDE_SETBACK / OTHER (12 values total; SETBACKS retained as coarse fallback per Drift #1 Option B1)
+  - `NonconformityItem`: renamed `existing_value` → `actual_value` (Drift #2); added `standard_description` (Drift #3); dropped `triggers_loss_of_grandfathering` — loss triggers now live only on `GrandfatheringStatus` (Drift #4 Option C4a)
+  - `GrandfatheringStatus`: replaced 5-field documentation-tracking shape with 6-field presumption-tracking shape per Drift #5, with Mike's refinement dropping `is_documented` and `documentation_source` (almost no pre-WWII multifamily has documented grandfathering — modeling presumption + loss triggers is the more honest IC framing)
+  - New enum `ProposedPathwayRequirement` (NONE / VARIANCE_REQUIRED / SPECIAL_EXCEPTION_REQUIRED / REZONE_REQUIRED) per Drift #6 — splits existing-condition `ConformityStatus` from proposed-plan entitlement requirement
+  - `ConformityAssessment`: added `proposed_pathway_requirement: Optional[ProposedPathwayRequirement] = None`. None means "not assessed"; NONE means "assessed and no discretionary approval is required"
+  - `UseAllocation`: renamed `square_feet` → `sf` (CRE convention, matches rest of codebase); added `share_pct` (Drift #7)
+  - `ZoningPathway`: added `rationale` (Drift #7)
+- Migrated `tests/fixtures/zoning_overhaul_session_1_fixture.json` in place: `existing_value` → `actual_value` (value preserved verbatim); `GrandfatheringStatus` reshape (`is_documented:false` → `is_presumed_grandfathered:true` semantic mapping; `presumption_basis` → `basis` with text preserved verbatim; `confirmation_action_required` and `risk_if_denied` preserved verbatim; added `loss_triggers` — the 3 items moved from the dropped `triggers_loss_of_grandfathering` array; added `verification_required: true`); 6× `square_feet` → `sf` renames with values unchanged. **`status: "LEGAL_NONCONFORMING_DENSITY"` preserved exactly** (master plan precedence over Session 2 spec on the cross-cutting Reference Deal A status contradiction).
+- Added `tests/fixtures/zoning_overhaul_session_1_6_fixture.json`: Belmont-style RSD-3 property exercising all 8 realignment surfaces (4 nonconformity_details including a FRONT_SETBACK directional and a coarse SETBACKS, 6-field GrandfatheringStatus, `proposed_pathway_requirement: VARIANCE_REQUIRED`, UseAllocation with `sf` and `share_pct` populated, ZoningPathway with `rationale` populated, both PREFERRED and ALTERNATE scenarios). Distinct from the Belmont fixture Session 3 will produce — this one is for schema-realignment testing, not prompt regression.
+- Updated `docs/Session_2_Prompt_Specification.md`: §2.3 (CONFORMITY STATUS list realigned, added PROPOSED PATHWAY REQUIREMENT block), §2.4 (JSON schema with new status enum + proposed_pathway_requirement field + expanded nonconformity_type enum + new GrandfatheringStatus shape), §2.7 (Deal A status `LEGAL_NONCONFORMING_DIMENSIONAL` → `LEGAL_NONCONFORMING_DENSITY`; proposed_pathway_requirement notes for all three deals), §3.3 (added rule #9 with delta-anchoring instruction), §3.4 (flattened physical_config and assumption_deltas to top level, renamed prompt fields per new schema, added IC-grade fields key_risks / approval_body / fallback_if_denied / risk_summary / diligence_required), §4.4 (flattened use_flexibility to two top-level fields, restructured overlay_impact_assessment as a structured list per OverlayImpact shape), §4.5 (mapping table updated for flat use_flexibility + structured overlay list).
+- Updated `docs/FINAL_APPROVED_Prompt_Catalog_v5.md`: §1 (3C-CONF system text + JSON schema, mirroring Session 2 spec changes), §4 (Deal A status `LEGAL_NONCONFORMING_DIMENSIONAL` → `LEGAL_NONCONFORMING_DENSITY`; proposed_pathway_requirement notes for all three deals).
+- Tracked `docs/Session_1_6_Drift_Report.md` (input artifact, was untracked since Session 3 read) and `docs/Session_1_6_Claude_Code_Kickoff.md` (kickoff sheet) into the docs commit for audit-trail completeness — same pattern as Session 2's docs commit, which tracked the Session 2 design checkpoint.
+- Gate verdict: PASSED — 13/13 criteria green:
+  1. models.py imports cleanly with new symbol `ProposedPathwayRequirement`
+  2. NonconformityType has 12 values incl. directional setbacks + SETBACKS coarse + OTHER
+  3. NonconformityItem rejects construction with old `existing_value` field name (ValidationError on missing required `actual_value`)
+  4. NonconformityItem accepts new `actual_value` field
+  5. GrandfatheringStatus rejects old shape (ValidationError on missing required `is_presumed_grandfathered` and `basis`)
+  6. ProposedPathwayRequirement enum has 4 values + JSON round-trip
+  7. ConformityAssessment.proposed_pathway_requirement defaults to None + accepts enum values
+  8. UseAllocation.sf works; old square_feet raises ValidationError
+  9. ZoningPathway.rationale accepts string + defaults to None
+  10. Migrated Session 1 fixture round-trips with `LEGAL_NONCONFORMING_DENSITY` preserved
+  11. Session 1.5 fixture round-trips with NO edits required (regression check — Session 1.6 must not break 1.5)
+  12. Session 1.6 fixture round-trips + exercises all 8 realignment surfaces
+  13. `git status` scope: only `models/models.py` + 2 fixture files in code commit (drift report + kickoff sheet excluded from code commit; tracked in docs commit)
+- Code commit: `ad849cd` (`Session 1.6: Schema realignment — Resolve drift between Session 1 schema and Session 2 prompts`)
+- Tag: `zoning-overhaul-session-1-6-passed`
+- Next: Session 3 resumes from its existing plan summary unchanged. The bridging logic the agent would have invented in `_apply_3c_*` functions becomes unnecessary — apply functions are now straightforward Pydantic constructions with no field translation. The Session 3 kickoff sheet at `docs/Session_3_Claude_Code_Kickoff.md` remains the operative instruction set.
 
 ---
 
