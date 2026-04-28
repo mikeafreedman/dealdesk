@@ -31,11 +31,14 @@ This is the single source of truth for the DealDesk zoning analysis overhaul. It
 
 | Session | Layer | Status | Gate | Started | Completed |
 |---|---|---|---|---|---|
-| 1 | Schema (models.py) | COMPLETED | PASSED (18/18 criteria) | 2026-04-27 | 2026-04-27 |
-| 2 | Prompt design + approval | READY (Session 1 gate passed) | Not yet evaluated | — | — |
-| 3 | Pipeline orchestration (market.py) | BLOCKED on Session 2 | Not yet evaluated | — | — |
+| 1 | Schema (models.py) | COMPLETED (commit `8a80f32`, tag `zoning-overhaul-session-1-passed`) | PASSED (18/18 criteria) | 2026-04-27 | 2026-04-27 |
+| 1.5 | Schema bridge (models.py — WorkflowControls + Encumbrance) | COMPLETED (commit `827149a`, tag `zoning-overhaul-session-1-5-passed`) | PASSED (8/8 criteria) | 2026-04-28 | 2026-04-28 |
+| 2 | Prompt design + approval (claude.ai) | COMPLETED (commit `eab540c`, tag `zoning-overhaul-session-2-passed`) | PASSED (11/11 criteria) | 2026-04-27 | 2026-04-27 |
+| 3 | Pipeline orchestration (market.py) | READY (awaiting Mike approval to begin; kickoff sheet pending) | Not yet evaluated | — | — |
 | 4 | Financial integration (financials.py + excel_builder.py) | BLOCKED on Session 3 | Not yet evaluated | — | — |
 | 5 | Rendering (report_template.html + report.css) | BLOCKED on Session 4 | Not yet evaluated | — | — |
+
+*The Current Session Status table above is the canonical view of where the project is right now. The Session History Log below is the audit trail of how we got here. Both must be updated as part of every session-close docs commit; the table reflects current state, the log reflects history.*
 
 ---
 
@@ -400,6 +403,32 @@ Mike will identify Deal B and Deal C addresses before Session 2 begins.
 - Gate verdict: PASSED — all 11 Session 2 gate criteria satisfied
 - Next: Session 1.5 micro-session in Claude Code (schema additions),
   then Session 3 (wire prompts into pipeline)
+
+### April 28, 2026 — Session 1.5 (Schema micro-session) — COMPLETED
+- Bridge session between Session 1 (schema foundation) and Session 3 (prompt wiring). Pure additive schema work surfaced by Session 2 prompt design.
+- Implemented in `models\models.py` (Session 1 ZONING OVERHAUL section, additive only):
+  - `EncumbranceType` enum added alphabetically between `ConformityStatus` and `NonconformityType` (6 values: EASEMENT, LEASE, LEASE_TO_EASEMENT, ROW, DEED_RESTRICTION, OTHER)
+  - `Encumbrance` sub-model added after `DevelopmentUpside` (11 typed fields including `expiration: Optional[date]`)
+  - `WorkflowControls` top-level model added after `ZoningExtensions`, before `mirror_preferred_to_legacy()` (3 fields: `single_scenario_mode`, `strategy_lock`, `max_scenarios` with `ge=1, le=3` bounds)
+- `DealData` extended with two new fields appended to the existing "ZONING OVERHAUL — Session 1 additions" block: `workflow_controls: WorkflowControls` (default-constructed) and `encumbrances: List[Encumbrance]` (defaults to empty list)
+- New top-level import: `from datetime import date` (required by `Encumbrance.expiration`)
+- New regression fixture: `tests/fixtures/zoning_overhaul_session_1_5_fixture.json` — 3520 Indian Queen Lane with populated `workflow_controls` (single_scenario_mode=True, strategy_lock=value_add, max_scenarios=2) and 2 encumbrances (American Tower LEASE_TO_EASEMENT with $26,400/yr income + 2,625 SF exclusive area; Philadelphia stormwater EASEMENT)
+- Carry-forward — lambda workaround for forward-referenced default factory: `Field(default_factory=WorkflowControls)` would `NameError` because `default_factory`'s right-hand side is evaluated eagerly at class-body time, *not* deferred by `from __future__ import annotations` (which only defers type annotations). Wrapped as `Field(default_factory=lambda: WorkflowControls())` so the name lookup happens at instance-construction time. Functionally identical from Pydantic's perspective. Inline comment in `models.py` documents the why so future readers don't "fix" it. Alternative would be to reorder the Session 1 ZONING OVERHAUL section so `WorkflowControls` is defined above `DealData` — declined as more risk than the one-line workaround.
+- Gate verdict: PASSED — 8/8 criteria green:
+  1. models.py imports cleanly with new symbols
+  2. Session 1 fixture still deserializes; new `workflow_controls` and `encumbrances` fields default-engage
+  3. New fixture `workflow_controls` deserializes (single_scenario_mode, strategy_lock, max_scenarios all round-trip)
+  4. American Tower encumbrance deserializes with all 11 fields populated
+  5. EncumbranceType + `date` round-trip through `model_dump_json()` / `model_validate_json()`
+  6. `WorkflowControls.max_scenarios` bounds (ge=1, le=3) enforced — both 0 and 4 rejected
+  7. Default `DealData()` instantiates with correct Session 1.5 defaults
+  8. `git diff` scoped to `models/models.py` + new fixture only (gate script deleted before commit)
+- Deliverables:
+  - `models/models.py` — 91 line additions, 0 deletions
+  - `tests/fixtures/zoning_overhaul_session_1_5_fixture.json` — 43 new lines
+- Commit: `827149a` (`Session 1.5: Schema (models.py) — Add WorkflowControls + Encumbrance`)
+- Tag: `zoning-overhaul-session-1-5-passed`
+- Next: Session 3 (Pipeline orchestration in market.py) — wire `_SYSTEM_3C_CONF` / `_USER_3C_CONF` / `_apply_3c_conf` plus the 3C-SCEN and 3C-HBU equivalents, the `run_zoning_synthesis_chain` orchestrator, and the four-criterion confidence gate. Reads `Session_2_Prompt_Specification.md` and `FINAL_APPROVED_Prompt_Catalog_v5.md` as the implementation source of truth.
 
 ---
 
