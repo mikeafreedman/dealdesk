@@ -1,0 +1,43 @@
+{
+  "deal_id": "session_1_5_test_fixture",
+  "address": {
+    "full_address": "3520 Indian Queen Lane, Philadelphia, PA 19129"
+  },
+
+  "workflow_controls": {
+    "single_scenario_mode": true,
+    "strategy_lock": "value_add",
+    "max_scenarios": 2
+  },
+
+  "encumbrances": [
+    {
+      "type": "LEASE_TO_EASEMENT",
+      "doc_id": "53136944",
+      "grantee": "American Tower Corporation",
+      "grantor": "Indian Queen Lane LLC",
+      "description": "Cell tower lease (originally) recorded and later converted to a perpetual easement burdening the parcel. Withdraws an exclusive area from buildable use and adds a companion access/utility easement.",
+      "exclusive_area_sf": 2625.0,
+      "access_easement_width_ft": 20.0,
+      "term": "perpetual (post-conversion)",
+      "expiration": null,
+      "right_of_first_refusal": true,
+      "annual_income_usd": 26400.0,
+      "notes": "Original lease income retained post-conversion. Tower height and exclusive footprint must be reflected in any rebuild scenario; access easement runs from Indian Queen Lane frontage to the tower pad."
+    },
+    {
+      "type": "EASEMENT",
+      "doc_id": "PHILA-2018-ROW-447",
+      "grantee": "City of Philadelphia",
+      "grantor": "Indian Queen Lane LLC",
+      "description": "Public right-of-way easement along the eastern lot boundary for stormwater management.",
+      "exclusive_area_sf": 350.0,
+      "access_easement_width_ft": 10.0,
+      "term": "perpetual",
+      "expiration": null,
+      "right_of_first_refusal": false,
+      "annual_income_usd": null,
+      "notes": "City-owned ROW; cannot be vacated without council action."
+    }
+  ]
+}

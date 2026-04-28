@@ -10,6 +10,7 @@ Status:   PENDING APPROVAL
 
 from __future__ import annotations
 import re
+from datetime import date
 from enum import Enum
 from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -1087,6 +1088,19 @@ class DealData(BaseModel):
     zoning_extensions: Optional[ZoningExtensions] = None
     # ^^ Populated by 3C-HBU in Session 3. None on legacy deals.
 
+    workflow_controls: WorkflowControls = Field(default_factory=lambda: WorkflowControls())
+    # ^^ Session 1.5 addition (April 2026). Read by 3C-SCEN to constrain
+    #    scenario generation. Defaults preserve current multi-scenario behavior.
+    #    Lambda defers name lookup until first DealData() is instantiated —
+    #    WorkflowControls is defined later in the Session 1 ZONING OVERHAUL
+    #    section, so a direct reference here would NameError at import time.
+
+    encumbrances: List[Encumbrance] = Field(default_factory=list)
+    # ^^ Session 1.5 addition (April 2026). Recorded title encumbrances
+    #    (easements, leases, ROW, deed restrictions). Surfaced by Session 2
+    #    prompt design via the 3520 Indian Queen / American Tower easement
+    #    reference deal.
+
     # Market data
     market_data: MarketData = Field(default_factory=MarketData)
 
@@ -1298,6 +1312,22 @@ class ConformityStatus(str, Enum):
     CONFORMITY_INDETERMINATE = "CONFORMITY_INDETERMINATE"
 
 
+class EncumbranceType(str, Enum):
+    """
+    Type of recorded title encumbrance affecting the parcel. Materially
+    affects buildable area, scenario generation, and risk analysis.
+
+    Session 1.5 addition (April 2026). Surfaced by Session 2 prompt design
+    via the 3520 Indian Queen Lane / American Tower easement reference deal.
+    """
+    EASEMENT = "EASEMENT"
+    LEASE = "LEASE"
+    LEASE_TO_EASEMENT = "LEASE_TO_EASEMENT"  # original lease later converted to easement
+    ROW = "ROW"
+    DEED_RESTRICTION = "DEED_RESTRICTION"
+    OTHER = "OTHER"
+
+
 class NonconformityType(str, Enum):
     """
     The specific zoning dimension along which a property fails to conform.
@@ -1424,6 +1454,40 @@ class DevelopmentUpside(BaseModel):
     units_remaining: Optional[int] = None
     height_remaining_ft: Optional[float] = None
     summary: str
+
+
+class Encumbrance(BaseModel):
+    """
+    A single recorded title encumbrance burdening the parcel.
+    Sourced from title commitment, recorded documents, or survey notes.
+
+    Session 1.5 addition (April 2026). Surfaced by Session 2 prompt design;
+    materially affects buildable area, scenario generation, and risk analysis.
+    """
+    type: EncumbranceType
+    doc_id: Optional[str] = Field(default=None, description="Recorded document ID")
+    grantee: Optional[str] = None
+    grantor: Optional[str] = None
+    description: Optional[str] = None
+    exclusive_area_sf: Optional[float] = Field(
+        default=None,
+        description="SF of land withdrawn from buildable area (e.g., exclusive easement area)."
+    )
+    access_easement_width_ft: Optional[float] = Field(
+        default=None,
+        description="Width of any companion access/utility easement, in feet."
+    )
+    term: Optional[str] = Field(
+        default=None,
+        description="Free-text term description (e.g., 'perpetual', '50 years')."
+    )
+    expiration: Optional[date] = None
+    right_of_first_refusal: bool = False
+    annual_income_usd: Optional[float] = Field(
+        default=None,
+        description="If encumbrance generates revenue (e.g., cell tower lease)."
+    )
+    notes: Optional[str] = None
 
 
 # ── Top-level models ─────────────────────────────────────────────────────────
@@ -1565,6 +1629,33 @@ class ZoningExtensions(BaseModel):
         if v < 1 or v > 5:
             raise ValueError(f"use_flexibility_score must be 1-5, got {v}")
         return v
+
+
+class WorkflowControls(BaseModel):
+    """
+    User-facing controls that shape the zoning synthesis chain output.
+    Read by Prompt 3C-SCEN to constrain scenario generation.
+
+    Defaults preserve current pipeline behavior (multi-scenario, no strategy
+    lock, max 3 scenarios). Frontend is expected to expose these controls
+    as optional toggles in a future iteration.
+
+    Session 1.5 addition (April 2026). Surfaced by Session 2 prompt design.
+    """
+    single_scenario_mode: bool = Field(
+        default=False,
+        description="If True, 3C-SCEN returns exactly 1 PREFERRED scenario."
+    )
+    strategy_lock: Optional[InvestmentStrategy] = Field(
+        default=None,
+        description="If set, every generated scenario must use this strategy."
+    )
+    max_scenarios: int = Field(
+        default=3,
+        ge=1,
+        le=3,
+        description="Hard cap on number of scenarios returned by 3C-SCEN."
+    )
 
 
 # ── Utility function ─────────────────────────────────────────────────────────
