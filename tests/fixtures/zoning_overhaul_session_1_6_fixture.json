@@ -1,0 +1,196 @@
+{
+  "deal_id": "session_1_6_test_fixture",
+  "address": {
+    "full_address": "2217 N 51st Street, Philadelphia, PA 19131",
+    "city": "Philadelphia",
+    "state": "PA",
+    "zip_code": "19131"
+  },
+
+  "asset_type": "Multifamily",
+  "investment_strategy": "stabilized_hold",
+
+  "zoning": {
+    "zoning_code": "RSD-3",
+    "zoning_district": "Residential Single-Family Detached, District 3",
+    "permitted_uses": [
+      "Single-family detached dwelling (by-right)",
+      "Religious assembly (with use registration permit)",
+      "Day care",
+      "Educational facility (special exception)",
+      "Public park"
+    ],
+    "max_height_ft": 38,
+    "max_stories": 3,
+    "min_lot_area_sf": 5000,
+    "max_lot_coverage_pct": 0.30,
+    "front_setback_ft": 8,
+    "rear_setback_ft": 30,
+    "side_setback_ft": 8,
+    "min_parking_spaces": 1
+  },
+
+  "assumptions": {
+    "purchase_price": 0,
+    "num_units": 36,
+    "gba_sf": 20640,
+    "lot_sf": 10140,
+    "year_built": 1926
+  },
+
+  "conformity_assessment": {
+    "status": "MULTIPLE_NONCONFORMITIES",
+    "confidence": "HIGH",
+    "confidence_reasons": [
+      "RSD-3 zoning code source-verified from Philadelphia Title 14",
+      "All 6 dimensional standards populated",
+      "5 permitted uses listed",
+      "1926 build date predates 2012 RSD-3 zoning code rewrite by 86 years"
+    ],
+    "nonconformity_details": [
+      {
+        "nonconformity_type": "USE",
+        "standard_description": "Permitted use (RSD-3 by-right limits to single-family detached)",
+        "permitted_value": "Single-family detached dwelling",
+        "actual_value": "36-unit multifamily apartment building",
+        "magnitude_description": "Multifamily use is not permitted in RSD-3; presumed grandfathered"
+      },
+      {
+        "nonconformity_type": "DENSITY",
+        "standard_description": "Density (one unit per RSD-3 lot)",
+        "permitted_value": "1 unit",
+        "actual_value": "36 units",
+        "magnitude_description": "Existing density exceeds by-right cap by 35 units"
+      },
+      {
+        "nonconformity_type": "FRONT_SETBACK",
+        "standard_description": "Front yard setback (RSD-3 minimum)",
+        "permitted_value": "8 ft",
+        "actual_value": "approximately 4 ft",
+        "magnitude_description": "Front setback is approximately 50% of the required 8 ft minimum"
+      },
+      {
+        "nonconformity_type": "SETBACKS",
+        "standard_description": "Combined side and rear yard setbacks (coarse fallback)",
+        "permitted_value": "8 ft side / 30 ft rear",
+        "actual_value": "varies — survey required",
+        "magnitude_description": "Side and rear setbacks not yet field-verified; flagged as coarse SETBACKS pending survey"
+      }
+    ],
+    "grandfathering_status": {
+      "is_presumed_grandfathered": true,
+      "basis": "Building constructed 1926, predating the 2012 RSD-3 zoning code rewrite by 86 years; continuous 36-unit multifamily use presumed",
+      "loss_triggers": [
+        "Substantial improvement (>50% of replacement cost) without phasing",
+        "Change of use category (e.g., conversion to commercial)",
+        "Abandonment of multifamily use for more than 12 consecutive months",
+        "Demolition of a structural portion of the building"
+      ],
+      "verification_required": true,
+      "confirmation_action_required": "Pull L&I rental license history and prior zoning permits to confirm continuous multifamily use since 1926",
+      "risk_if_denied": "Property reverts to 1-unit RSD-3 by-right cap, collapsing the 36-unit underwriting thesis and reducing stabilized NOI to single-family rental economics"
+    },
+    "proposed_pathway_requirement": "VARIANCE_REQUIRED",
+    "risk_summary": "Belmont's 36-unit multifamily use is presumptively grandfathered as a legal nonconforming use under RSD-3, given the 1926 construction date. The use itself, the density, and the front setback are all nonconforming under current code. The preferred stabilized-hold scenario operates within the grandfathered envelope and carries no entitlement risk other than substantial-improvement-threshold discipline during turnover renovations. The alternate redevelopment scenario at 50 units would require a use variance from the Philadelphia Zoning Board of Adjustment.",
+    "diligence_actions_required": [
+      "Confirm continuous multifamily use via L&I rental license records",
+      "Verify renovation budget remains under substantial-improvement threshold",
+      "Order boundary survey to field-verify all setback dimensions",
+      "Obtain zoning verification letter from L&I before LOI"
+    ]
+  },
+
+  "scenarios": [
+    {
+      "scenario_id": "stabilized_hold_36u",
+      "rank": 1,
+      "scenario_name": "Stabilized Hold (36 Units, As-Built)",
+      "business_thesis": "Operate the existing 36-unit building as-is, leasing vacancies at market rents and performing only light cosmetic turnover refreshes. Preserves grandfathered legal nonconforming use; no displacement; no entitlement risk.",
+      "verdict": "PREFERRED",
+      "unit_count": 36,
+      "building_sf": 20640,
+      "use_mix": [
+        {
+          "use_category": "residential",
+          "sf": 20640,
+          "share_pct": 100.0,
+          "unit_count": 36,
+          "notes": "All floors residential; no commercial component"
+        }
+      ],
+      "operating_strategy": "Stabilized hold with light cosmetic turnover only; renovation budget per turn capped at 5% of structure value to stay well below substantial-improvement threshold",
+      "zoning_pathway": {
+        "pathway_type": "BY_RIGHT",
+        "rationale": "Operating within the existing grandfathered legal nonconforming envelope; no discretionary approval required",
+        "approval_body": "Philadelphia Department of Licenses and Inspections",
+        "estimated_timeline_months": 0,
+        "estimated_soft_cost_usd": 0,
+        "success_probability_pct": 95,
+        "fallback_if_denied": "Not applicable — no discretionary approval contemplated"
+      },
+      "construction_budget_delta_usd": null,
+      "rent_delta_pct": null,
+      "timeline_delta_months": null,
+      "key_risks": [
+        "Grandfathering loss if cumulative renovation crosses substantial-improvement threshold",
+        "RSD-3 ordinance changes could erode nonconforming protections"
+      ],
+      "entitlement_risk_flag": null
+    },
+    {
+      "scenario_id": "variance_redev_50u",
+      "rank": 2,
+      "scenario_name": "Variance Redevelopment (50 Units)",
+      "business_thesis": "Pursue a use variance from the Philadelphia Zoning Board of Adjustment to redevelop the parcel as a 50-unit multifamily building, replacing the 1926 structure. Eliminates grandfathering risk and unlocks 14 incremental units.",
+      "verdict": "ALTERNATE",
+      "unit_count": 50,
+      "building_sf": 38000,
+      "use_mix": [
+        {
+          "use_category": "residential",
+          "sf": 38000,
+          "share_pct": 100.0,
+          "unit_count": 50,
+          "notes": "All floors residential; ground floor amenity (lobby + leasing only)"
+        }
+      ],
+      "operating_strategy": "Ground-up redevelopment to modern multifamily standards; market-rate rents at Wynnefield comp set",
+      "zoning_pathway": {
+        "pathway_type": "VARIANCE",
+        "rationale": "RSD-3 prohibits multifamily by-right; a use variance is required to permit the proposed 50-unit configuration",
+        "approval_body": "Philadelphia Zoning Board of Adjustment",
+        "estimated_timeline_months": 12,
+        "estimated_soft_cost_usd": 175000,
+        "success_probability_pct": 35,
+        "fallback_if_denied": "Fall back to Scenario 1 (stabilized hold of existing 36-unit building); abandon redevelopment thesis"
+      },
+      "construction_budget_delta_usd": 8500000,
+      "rent_delta_pct": 0.18,
+      "timeline_delta_months": 18,
+      "key_risks": [
+        "RSD-3 use variances in Wynnefield have <50% historical approval rate",
+        "12-month entitlement carries significant carry cost",
+        "$175k variance soft cost is sunk if denied",
+        "Community opposition from neighboring single-family owners is likely"
+      ],
+      "entitlement_risk_flag": {
+        "severity": "HIGH",
+        "risk_summary": "Use variances in RSD-3 districts face an elevated hardship test and active community opposition. Historical approval rate in Wynnefield is below 50%. The variance economic case must be robust enough to absorb a denial without breaking the deal.",
+        "diligence_required": [
+          "Pre-application meeting with ZBA staff before LOI",
+          "Community engagement with the Wynnefield Residents Association",
+          "Comparable use-variance precedent research within 1-mile radius",
+          "Hardship narrative prepared by Philadelphia land-use counsel"
+        ]
+      }
+    }
+  ],
+
+  "zoning_extensions": {
+    "use_flexibility_score": 1,
+    "use_flexibility_explanation": "RSD-3 is the most restrictive multifamily-blocking residential district in Philadelphia. The existing 36-unit configuration is the only legal multifamily use of the parcel; any other use of meaningful scale requires a use variance with low approval probability.",
+    "overlay_impact_assessment": [],
+    "cross_scenario_recommendation": "The stabilized-hold scenario is the preferred path. The grandfathered 36-unit configuration produces stable in-place NOI with zero entitlement risk and modest renovation upside under substantial-improvement-threshold discipline. The variance redevelopment scenario is mathematically attractive at the 50-unit count but operationally fragile given RSD-3's elevated hardship test, the 35% success probability, and active community opposition risk in Wynnefield. Variance redevelopment is recommended only if a sponsor with demonstrated RSD-3 use-variance success has the deal under control and is willing to underwrite the 12-month entitlement carry plus a denial-case fallback to scenario 1 economics.",
+    "preferred_scenario_id": "stabilized_hold_36u"
+  }
+}

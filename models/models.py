@@ -1334,15 +1334,41 @@ class NonconformityType(str, Enum):
 
     Multiple instances may apply to one property (captured as a list of
     NonconformityItem records on the ConformityAssessment).
+
+    Session 1.6 (April 2026): added FRONT_SETBACK / REAR_SETBACK /
+    SIDE_SETBACK directional variants per Drift #1; SETBACKS retained as a
+    coarse fallback for cases where direction cannot be isolated. OTHER
+    added as escape hatch.
     """
     USE = "USE"
     DENSITY = "DENSITY"
     HEIGHT = "HEIGHT"
     FAR = "FAR"
+    FRONT_SETBACK = "FRONT_SETBACK"
+    REAR_SETBACK = "REAR_SETBACK"
+    SIDE_SETBACK = "SIDE_SETBACK"
     SETBACKS = "SETBACKS"
     LOT_COVERAGE = "LOT_COVERAGE"
     PARKING = "PARKING"
     LOT_AREA = "LOT_AREA"
+    OTHER = "OTHER"
+
+
+class ProposedPathwayRequirement(str, Enum):
+    """
+    Entitlement requirement for the proposed business plan.
+
+    Session 1.6 addition (April 2026). Distinct from ConformityStatus
+    (which describes the existing condition under current zoning). When
+    the proposed plan is by-right or no proposed plan is articulated,
+    set on ConformityAssessment as None rather than NONE — None means
+    "not assessed", NONE means "assessed and no discretionary approval
+    is required".
+    """
+    NONE = "NONE"
+    VARIANCE_REQUIRED = "VARIANCE_REQUIRED"
+    SPECIAL_EXCEPTION_REQUIRED = "SPECIAL_EXCEPTION_REQUIRED"
+    REZONE_REQUIRED = "REZONE_REQUIRED"
 
 
 class ScenarioVerdict(str, Enum):
@@ -1375,34 +1401,77 @@ class NonconformityItem(BaseModel):
     """
     A single instance of nonconformity. A property with multiple nonconformities
     has a list of these on its ConformityAssessment.
+
+    Session 1.6 (April 2026): renamed existing_value → actual_value to
+    match prompt convention (Drift #2); added standard_description for
+    §06 row labels (Drift #3); dropped triggers_loss_of_grandfathering —
+    loss triggers now live only on GrandfatheringStatus (Drift #4).
     """
     nonconformity_type: NonconformityType
-    existing_value: str
+    standard_description: Optional[str] = Field(
+        default=None,
+        description="Brief plain-English label for the dimensional standard "
+                    "(e.g., 'Density (units per lot SF)'). Used as a row label in §06."
+    )
     permitted_value: str
+    actual_value: str
     magnitude_description: str
-    triggers_loss_of_grandfathering: List[str] = Field(default_factory=list)
 
 
 class GrandfatheringStatus(BaseModel):
     """
-    The grandfathering posture of a nonconforming property.
+    Grandfathering posture for a legal nonconforming property.
 
     Only populated when ConformityStatus is one of the LEGAL_NONCONFORMING_*
     or MULTIPLE_NONCONFORMITIES values. None for CONFORMING and INDETERMINATE.
+
+    Session 1.6 reshape (April 2026, Drift #5): replaces the prior
+    documentation-tracking shape (is_documented / documentation_source /
+    presumption_basis / confirmation_action_required / risk_if_denied)
+    with the prompt's risk-modeling shape. Almost no pre-WWII multifamily
+    has documented grandfathering; modeling the presumption + its loss
+    triggers + verification action is the more honest IC framing.
     """
-    is_documented: bool
-    documentation_source: Optional[str] = None
-    presumption_basis: Optional[str] = None
-    confirmation_action_required: str
-    risk_if_denied: str
+    is_presumed_grandfathered: bool
+    basis: str = Field(
+        description="Plain-English basis for the presumption "
+                    "(e.g., 'Built 1926, predating current code; continuous use presumed'). "
+                    "May reference documentation if any exists."
+    )
+    loss_triggers: List[str] = Field(
+        default_factory=list,
+        description="Events that would void grandfathering "
+                    "(e.g., 'Substantial improvement >50%', 'Change of use', 'Abandonment >12 months')."
+    )
+    verification_required: bool = Field(
+        default=True,
+        description="Whether counsel verification is required before closing."
+    )
+    confirmation_action_required: Optional[str] = Field(
+        default=None,
+        description="Specific action to confirm grandfathering (e.g., 'Pull L&I rental license history')."
+    )
+    risk_if_denied: Optional[str] = Field(
+        default=None,
+        description="Plain-English consequence if grandfathering is not confirmed."
+    )
 
 
 class ZoningPathway(BaseModel):
     """
     The regulatory pathway a scenario must traverse to be approvable.
     Each DevelopmentScenario carries one of these.
+
+    Session 1.6 (April 2026, Drift #7): added rationale field for
+    plain-English justification of the pathway choice (e.g., "BY_RIGHT
+    contingent on grandfathered status confirmation").
     """
     pathway_type: ZoningPathwayType
+    rationale: Optional[str] = Field(
+        default=None,
+        description="Plain-English justification for the pathway choice "
+                    "(1-2 sentences). Surfaced in §06 next to pathway_type."
+    )
     approval_body: Optional[str] = None
     estimated_timeline_months: Optional[int] = None
     estimated_soft_cost_usd: Optional[float] = None
@@ -1426,9 +1495,18 @@ class UseAllocation(BaseModel):
     """
     Floor area allocation by use category within a scenario.
     A scenario can have multiple of these (mixed-use deals).
+
+    Session 1.6 (April 2026, Drift #7): renamed square_feet → sf
+    (matches CRE convention and the rest of the codebase); added
+    share_pct for the percentage-of-scenario-total view.
     """
     use_category: str
-    square_feet: float
+    sf: float
+    share_pct: Optional[float] = Field(
+        default=None,
+        description="Percentage of scenario total building SF allocated to this use "
+                    "(0–100). Optional — calculable from sf if absent."
+    )
     unit_count: Optional[int] = None
     notes: Optional[str] = None
 
@@ -1506,6 +1584,15 @@ class ConformityAssessment(BaseModel):
 
     nonconformity_details: List[NonconformityItem] = Field(default_factory=list)
     grandfathering_status: Optional[GrandfatheringStatus] = None
+
+    proposed_pathway_requirement: Optional[ProposedPathwayRequirement] = Field(
+        default=None,
+        description="Set only when the proposed business plan (not the existing condition) "
+                    "requires a discretionary approval. None if the proposed plan is by-right "
+                    "or no proposed plan has been articulated. Session 1.6 addition (Drift #6) — "
+                    "splits the existing-condition status (ConformityStatus) from the "
+                    "proposed-plan entitlement requirement."
+    )
 
     risk_summary: str
     diligence_actions_required: List[str] = Field(default_factory=list)

@@ -15,20 +15,21 @@
     "nonconformity_details": [
       {
         "nonconformity_type": "DENSITY",
-        "existing_value": "21 units",
+        "standard_description": "Density (units per lot SF)",
         "permitted_value": "6 units (1,440 SF/unit min × 9,652 SF lot)",
-        "magnitude_description": "Existing density exceeds by-right cap by 250%",
-        "triggers_loss_of_grandfathering": [
-          "Substantial improvement (>50% of replacement cost)",
-          "Change of use category",
-          "Abandonment of use for more than 12 consecutive months"
-        ]
+        "actual_value": "21 units",
+        "magnitude_description": "Existing density exceeds by-right cap by 250%"
       }
     ],
     "grandfathering_status": {
-      "is_documented": false,
-      "documentation_source": null,
-      "presumption_basis": "Building constructed 1930, predates current ICMX density standards",
+      "is_presumed_grandfathered": true,
+      "basis": "Building constructed 1930, predates current ICMX density standards",
+      "loss_triggers": [
+        "Substantial improvement (>50% of replacement cost)",
+        "Change of use category",
+        "Abandonment of use for more than 12 consecutive months"
+      ],
+      "verification_required": true,
       "confirmation_action_required": "Zoning verification letter from Philadelphia L&I confirming grandfathered nonconforming residential density",
       "risk_if_denied": "Property reverts to 6-unit by-right cap, collapsing the 21-unit underwriting thesis and reducing stabilized NOI by approximately 71%"
     },
@@ -50,8 +51,8 @@
       "unit_count": 21,
       "building_sf": 26424,
       "use_mix": [
-        {"use_category": "residential", "square_feet": 21668, "unit_count": 21, "notes": "floors 2-4"},
-        {"use_category": "commercial", "square_feet": 4756, "unit_count": null, "notes": "ground floor, two tenants"}
+        {"use_category": "residential", "sf": 21668, "unit_count": 21, "notes": "floors 2-4"},
+        {"use_category": "commercial", "sf": 4756, "unit_count": null, "notes": "ground floor, two tenants"}
       ],
       "operating_strategy": "Lease residential as market-rate apartments; retain existing commercial tenants on month-to-month leases at $2,000 and $2,200/month",
       "zoning_pathway": {
@@ -91,8 +92,8 @@
       "unit_count": 6,
       "building_sf": 12000,
       "use_mix": [
-        {"use_category": "residential", "square_feet": 9000, "unit_count": 6, "notes": "floors 2-3"},
-        {"use_category": "commercial", "square_feet": 3000, "unit_count": null, "notes": "ground floor"}
+        {"use_category": "residential", "sf": 9000, "unit_count": 6, "notes": "floors 2-3"},
+        {"use_category": "commercial", "sf": 3000, "unit_count": null, "notes": "ground floor"}
       ],
       "operating_strategy": "New construction with modern unit finishes targeting market-rate Northern Liberties rents; lease ground floor commercial as artisan industrial or retail",
       "zoning_pathway": {
@@ -124,8 +125,8 @@
       "unit_count": 15,
       "building_sf": 22000,
       "use_mix": [
-        {"use_category": "residential", "square_feet": 18000, "unit_count": 15, "notes": "floors 2-4"},
-        {"use_category": "commercial", "square_feet": 4000, "unit_count": null, "notes": "ground floor"}
+        {"use_category": "residential", "sf": 18000, "unit_count": 15, "notes": "floors 2-4"},
+        {"use_category": "commercial", "sf": 4000, "unit_count": null, "notes": "ground floor"}
       ],
       "operating_strategy": "Renovate-and-rebuild hybrid: preserve facade and structure where possible while reconfiguring upper floors to accommodate 15 units",
       "zoning_pathway": {
