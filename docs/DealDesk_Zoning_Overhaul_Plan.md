@@ -378,6 +378,29 @@ Mike will identify Deal B and Deal C addresses before Session 2 begins.
 - Open carry-forwards: spec referenced `models.py` at the project root, but the actual file is `models\models.py` (package layout). Session 2+ should expect this corrected path. Spec also referenced 8 sub-models in Section 1.1 prose but listed 7 in Section 2 (Section 2.8 is explicitly noted as "NOT a new model" — the cross-reference helper). Implemented the 7 actual sub-models.
 - Next: Session 2 (Prompt design + approval). Blocked only on Mike's go-ahead to begin draft-and-test cycle for `3C-CONF`, `3C-SCEN`, `3C-HBU`.
 
+### April 27, 2026 — Session 2 (Prompt Design) approved (claude.ai chat)
+- Three replacement prompts designed and approved:
+  - 3C-CONF (Conformity Assessment) — Sonnet
+  - 3C-SCEN (Scenario Generation) — Sonnet
+  - 3C-HBU (Cross-Scenario Synthesis) — Sonnet
+- Old single Prompt 3C marked DEPRECATED
+- Orchestrator function `run_zoning_synthesis_chain(deal)` specified
+- Four-criterion confidence gate specified for 3C-CONF
+- Four typed-empty fallback paths specified
+- Reference Deals B (Belmont Apartments, RSD-3) and C (3520 Indian Queen Lane,
+  split-zoned RSA-1/RSA-5 with American Tower easement) formally adopted as
+  fixtures
+- Two schema gaps surfaced and queued for Session 1.5 micro-session:
+  WorkflowControls model and Encumbrance model
+- Net incremental cost per deal: ~$0.073
+- Deliverables produced:
+  - `Session_2_Prompt_Specification.md` (working spec for Claude Code)
+  - `DealDesk_Session_2_Prompt_Design_Checkpoint.docx` (formal Word checkpoint)
+  - `FINAL_APPROVED_Prompt_Catalog_v5.md` (catalog v5 supersedes v4)
+- Gate verdict: PASSED — all 11 Session 2 gate criteria satisfied
+- Next: Session 1.5 micro-session in Claude Code (schema additions),
+  then Session 3 (wire prompts into pipeline)
+
 ---
 
 ## Glossary
