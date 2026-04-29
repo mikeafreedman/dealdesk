@@ -14,6 +14,13 @@ Rules (RED / AMBER / GREEN):
   R6 LP IRR < min_lp_irr     → AMBER "LP IRR below threshold"
   R7 Unemployment > 7%       → AMBER "Above-average unemployment"
 
+Public API beyond the rules engine:
+  R8 (Session 5) get_zoning_flag(deal) → RED "Zoning nonconformity"
+     Public function (NOT in _RULES tuple) — consumed directly by
+     context_builder.build_context() to populate the §8 zoning DD flag.
+     Returns Optional[DdFlag]; None when conformity_assessment is None
+     or status is CONFORMING.
+
 Each rule is a pure function deal → Optional[DdFlag]. No side effects.
 Failed reads return None (flag skipped). Results are appended to
 deal.dd_flags in rule order; existing flags are NOT cleared so callers
@@ -25,7 +32,14 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from models.models import DealData, DdFlag, DdFlagColor
+from models.models import (
+    ConformityAssessment,
+    ConformityStatus,
+    DealData,
+    DdFlag,
+    DdFlagColor,
+    Encumbrance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +215,121 @@ def _r7_high_unemployment(deal: DealData) -> Optional[DdFlag]:
     return None
 
 
+# ── R8 Zoning nonconformity (Session 5 — direct consumption by build_context) ─
+
+def _build_nonconformity_body(
+    ca: ConformityAssessment,
+    encs: List[Encumbrance],
+) -> str:
+    """Build the narrative body for the zoning-nonconformity flag.
+
+    Per Session 5 kickoff §4.2 + Phase-2 mapping decisions:
+      - Opening sentence: states conformity status (formatted) and zoning code.
+      - One bullet per nonconformity_details item: label, actual vs permitted.
+      - One bullet per encumbrance: doc id, grantee, type, key terms.
+      - Closing instruction lives in `remediation` (Phase-2 decision E14 —
+        matches the R1-R7 pattern), NOT here in the body.
+    """
+    lines: List[str] = []
+
+    # Opening — humanize the enum value (LEGAL_NONCONFORMING_USE → "Legal Nonconforming Use")
+    status_str = (
+        ca.status.value.replace("_", " ").title()
+        if ca.status else "Indeterminate"
+    )
+    lines.append(
+        f"Property is classified as {status_str} under current zoning."
+    )
+
+    # Nonconforming dimensions (all entries are failures by schema construction —
+    # nonconformity_details only contains items that fail to conform)
+    if ca.nonconformity_details:
+        lines.append("")
+        lines.append("Nonconforming dimensions:")
+        for item in ca.nonconformity_details:
+            label = (
+                item.standard_description
+                or item.nonconformity_type.value.replace("_", " ").title()
+            )
+            lines.append(
+                f"  - {label}: actual {item.actual_value}; "
+                f"permitted {item.permitted_value}."
+            )
+
+    # Encumbrances
+    if encs:
+        lines.append("")
+        lines.append("Recorded encumbrances:")
+        for enc in encs:
+            terms_parts: List[str] = []
+            if enc.term:
+                terms_parts.append(str(enc.term))
+            if enc.expiration:
+                terms_parts.append(f"exp. {enc.expiration}")
+            if enc.right_of_first_refusal:
+                terms_parts.append("ROFR")
+            terms = " | ".join(terms_parts) if terms_parts else "no key terms recorded"
+            doc = enc.doc_id or "(no doc id)"
+            grantee = enc.grantee or "(unknown grantee)"
+            lines.append(
+                f"  - Doc {doc} ({grantee}, {enc.type.value}): {terms}."
+            )
+
+    return "\n".join(lines)
+
+
+def get_zoning_flag(deal: DealData) -> Optional[DdFlag]:
+    """R8 — Session 5 zoning-nonconformity DD flag.
+
+    Returns a DdFlag when the deal's conformity_assessment indicates a
+    nonconforming property; None otherwise. Consumed directly by
+    context_builder.build_context() to populate the §8 `zoning_nonconformity_flag`
+    context key — NOT registered in the _RULES tuple, so this flag does not
+    auto-append to deal.dd_flags via generate_dd_flags(). The §8 rendering
+    path is the sole consumer.
+
+    Per Session 5 kickoff §4.1 + Phase-2 mapping decisions E12-E14:
+      - DdFlag (camelCase), not DDFlag.
+      - color=DdFlagColor.RED (no severity field in DdFlag — RED maps from HIGH).
+      - narrative (not body); category="Zoning"; remediation captures the
+        closing instruction.
+      - flag_id="R8_ZONING_NONCONFORMITY" (next sequential after R7; matches
+        R1-R7 naming convention).
+
+    Trigger condition (kickoff §4.1 literal): fires whenever
+    conformity_assessment is non-None and status != CONFORMING. That includes
+    all LEGAL_NONCONFORMING_* axes, MULTIPLE_NONCONFORMITIES, ILLEGAL_NONCONFORMING,
+    and CONFORMITY_INDETERMINATE.
+    """
+    ca = deal.conformity_assessment
+    # Trigger: skip when no assessment, when CONFORMING (no issue), or when
+    # CONFORMITY_INDETERMINATE (we don't know — better to render nothing in §8
+    # than emit a misleading RED flag for an inconclusive assessment).
+    if ca is None or ca.status in (
+        ConformityStatus.CONFORMING,
+        ConformityStatus.CONFORMITY_INDETERMINATE,
+    ):
+        return None
+
+    encs = deal.encumbrances or []
+    municipality = (
+        (deal.address.city or "the municipality")
+        if deal.address else "the municipality"
+    )
+
+    return DdFlag(
+        flag_id="R8_ZONING_NONCONFORMITY",
+        color=DdFlagColor.RED,
+        category="Zoning",
+        title="Zoning nonconformity — due diligence required",
+        narrative=_build_nonconformity_body(ca, encs),
+        remediation=(
+            f"Confirm legal nonconforming status via {municipality} L&I "
+            "records before closing."
+        ),
+    )
+
+
 _RULES = (
     _r1_vintage,
     _r2_no_phase_i,
@@ -209,6 +338,7 @@ _RULES = (
     _r5_refi_equity_injection,
     _r6_lp_irr_under_min,
     _r7_high_unemployment,
+    get_zoning_flag,  # R8 — Session 5. Also exposed publicly for build_context.
 )
 
 

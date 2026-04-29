@@ -28,8 +28,9 @@ from config import (
     MODEL_SONNET,
     USE_4REC_SPECIALIST,
 )
+from dd_flag_engine import get_zoning_flag
 from financials import _compute_peak_funded_equity
-from models.models import DealData, RecommendationVerdict
+from models.models import DealData, RecommendationVerdict, ScenarioVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -1560,6 +1561,121 @@ def _title_case_address(raw: str) -> str:
         return w.upper() if w.upper() in _US_STATE_CODES else w
     s = _re.sub(r"\b[A-Z][a-z]\b", _fix_state, s)
     return s
+
+
+# ── Session 5 zoning-overhaul context helpers ────────────────────────────────
+# Per Session 5 kickoff §3.1, build_context() exposes structured zoning data
+# to the §8/§9 template components (badge, dimension grid, scenario cards, HBU
+# synthesis). All values have safe fallbacks so the template never KeyErrors.
+
+_PATHWAY_CSS_CLASS = {
+    # Per kickoff §5.3 + Phase-2 mapping decision D11:
+    # CONDITIONAL_USE folds into .pathway-special (functionally equivalent risk tier);
+    # REZONE folds into .pathway-variance (same discretionary-approval risk tier).
+    "BY_RIGHT":          "pathway-byright",
+    "CONDITIONAL_USE":   "pathway-special",
+    "SPECIAL_EXCEPTION": "pathway-special",
+    "VARIANCE":          "pathway-variance",
+    "REZONE":            "pathway-variance",
+}
+
+_BADGE_CSS_CLASS = {
+    # Per kickoff §5.1 + Phase-2 mapping decision B7:
+    # All LEGAL_NONCONFORMING_* axes + MULTIPLE_NONCONFORMITIES collapse to amber;
+    # ILLEGAL_NONCONFORMING is the strict-red badge; INDETERMINATE is gray-pending.
+    "CONFORMING":                      "badge-conforming",
+    "LEGAL_NONCONFORMING_USE":         "badge-legal",
+    "LEGAL_NONCONFORMING_DENSITY":     "badge-legal",
+    "LEGAL_NONCONFORMING_DIMENSIONAL": "badge-legal",
+    "MULTIPLE_NONCONFORMITIES":        "badge-legal",
+    "ILLEGAL_NONCONFORMING":           "badge-nonconforming",
+    "CONFORMITY_INDETERMINATE":        "badge-pending",
+}
+
+
+def _build_conformity_context(deal: DealData) -> dict:
+    """Build the context.conformity dict for §8 (badge + dimension grid).
+
+    Returns a dict with status, zoning_code, district_name, dimensions, and a
+    derived badge_css_class. Empty/safe defaults when conformity_assessment is
+    None — the template renders an ASSESSMENT-PENDING badge in that case.
+    """
+    ca = deal.conformity_assessment
+    zoning_code = (deal.zoning.zoning_code or "") if deal.zoning else ""
+    district_name = (deal.zoning.zoning_district or "") if deal.zoning else ""
+
+    if ca is None:
+        return {
+            "status": "CONFORMITY_INDETERMINATE",
+            "zoning_code": zoning_code,
+            "district_name": district_name,
+            "dimensions": [],
+            "badge_css_class": _BADGE_CSS_CLASS["CONFORMITY_INDETERMINATE"],
+        }
+
+    status_value = ca.status.value if ca.status else "CONFORMITY_INDETERMINATE"
+    return {
+        "status": status_value,
+        "zoning_code": zoning_code,
+        "district_name": district_name,
+        "dimensions": [
+            {
+                "label":     item.standard_description or item.nonconformity_type.value,
+                "actual":    item.actual_value,
+                "permitted": item.permitted_value,
+                "status":    "fail",
+            }
+            for item in (ca.nonconformity_details or [])
+        ],
+        "badge_css_class": _BADGE_CSS_CLASS.get(status_value, "badge-pending"),
+    }
+
+
+def _build_zoning_ext_context(deal: DealData) -> dict:
+    """Build the context.zoning_ext dict for §8 HBU synthesis + §9 narrative.
+
+    Per Phase-2 mapping decisions C8/C9: use_flexibility_score is a flat int
+    on the 1-5 scale (NOT a UseFlexibilityScore object with a .score sub-attr).
+    Empty/safe defaults when zoning_extensions is None.
+    """
+    ze = deal.zoning_extensions
+    if ze is None:
+        return {
+            "cross_scenario_recommendation": "",
+            "preferred_scenario_id":         None,
+            "use_flexibility_score":         None,
+        }
+    return {
+        "cross_scenario_recommendation": ze.cross_scenario_recommendation or "",
+        "preferred_scenario_id":         ze.preferred_scenario_id or None,
+        "use_flexibility_score":         ze.use_flexibility_score,
+    }
+
+
+def _annotate_scenarios_with_pathway_class(scenarios) -> list:
+    """Attach a `pathway_css_class` attribute to each scenario for template use.
+
+    Per Phase-2 mapping decision D11: when scenario.zoning_pathway is None, emit
+    .pathway-submitted (the as_submitted-fallback case). Otherwise look up the
+    enum value in _PATHWAY_CSS_CLASS. Returns the original list (mutates each
+    scenario object via setattr — safe because scenarios are Pydantic models
+    and the attribute is read-only template metadata, not a schema field).
+    """
+    for s in scenarios or []:
+        if s.zoning_pathway is None:
+            css = "pathway-submitted"
+        else:
+            pathway_value = s.zoning_pathway.pathway_type.value
+            css = _PATHWAY_CSS_CLASS.get(pathway_value, "pathway-submitted")
+        # Pydantic v2 models permit attribute set unless strict; we set a
+        # template-only attr that the schema validator never sees.
+        try:
+            object.__setattr__(s, "pathway_css_class", css)
+        except Exception:
+            # Defensive: if the model is frozen, fall back to silent skip.
+            # Template will render without the class (defaulting to base styling).
+            pass
+    return list(scenarios or [])
 
 
 def build_context(deal: DealData) -> dict:
@@ -3666,6 +3782,30 @@ def build_context(deal: DealData) -> dict:
     ]
     for _k in _table_placeholders:
         ctx.setdefault(_k, "")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SESSION 5 — ZONING OVERHAUL RENDERING KEYS
+    # ══════════════════════════════════════════════════════════════════════
+    # Per Session 5 kickoff §3.1. CP1 added 10 keys; CP2 adds the 11th
+    # (zoning_nonconformity_flag) sourced from dd_flag_engine.get_zoning_flag.
+    # All values have safe fallbacks; template never raises KeyError.
+    ctx["conformity"] = _build_conformity_context(deal)
+    ctx["scenarios"] = _annotate_scenarios_with_pathway_class(deal.scenarios)
+    ctx["preferred_scenario"] = next(
+        (s for s in (deal.scenarios or []) if s.verdict == ScenarioVerdict.PREFERRED),
+        None,
+    )
+    ctx["zoning_ext"] = _build_zoning_ext_context(deal)
+    ctx["zoning_nonconformity_flag"] = get_zoning_flag(deal)
+    logger.info(
+        "SESSION 5 CONTEXT: conformity.status=%s, scenarios=%d, preferred=%s, "
+        "zoning_ext.use_flex=%s, nonconformity_flag=%s",
+        ctx["conformity"]["status"],
+        len(ctx["scenarios"]),
+        ctx["preferred_scenario"].scenario_id if ctx["preferred_scenario"] else None,
+        ctx["zoning_ext"]["use_flexibility_score"],
+        ctx["zoning_nonconformity_flag"].flag_id if ctx["zoning_nonconformity_flag"] else None,
+    )
 
     # ══════════════════════════════════════════════════════════════════════
     # CONTEXT COMPLETENESS AUDIT — logs every critical key's state so any

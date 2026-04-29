@@ -476,6 +476,30 @@
     <div class="section-title">Zoning &amp; Highest and Best Use</div>
   </div>
 
+  {# ── Session 5: Conformity status badge (kickoff §5.1) ────────────────── #}
+  {% if conformity %}
+  <div class="conformity-badge {{ conformity.badge_css_class }}">
+    <span class="badge-dot"></span>
+    <span class="badge-status">{{ conformity.status.replace('_', ' ').title() }}</span>
+    {% if conformity.zoning_code %}
+    <span class="badge-meta">— {{ conformity.zoning_code }}{% if conformity.district_name %} ({{ conformity.district_name }}){% endif %}</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# ── Session 5: Dimension grid (kickoff §5.2 — omitted if empty) ──────── #}
+  {% if conformity and conformity.dimensions %}
+  <div class="dimension-grid">
+    {% for dim in conformity.dimensions %}
+    <div class="dimension-card {{ dim.status }}">
+      <div class="dimension-card-label">{{ dim.label }}</div>
+      <div class="dimension-card-value">{{ dim.actual }}</div>
+      <div class="dimension-card-permitted">Permitted: {{ dim.permitted }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if zoning_overview %}<div class="narrative">{{ zoning_overview }}</div>{% endif %}
 
   {% if zoning_standards_rows %}
@@ -569,12 +593,97 @@
   {% endif %}
   {% endif %}
 
-  {% if highest_best_use or hbu_content or hbu_narrative %}
+  {# ── Session 5: Scenario cards (kickoff §5.3 — 1-3 cards, preferred flagged) ── #}
+  {% if scenarios and scenarios|length > 0 %}
+  <div class="subsection-title">Development Scenarios</div>
+  <div class="scenario-cards">
+    {% for scenario in scenarios %}
+    <div class="scenario-card {% if scenario.verdict.value == 'PREFERRED' %}preferred{% endif %}">
+      <div class="scenario-card-header">
+        <span class="scenario-rank-badge">{{ scenario.rank }}</span>
+        <span class="pathway-pill {{ scenario.pathway_css_class }}">
+          {% if scenario.zoning_pathway %}{{ scenario.zoning_pathway.pathway_type.value.replace('_', ' ').title() }}{% else %}As Submitted{% endif %}
+        </span>
+      </div>
+      <div class="scenario-name">{{ scenario.scenario_name }}</div>
+      <div class="scenario-thesis">{{ scenario.business_thesis }}</div>
+      {% if scenario.financial_outputs %}
+      <div class="scenario-metrics">
+        {% if scenario.financial_outputs.noi_yr1 is not none %}
+        <div class="scenario-metric-label">NOI Yr1</div>
+        <div class="scenario-metric-value">${{ '{:,.0f}'.format(scenario.financial_outputs.noi_yr1) }}</div>
+        {% endif %}
+        {% if scenario.financial_outputs.project_irr is not none %}
+        <div class="scenario-metric-label">Project IRR</div>
+        <div class="scenario-metric-value">{{ '{:.1%}'.format(scenario.financial_outputs.project_irr) }}</div>
+        {% endif %}
+        {% if scenario.financial_outputs.lp_equity_multiple is not none %}
+        <div class="scenario-metric-label">LP EM</div>
+        <div class="scenario-metric-value">{{ '{:.2f}x'.format(scenario.financial_outputs.lp_equity_multiple) }}</div>
+        {% endif %}
+        {% if scenario.financial_outputs.total_uses is not none %}
+        <div class="scenario-metric-label">Total Project Cost</div>
+        <div class="scenario-metric-value">${{ '{:,.0f}'.format(scenario.financial_outputs.total_uses) }}</div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# ── Session 5: HBU synthesis block (kickoff §5.4 — primary path) ─────── #}
+  {% if zoning_ext and zoning_ext.cross_scenario_recommendation %}
+  <div class="hbu-synthesis">
+    <div class="hbu-synthesis-label">Highest &amp; Best Use — Cross-Scenario Synthesis</div>
+    <div class="hbu-synthesis-narrative">{{ zoning_ext.cross_scenario_recommendation }}</div>
+
+    {% if preferred_scenario %}
+    <div class="hbu-preferred-callout">
+      <strong>Preferred scenario:</strong> {{ preferred_scenario.scenario_name }}
+    </div>
+    {% endif %}
+
+    {% if zoning_ext.use_flexibility_score is not none %}
+    {# Phase-2 decision C9: score is 1-5 (NOT 1-10). Bar fill = score/5*100%. #}
+    {# Thresholds: Low = 1-2, Medium = 3, High = 4-5. #}
+    {% set score = zoning_ext.use_flexibility_score %}
+    {% set fill_pct = (score / 5 * 100)|round(0, 'floor')|int %}
+    {% if score <= 2 %}{% set tier = 'Low' %}
+    {% elif score == 3 %}{% set tier = 'Medium' %}
+    {% else %}{% set tier = 'High' %}{% endif %}
+    <div class="hbu-flex-score">
+      <span class="hbu-flex-score-label">Use flexibility score:</span>
+      <div class="hbu-flex-score-bar">
+        <div class="hbu-flex-score-fill" style="width: {{ fill_pct }}%;"></div>
+      </div>
+      <span class="hbu-flex-score-value">{{ score }} / 5 — {{ tier }}</span>
+    </div>
+    {% endif %}
+  </div>
+  {% elif highest_best_use or hbu_content or hbu_narrative %}
+  {# Legacy fallback (kickoff §2.4 + Q3 confirmed): pre-Session-3 deals or
+     deals where zoning_extensions hasn't been populated still render the old
+     flat HBU narrative. #}
   <div class="subsection-title">Highest &amp; Best Use</div>
   <div class="narrative">{{ highest_best_use or hbu_content or hbu_narrative }}</div>
   {% if hbu_conclusion %}
   <div class="callout"><strong>HBU Conclusion:</strong> {{ hbu_conclusion }}</div>
   {% endif %}
+  {% endif %}
+
+  {# ── Session 5: Zoning nonconformity DD flag (kickoff §5.5) ───────────── #}
+  {% if zoning_nonconformity_flag %}
+  <div class="zoning-dd-flag">
+    <div class="zoning-dd-flag-icon">!</div>
+    <div class="zoning-dd-flag-body">
+      <div class="zoning-dd-flag-title">{{ zoning_nonconformity_flag.title }}</div>
+      <div class="zoning-dd-flag-text">{{ zoning_nonconformity_flag.narrative }}</div>
+      {% if zoning_nonconformity_flag.remediation %}
+      <div class="zoning-dd-flag-remediation">{{ zoning_nonconformity_flag.remediation }}</div>
+      {% endif %}
+    </div>
+  </div>
   {% endif %}
 
 </div>

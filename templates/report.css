@@ -1574,3 +1574,286 @@ h4, .subsection-title {
   margin-right: 8pt;
   font-size: 11pt;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SESSION 5 — ZONING OVERHAUL §06 RENDERING
+   Conformity badge, dimension grid, scenario cards, HBU synthesis,
+   zoning DD flag. Per kickoff §5.1-§5.5 + Phase-2 mapping decisions.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Conformity status badge (kickoff §5.1) ───────────────────────────────── */
+.conformity-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8pt;
+  padding: 6pt 12pt;
+  border-radius: 4pt;
+  border: 0.5pt solid;
+  font-size: 11pt;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 12pt 0 8pt 0;
+}
+.conformity-badge .badge-dot {
+  width: 8pt;
+  height: 8pt;
+  border-radius: 50%;
+  display: inline-block;
+}
+.conformity-badge .badge-meta {
+  font-weight: 400;
+  font-size: 10pt;
+  opacity: 0.85;
+}
+.badge-conforming     { background: #EAF3DE; border-color: #97C459; color: #3B6D11; }
+.badge-conforming     .badge-dot { background: #639922; }
+.badge-nonconforming  { background: #FCEBEB; border-color: #F09595; color: #791F1F; }
+.badge-nonconforming  .badge-dot { background: #E24B4A; }
+.badge-legal          { background: #FAEEDA; border-color: #EF9F27; color: #633806; }
+.badge-legal          .badge-dot { background: #BA7517; }
+.badge-pending        { background: var(--parchment); border-color: var(--earth-light); color: var(--earth); }
+.badge-pending        .badge-dot { background: var(--earth); }
+
+/* ── Dimension grid (kickoff §5.2 — 3-column card layout, fail/warn/pass) ──*/
+.dimension-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8pt;
+  margin: 12pt 0 18pt 0;
+}
+.dimension-card {
+  border: 0.5pt solid var(--earth-light);
+  border-radius: 4pt;
+  padding: 8pt 10pt;
+  background: var(--white);
+  page-break-inside: avoid;
+}
+.dimension-card-label {
+  font-size: 9pt;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--earth-mid);
+  margin-bottom: 4pt;
+}
+.dimension-card-value {
+  font-size: 11pt;
+  font-weight: 600;
+  margin-bottom: 2pt;
+}
+.dimension-card-permitted {
+  font-size: 10pt;
+  color: var(--earth);
+  font-style: italic;
+}
+.dimension-card.pass  .dimension-card-value { color: #3B6D11; }
+.dimension-card.fail  .dimension-card-value { color: #A32D2D; }
+.dimension-card.warn  .dimension-card-value { color: #854F0B; }
+
+/* ── Scenario cards (kickoff §5.3 — flex row of 1-3 cards) ────────────────*/
+.scenario-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12pt;
+  margin: 16pt 0 18pt 0;
+}
+.scenario-card {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 0.5pt solid var(--earth-light);
+  border-radius: 4pt;
+  padding: 12pt;
+  background: var(--white);
+  position: relative;
+  page-break-inside: avoid;
+}
+.scenario-card.preferred {
+  border: 1.5pt solid var(--sage-deep);
+}
+.scenario-card.preferred::after {
+  content: "Preferred";
+  position: absolute;
+  top: -8pt;
+  right: 10pt;
+  background: var(--sage-deep);
+  color: var(--white);
+  font-size: 8pt;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2pt 8pt;
+  border-radius: 2pt;
+}
+.scenario-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8pt;
+  margin-bottom: 6pt;
+}
+.scenario-rank-badge {
+  background: var(--earth-mid);
+  color: var(--white);
+  font-size: 9pt;
+  font-weight: 700;
+  width: 18pt;
+  height: 18pt;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pathway-pill {
+  display: inline-block;
+  padding: 2pt 8pt;
+  border-radius: 10pt;
+  font-size: 9pt;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pathway-byright   { background: #EAF3DE; color: #3B6D11; }
+.pathway-special   { background: #E6F1FB; color: #185FA5; }
+.pathway-variance  { background: #FAEEDA; color: #633806; }
+.pathway-submitted { background: var(--parchment); color: var(--earth); }
+.scenario-name {
+  font-size: 12pt;
+  font-weight: 600;
+  margin-bottom: 4pt;
+}
+.scenario-thesis {
+  font-size: 10pt;
+  color: var(--dark-walnut);
+  margin-bottom: 8pt;
+  line-height: 1.45;
+}
+.scenario-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4pt 10pt;
+  font-size: 9pt;
+  margin-top: 8pt;
+  padding-top: 8pt;
+  border-top: 0.25pt solid var(--earth-light);
+}
+.scenario-metric-label {
+  color: var(--earth);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 8pt;
+}
+.scenario-metric-value {
+  color: var(--dark-walnut);
+  font-weight: 600;
+}
+
+/* ── HBU synthesis block (kickoff §5.4 — gray panel with score bar) ──────*/
+.hbu-synthesis {
+  background: var(--parchment);
+  border-radius: 4pt;
+  padding: 16pt 18pt;
+  margin: 16pt 0 12pt 0;
+  page-break-inside: avoid;
+}
+.hbu-synthesis-label {
+  font-size: 9pt;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--earth-mid);
+  margin-bottom: 8pt;
+}
+.hbu-synthesis-narrative {
+  font-size: 12pt;
+  color: var(--dark-walnut);
+  line-height: 1.55;
+  margin-bottom: 12pt;
+}
+.hbu-preferred-callout {
+  border-left: 2pt solid var(--sage-deep);
+  padding: 6pt 10pt;
+  background: var(--white);
+  font-size: 11pt;
+  margin: 10pt 0 12pt 0;
+}
+.hbu-preferred-callout strong {
+  color: var(--sage-deep);
+}
+.hbu-flex-score {
+  display: flex;
+  align-items: center;
+  gap: 10pt;
+  margin-top: 10pt;
+}
+.hbu-flex-score-label {
+  font-size: 10pt;
+  color: var(--earth);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.hbu-flex-score-bar {
+  flex: 1;
+  height: 4pt;
+  background: var(--earth-light);
+  border-radius: 2pt;
+  position: relative;
+  overflow: hidden;
+}
+.hbu-flex-score-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--sage-deep);
+  border-radius: 2pt;
+}
+.hbu-flex-score-value {
+  font-size: 10pt;
+  font-weight: 600;
+  color: var(--dark-walnut);
+  white-space: nowrap;
+}
+
+/* ── Zoning nonconformity DD flag (kickoff §5.5) ───────────────────────────*/
+.zoning-dd-flag {
+  display: flex;
+  align-items: flex-start;
+  gap: 10pt;
+  background: #FCEBEB;
+  border: 0.5pt solid #F09595;
+  border-radius: 6pt;
+  padding: 10pt 12pt;
+  margin: 12pt 0 8pt 0;
+  page-break-inside: avoid;
+}
+.zoning-dd-flag-icon {
+  flex: 0 0 auto;
+  width: 14pt;
+  height: 14pt;
+  border-radius: 50%;
+  background: #E24B4A;
+  color: var(--white);
+  font-size: 10pt;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.zoning-dd-flag-body {
+  flex: 1 1 auto;
+  color: #791F1F;
+  line-height: 1.5;
+}
+.zoning-dd-flag-title {
+  font-weight: 500;
+  font-size: 11pt;
+  margin-bottom: 4pt;
+}
+.zoning-dd-flag-text {
+  font-size: 11pt;
+  white-space: pre-line;
+}
+.zoning-dd-flag-remediation {
+  margin-top: 6pt;
+  font-size: 10pt;
+  font-style: italic;
+}
