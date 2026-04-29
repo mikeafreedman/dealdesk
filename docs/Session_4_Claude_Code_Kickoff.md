@@ -500,8 +500,6 @@ Session 4: financials + excel_builder — Per-scenario fan-out + legacy mirror
 
 Implements the multi-scenario architecture from the zoning overhaul plan.
 Closes carry-forward #6 (gate-failure short-circuit).
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 ```
 
 Tag: `zoning-overhaul-session-4-passed`

@@ -326,6 +326,18 @@ CRITICAL RULES — PADDING IS PROHIBITED
 8. Each scenario's business_thesis is 2-3 sentences explaining the
    rationale. Each scenario's zoning_pathway has a pathway_type enum and
    a candid success_probability_pct (0-100, your honest estimate).
+9. Express budget, rent, and timeline as deltas against the
+   baseline_assumptions provided. Specifically:
+   - construction_budget_delta_usd is the dollar delta vs. the baseline
+     construction budget. A delta of 0 means no change from baseline.
+     Use null only when not applicable (e.g., stabilized hold of
+     existing building with no construction).
+   - rent_delta_pct is the fractional delta vs. baseline rents (0.05 =
+     +5% premium; -0.10 = -10% concession). Use null when not applicable.
+   - timeline_delta_months is the integer month delta vs. baseline
+     timeline. Negative numbers shorten; positive numbers extend.
+   These delta fields drive the financial fan-out in Session 4. A
+   non-anchored absolute number will produce wrong NOI / IRR.
 
 OUTPUT FORMAT
 Return ONLY the JSON array of scenario objects below. No preamble, no

@@ -1,4 +1,5 @@
 {
+  "_fixture_notes": "Zoning-only test fixture. Financial assumptions are intentionally minimal (industrial pre-development site, no rent roll, no NOI). Smoke tests use Belmont assumptions as financial substrate. Do not use for financial output testing.",
   "deal_id": "session_3_test_fixture_indian_queen",
   "deal_description": "42,420 SF warehouse on a 68,389 SF parcel in East Falls, Philadelphia, split between RSA-1 and RSA-5 residential zoning districts. Site burdened by two cell-tower encumbrances (American Tower easement; SBC Tower lease-to-easement). Opportunistic redevelopment thesis pursuing residential variance; CMA prepared three revised schemes (courtyard 95u, townhomes 88u, garden 84u).",
 

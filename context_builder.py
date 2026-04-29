@@ -2283,7 +2283,9 @@ def build_context(deal: DealData) -> dict:
         ctx[f"show_{sid}"] = sid not in suppressed
 
     # All narrative fields
-    for field_name in narr.model_fields:
+    # Pydantic v2.11+: model_fields must be accessed on the class, not the
+    # instance (instance access is deprecated, removed in v3).
+    for field_name in type(narr).model_fields:
         ctx[field_name] = getattr(narr, field_name) or ""
 
     # Investor mode flag

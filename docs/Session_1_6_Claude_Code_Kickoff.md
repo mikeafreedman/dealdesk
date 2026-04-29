@@ -350,8 +350,6 @@ Session 1.6: Schema realignment — Resolve drift between Session 1 schema and S
 Resolves 8 drift points + 1 cross-cutting Reference Deal A status contradiction
 documented in docs/Session_1_6_Drift_Report.md. Surfaced during Session 3 reading;
 unblocks Session 3 wiring with no bridging logic required in apply functions.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 ```
 
 Tag: `zoning-overhaul-session-1-6-passed`
@@ -370,8 +368,6 @@ docs: Session 1.6 complete + master plan status table sync + spec realignment
 - Sync Current Session Status table:
   - Session 1.6: NEW ROW, COMPLETED
   - Session 3: READY (awaiting Mike approval to resume; original kickoff sheet remains valid)
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 ```
 
 No tag on the docs commit — Session 1.6 is already tagged at the code commit.

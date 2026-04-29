@@ -160,8 +160,6 @@ Session 3: market.py — Replace Prompt 3C with three-prompt synthesis chain
 - Add Reference Deal B (Belmont) and C (Indian Queen) test fixtures
 
 Implements Session 2 prompt design. Pure replacement; no schema changes.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 ```
 
 Tag: `zoning-overhaul-session-3-passed`
@@ -177,8 +175,6 @@ docs: Session 3 complete + master plan status table sync
 - Sync Current Session Status table:
   - Session 3: READY → COMPLETED
   - Session 4: BLOCKED on Session 3 → READY (kickoff sheet pending)
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 ```
 
 No tag on the docs commit — Session 3 is already tagged at the code commit.

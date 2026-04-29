@@ -32,7 +32,6 @@ from collections import Counter
 from datetime import datetime
 from io import StringIO
 from typing import Any, Dict, List, Optional
-from xml.etree import ElementTree as ET
 
 import anthropic
 import pandas as pd
@@ -3318,54 +3317,8 @@ def run_zoning_synthesis_chain(deal: DealData) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════════════════
-# COMP PIPELINE — ZORI, Census rents, Craigslist, OPA sales, Redfin
+# COMP PIPELINE — ZORI, Census rents, OPA sales, Redfin
 # ═══════════════════════════════════════════════════════════════════════════
-
-# Canonical Craigslist subdomain slugs. Widen as needed.
-_CRAIGSLIST_SLUGS: Dict[tuple, str] = {
-    ("PA", "Philadelphia"):   "philadelphia",
-    ("PA", "Pittsburgh"):     "pittsburgh",
-    ("NJ", "Newark"):         "newjersey",
-    ("NJ", "Jersey City"):    "newjersey",
-    ("NY", "New York"):       "newyork",
-    ("NY", "Brooklyn"):       "newyork",
-    ("DC", "Washington"):     "washingtondc",
-    ("MD", "Baltimore"):      "baltimore",
-    ("VA", "Richmond"):       "richmond",
-    ("MA", "Boston"):         "boston",
-    ("IL", "Chicago"):        "chicago",
-    ("TX", "Houston"):        "houston",
-    ("TX", "Dallas"):         "dallas",
-    ("CA", "Los Angeles"):    "losangeles",
-    ("CA", "San Francisco"):  "sfbay",
-    ("FL", "Miami"):          "miami",
-    ("FL", "Tampa"):          "tampa",
-    ("GA", "Atlanta"):        "atlanta",
-    ("CO", "Denver"):         "denver",
-    ("AZ", "Phoenix"):        "phoenix",
-    ("WA", "Seattle"):        "seattle",
-    ("OR", "Portland"):       "portland",
-    ("MN", "Minneapolis"):    "minneapolis",
-    ("MO", "St. Louis"):      "stlouis",
-    ("OH", "Columbus"):       "columbus",
-    ("OH", "Cleveland"):      "cleveland",
-    ("MI", "Detroit"):        "detroit",
-    ("NC", "Charlotte"):      "charlotte",
-    ("NC", "Raleigh"):        "raleigh",
-    ("TN", "Nashville"):      "nashville",
-    ("TN", "Memphis"):        "memphis",
-}
-
-
-def _get_craigslist_city_slug(state: str, city: str) -> str:
-    key = (state.upper()[:2], city.strip())
-    if key in _CRAIGSLIST_SLUGS:
-        return _CRAIGSLIST_SLUGS[key]
-    for (s, _c), slug in _CRAIGSLIST_SLUGS.items():
-        if s == state.upper()[:2]:
-            return slug
-    logger.warning("CRAIGSLIST: no slug for %s, %s", city, state)
-    return ""
 
 
 def _fetch_zori_rent(zip_code: str, md: MarketData) -> None:
@@ -3447,96 +3400,6 @@ def _fetch_census_rents(state_fips: str, county_fips: str,
         )
     except Exception as exc:
         logger.warning("CENSUS RENTS failed: %s", exc)
-
-
-def _fetch_craigslist_rentals(zip_code: str, city_slug: str,
-                               deal: DealData,
-                               max_results: int = 10) -> None:
-    """Craigslist rental RSS → append RentComp rows for every bedroom tier
-    (Studio through 4BR) into deal.comps.rent_comps.
-
-    The RSS endpoint accepts a bedrooms={0..4} query (0 = efficiency /
-    studio). Prior revisions hard-coded bedrooms=2, which starved the
-    comparable market analysis of Studio / 1BR / 3BR comps. We now loop
-    over every tier; each failing tier is logged but non-fatal so a
-    Cloudflare / 403 block on one tier still lets the others succeed.
-
-    Craigslist frequently blocks non-browser user agents and has
-    deprecated some RSS endpoints, so this fetch is treated as best
-    effort and warnings are not escalated.
-    """
-    if not city_slug:
-        return
-    # bedrooms=0 yields studio/efficiency; 1..4 are self-explanatory.
-    # max_results is per tier, so the ceiling is max_results * 5.
-    per_tier_per_bedroom = {
-        0: "Studio",
-        1: "1BR",
-        2: "2BR",
-        3: "3BR",
-        4: "4BR+",
-    }
-    total_count = 0
-    for bedrooms, label in per_tier_per_bedroom.items():
-        url = (
-            f"https://{city_slug}.craigslist.org/search/apa"
-            f"?postal={zip_code}&bedrooms={bedrooms}&format=rss"
-        )
-        try:
-            resp = requests.get(
-                url, timeout=_REQUEST_TIMEOUT,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; DealDesk/1.0)"},
-            )
-            resp.raise_for_status()
-            root = ET.fromstring(resp.content)
-            items = root.findall(".//item") or root.findall("channel/item")
-            count = 0
-            for item in items[:max_results]:
-                title_elem = item.find("title")
-                title = (title_elem.text if title_elem is not None else "") or ""
-                price_m = re.search(r"\$([0-9,]+)", title)
-                price = (
-                    _safe_float(price_m.group(1).replace(",", ""))
-                    if price_m else None
-                )
-                # Title-level bedroom parse: CL's query-param isn't always
-                # honored precisely (1BR returns often mix with studio).
-                # Prefer the title parse; fall back to the query param.
-                br_m = re.search(
-                    r"(\d)\s*(?:br|bed|bedroom)", title, re.IGNORECASE,
-                )
-                if br_m:
-                    title_beds = int(br_m.group(1))
-                else:
-                    title_beds = bedrooms
-                # Normalize label from the title-derived bed count so the
-                # RentComp's unit_type matches what the market-rent engine
-                # expects (Studio / 1BR / ... / 4BR+).
-                if title_beds == 0:
-                    comp_label = "Studio"
-                elif title_beds >= 4:
-                    comp_label = "4BR+"
-                else:
-                    comp_label = f"{title_beds}BR"
-                if price and price > 200:
-                    # Use the existing Pydantic RentComp (models.py line 446).
-                    # Field names: address, unit_type, beds, monthly_rent, source.
-                    deal.comps.rent_comps.append(RentComp(
-                        address=zip_code,
-                        unit_type=comp_label,
-                        beds=title_beds or None,
-                        monthly_rent=price,
-                        source=f"Craigslist: {title[:60]}",
-                    ))
-                    count += 1
-            total_count += count
-            logger.info("CRAIGSLIST: zip=%s tier=%s fetched %d listings",
-                        zip_code, label, count)
-        except Exception as exc:
-            logger.warning("CRAIGSLIST failed (%s/%s tier=%s): %s",
-                           city_slug, zip_code, label, exc)
-    logger.info("CRAIGSLIST: zip=%s total %d listings across 5 bedroom tiers",
-                zip_code, total_count)
 
 
 def _fetch_opa_nearby_sales(lat: float, lon: float, deal: DealData) -> None:
@@ -4119,7 +3982,6 @@ def enrich_market_data(deal: DealData) -> DealData:
     _zip    = getattr(deal.address, "zip_code", "") or ""
     _city   = getattr(deal.address, "city", "") or ""
     _state  = getattr(deal.address, "state", "") or ""
-    _slug   = _get_craigslist_city_slug(_state, _city) if _state and _city else ""
     _lat    = getattr(deal.address, "latitude", None)
     _lon    = getattr(deal.address, "longitude", None)
 
@@ -4132,9 +3994,6 @@ def enrich_market_data(deal: DealData) -> DealData:
     _tract       = str(deal.address.census_tract or "")
     if _state_fips and _county_fips and _tract:
         _fetch_census_rents(_state_fips, _county_fips, _tract, deal.market_data)
-
-    if _zip and _slug:
-        _fetch_craigslist_rentals(_zip, _slug, deal)
 
     # OPA nearby-sales is Philly-specific; only run when we're in PA/Philly.
     if (_state or "").upper() == "PA" and (_city or "").lower() == "philadelphia":

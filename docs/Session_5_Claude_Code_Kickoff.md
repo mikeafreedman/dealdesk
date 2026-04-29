@@ -309,8 +309,6 @@ Session 5: report_builder + template — Zoning overhaul rendering
 - Smoke tests confirm: PDF renders, §8 contains conformity text, 3 cards for Indian Queen
 
 Completes the DealDesk Zoning Analysis Overhaul (Sessions 1–5).
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
 
 **Tag:** `zoning-overhaul-session-5-passed`
