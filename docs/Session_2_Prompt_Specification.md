@@ -652,17 +652,17 @@ A model-level validator on `DealData` ensures `preferred_scenario_id` is found i
 
 **Deal A — 967-73 N. 9th St**
 - preferred_scenario_id: "asbuilt_reno_21u" (matches rank 1 from 3C-SCEN)
-- use_flexibility_score.score: 2 (parcel is locked into nonconforming density; meaningful redevelopment requires variance)
+- use_flexibility_score: 2 (parcel is locked into nonconforming density; meaningful redevelopment requires variance)
 - cross_scenario_recommendation: opens with "Recommend the as-built renovation pathway..."; addresses the variance alternate; flags substantial-improvement threshold as the single most important diligence item
 
 **Deal B — Belmont Apartments**
 - preferred_scenario_id: "stabilized_hold_36u"
-- use_flexibility_score.score: 1 (RSD-3 is the most restrictive multifamily-blocking district; current building is the only legal multifamily configuration)
+- use_flexibility_score: 1 (RSD-3 is the most restrictive multifamily-blocking district; current building is the only legal multifamily configuration)
 - cross_scenario_recommendation: emphasizes preservation of the grandfathered status; explicitly notes that any meaningful upside requires accepting renovation budget discipline to stay below the substantial-improvement threshold; if only one scenario was generated, explains that the single-family zoning prevents redevelopment scenarios
 
 **Deal C — 3520 Indian Queen Lane**
 - preferred_scenario_id: likely "scheme_c_courtyard_95u" (highest unit count, best site utilization, but model could reasonably prefer scheme A or B based on construction risk)
-- use_flexibility_score.score: 2 (residential zoning blocks by-right multifamily redevelopment; site requires variance pathway for any of the CMA schemes)
+- use_flexibility_score: 2 (residential zoning blocks by-right multifamily redevelopment; site requires variance pathway for any of the CMA schemes)
 - cross_scenario_recommendation: addresses the entitlement risk explicitly, ties recommendation to the demonstrated CMA design work and the existing American Tower lease income as a holding-cost offset during entitlement; identifies the single most important diligence item as a pre-application meeting with the Philadelphia City Planning Commission
 
 ---
@@ -711,7 +711,7 @@ def run_zoning_synthesis_chain(deal: DealData) -> None:
         _apply_3c_hbu(data, deal)
         logger.info("3C-HBU complete: preferred=%s, flexibility=%s",
                     deal.zoning_extensions.preferred_scenario_id,
-                    deal.zoning_extensions.use_flexibility_score.score)
+                    deal.zoning_extensions.use_flexibility_score)
     except Exception as exc:
         logger.error("3C-HBU failed: %s — writing minimal extensions", exc)
         deal.zoning_extensions = _minimal_zoning_extensions(deal)
@@ -750,7 +750,7 @@ If the retry also fails, the typed-empty fallback fires and the pipeline continu
 | Confidence gate fails | INDETERMINATE conformity; 3C-SCEN still runs and produces single fallback scenario flagged HIGH entitlement risk |
 | 3C-CONF call fails (both attempts) | Same as confidence gate failure |
 | 3C-SCEN call fails (both attempts) | Single "as-submitted" scenario from baseline assumptions; rank 1, PREFERRED, BY_RIGHT pathway with success_probability_pct=null, entitlement_risk_flag.severity=HIGH with description "Scenario generation failed; manual review required" |
-| 3C-HBU call fails (both attempts) | Minimal `ZoningExtensions`: preferred_scenario_id = first scenario's ID; cross_scenario_recommendation = "Synthesis failed; see scenarios above for individual analyses."; use_flexibility_score.score=null; overlay_impact_assessment="Not assessed." |
+| 3C-HBU call fails (both attempts) | Minimal `ZoningExtensions` per `market.py:_minimal_zoning_extensions` (the canonical source): `preferred_scenario_id` = first scenario's ID; `cross_scenario_recommendation` = sentinel text noting the synthesis failed and manual review is required; `use_flexibility_score` = `1` (the conservative-default sentinel — "single-purpose, locked in" — fail-toward-forcing-manual-review per CP2 reasoning); `use_flexibility_explanation` = sentinel string explicitly noting this is a fallback default, not a real assessment; `overlay_impact_assessment` = `[]` (empty list, not a string). |
 
 Every fallback writes a clearly labeled placeholder so the report renders without errors and the user can see the gap immediately.
 

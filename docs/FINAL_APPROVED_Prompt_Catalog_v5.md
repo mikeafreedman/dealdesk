@@ -364,7 +364,8 @@ Workflow controls:
   - strategy_lock: {strategy_lock}
   - max_scenarios: {max_scenarios}
 
-Return a JSON object with this exact shape:
+Return a JSON object with this exact shape (note: physical config and
+assumption deltas are FLAT at the scenario level — no nested blocks):
 {{
   "scenarios": [
     {{
@@ -374,29 +375,39 @@ Return a JSON object with this exact shape:
       "verdict": "PREFERRED",
       "business_thesis": "2-3 sentences explaining the plan and why it leads.",
       "investment_strategy": "stabilized_hold|value_add|opportunistic",
-      "physical_config": {{
-        "unit_count": 36,
-        "building_sf": 20640,
-        "use_mix": [
-          {{"use_label": "Residential", "sf": 20640, "share_pct": 100}}
-        ]
-      }},
+
+      "unit_count": 36,
+      "building_sf": 20640,
+      "use_mix": [
+        {{"use_category": "residential", "sf": 20640, "share_pct": 100, "unit_count": 36, "notes": null}}
+      ],
+      "operating_strategy": "Plain-English operating strategy paragraph (formerly operating_strategy_note).",
+
       "zoning_pathway": {{
         "pathway_type": "BY_RIGHT|CONDITIONAL_USE|SPECIAL_EXCEPTION|VARIANCE|REZONE",
         "rationale": "Why this pathway applies (1-2 sentences)",
-        "success_probability_pct": 95,
+        "approval_body": "Plain-English approving body (e.g., 'Philadelphia ZBA')",
         "estimated_timeline_months": 0,
-        "estimated_pathway_cost_usd": 0
+        "estimated_soft_cost_usd": 0,
+        "success_probability_pct": 95,
+        "fallback_if_denied": "Plain-English fallback strategy if approval not obtained, or null for BY_RIGHT"
       }},
-      "assumption_deltas": {{
-        "construction_budget_usd": 350000,
-        "rent_premium_pct_vs_baseline": 8.0,
-        "operating_strategy_note": "Light cosmetic refresh; no displacement.",
-        "timeline_months_to_stabilization": 12
-      }},
+
+      "construction_budget_delta_usd": 350000,
+      "rent_delta_pct": 0.08,
+      "timeline_delta_months": 12,
+
+      "key_risks": [
+        "Risk 1 — one-line description",
+        "Risk 2 — one-line description"
+      ],
       "entitlement_risk_flag": {{
-        "severity": "NONE|LOW|MEDIUM|HIGH",
-        "description": "Plain-English entitlement risk note, or null"
+        "severity": "LOW|MEDIUM|HIGH",
+        "risk_summary": "Plain-English entitlement risk paragraph (1-3 sentences)",
+        "diligence_required": [
+          "Concrete diligence action 1",
+          "Concrete diligence action 2"
+        ]
       }} | null
     }}
   ]
@@ -517,15 +528,24 @@ Overlay districts: {overlay_districts}
 Market context:
 {market_context_summary}
 
-Return JSON in this exact shape:
+Return JSON in this exact shape (note: use_flexibility is FLAT at the top
+level; overlay_impact_assessment is a STRUCTURED LIST, one entry per
+overlay; return an empty list if no overlay districts apply to this
+parcel):
 {{
   "cross_scenario_recommendation": "Two to three paragraphs of synthesis prose.",
   "preferred_scenario_id": "must_match_a_scenario_id_in_input",
-  "use_flexibility_score": {{
-    "score": 3,
-    "rationale": "1-2 sentence justification for the score."
-  }},
-  "overlay_impact_assessment": "Short paragraph on overlay materiality."
+  "use_flexibility_score": 3,
+  "use_flexibility_explanation": "1-2 sentence justification for the score.",
+  "overlay_impact_assessment": [
+    {{
+      "overlay_name": "MIH Overlay",
+      "overlay_type": "incentive|historic|environmental|design|transit|other",
+      "impact_summary": "1-2 sentences on materiality to the recommendation",
+      "triggers_review": false,
+      "additional_diligence": ["Concrete diligence action 1", "Concrete diligence action 2"]
+    }}
+  ]
 }}
 ```
 
@@ -535,9 +555,9 @@ Return JSON in this exact shape:
 |---|---|
 | `cross_scenario_recommendation` | `deal.zoning_extensions.cross_scenario_recommendation` |
 | `preferred_scenario_id` | `deal.zoning_extensions.preferred_scenario_id` (validated against `[s.scenario_id for s in deal.scenarios]`) |
-| `use_flexibility_score.score` | `deal.zoning_extensions.use_flexibility_score.score` |
-| `use_flexibility_score.rationale` | `deal.zoning_extensions.use_flexibility_score.rationale` |
-| `overlay_impact_assessment` | `deal.zoning_extensions.overlay_impact_assessment` |
+| `use_flexibility_score` (flat int) | `deal.zoning_extensions.use_flexibility_score` |
+| `use_flexibility_explanation` (flat str) | `deal.zoning_extensions.use_flexibility_explanation` |
+| `overlay_impact_assessment` (list of OverlayImpact) | `deal.zoning_extensions.overlay_impact_assessment` |
 
 A model-level validator on `ZoningExtensions` ensures `preferred_scenario_id` is found in `[s.scenario_id for s in deal.scenarios]`. Mismatch raises a parse error and triggers retry.
 
@@ -595,7 +615,7 @@ def run_zoning_synthesis_chain(deal: DealData) -> None:
         _apply_3c_hbu(data, deal)
         logger.info("3C-HBU complete: preferred=%s, flexibility=%s",
                     deal.zoning_extensions.preferred_scenario_id,
-                    deal.zoning_extensions.use_flexibility_score.score)
+                    deal.zoning_extensions.use_flexibility_score)
     except Exception as exc:
         logger.error("3C-HBU failed: %s — writing minimal extensions", exc)
         deal.zoning_extensions = _minimal_zoning_extensions(deal)
@@ -632,9 +652,9 @@ If the retry also fails, the typed-empty fallback fires and the pipeline continu
 | Failure | Fallback |
 |---|---|
 | Confidence gate fails | INDETERMINATE conformity; 3C-SCEN proceeds with HIGH entitlement risk on each scenario |
-| 3C-CONF fails (both attempts) | Same as confidence gate failure |
-| 3C-SCEN fails (both attempts) | Single "as-submitted" scenario from baseline; rank 1, PREFERRED, BY_RIGHT pathway with success_probability_pct=null, entitlement_risk_flag.severity=HIGH, description "Scenario generation failed; manual review required" |
-| 3C-HBU fails (both attempts) | Minimal `ZoningExtensions`: preferred_scenario_id = first scenario's ID; cross_scenario_recommendation = "Synthesis failed; see scenarios above for individual analyses."; use_flexibility_score.score=null; overlay_impact_assessment="Not assessed." |
+| 3C-CONF call fails (both attempts) | Same as confidence gate failure |
+| 3C-SCEN call fails (both attempts) | Single "as-submitted" scenario from baseline; rank 1, PREFERRED, BY_RIGHT pathway with success_probability_pct=null, entitlement_risk_flag.severity=HIGH, description "Scenario generation failed; manual review required" |
+| 3C-HBU call fails (both attempts) | Minimal `ZoningExtensions` per `market.py:_minimal_zoning_extensions` (the canonical source): `preferred_scenario_id` = first scenario's ID; `cross_scenario_recommendation` = sentinel text noting the synthesis failed and manual review is required; `use_flexibility_score` = `1` (the conservative-default sentinel — "single-purpose, locked in" — fail-toward-forcing-manual-review per CP2 reasoning); `use_flexibility_explanation` = sentinel string explicitly noting this is a fallback default, not a real assessment; `overlay_impact_assessment` = `[]` (empty list, not a string). |
 
 Every fallback writes a clearly labeled placeholder so the report renders without errors and the user can see the gap immediately.
 
@@ -665,7 +685,7 @@ The three reference deals form the regression test set. A change to any prompt t
 
 **3C-SCEN:** 2-3 scenarios; rank 1 PREFERRED = "asbuilt_reno_21u" (light cosmetic renovation, BY_RIGHT pathway within grandfathered config); rank 2 ALTERNATE = "variance_pathway_higher_value" (~60% success probability); rank 3 ALTERNATE optional = "demo_rebuild_byright_6u" (only if 6-unit economics work).
 
-**3C-HBU:** preferred_scenario_id = "asbuilt_reno_21u"; use_flexibility_score.score = 2; recommendation opens with "Recommend the as-built renovation pathway..."; flags substantial-improvement threshold as the single most important diligence item.
+**3C-HBU:** preferred_scenario_id = "asbuilt_reno_21u"; use_flexibility_score = 2; recommendation opens with "Recommend the as-built renovation pathway..."; flags substantial-improvement threshold as the single most important diligence item.
 
 ## Deal B — Belmont Apartments, 2217 N 51st St, RSD-3
 
@@ -673,7 +693,7 @@ The three reference deals form the regression test set. A change to any prompt t
 
 **3C-SCEN:** 1-2 scenarios; rank 1 PREFERRED = "stabilized_hold_36u" (operate as-is, no displacement, BY_RIGHT within grandfathered envelope); rank 2 ALTERNATE possible = "light_value_add_36u" (kitchen/bath upgrades on turnover, flagged with substantial-improvement-threshold risk if budget approaches 50% of structure value); NOT generated: "demo and rebuild" (RSD-3 max is single-family detached, so 36-unit rebuild is not by-right and economics are unworkable).
 
-**3C-HBU:** preferred_scenario_id = "stabilized_hold_36u"; use_flexibility_score.score = 1; recommendation emphasizes preservation of grandfathered status; explicitly notes any meaningful upside requires renovation budget discipline; if only one scenario was generated, explains that single-family zoning prevents redevelopment scenarios.
+**3C-HBU:** preferred_scenario_id = "stabilized_hold_36u"; use_flexibility_score = 1; recommendation emphasizes preservation of grandfathered status; explicitly notes any meaningful upside requires renovation budget discipline; if only one scenario was generated, explains that single-family zoning prevents redevelopment scenarios.
 
 ## Deal C — 3520 Indian Queen Lane, split-zoned RSA-1/RSA-5, existing warehouse + American Tower easement
 
@@ -686,7 +706,7 @@ The three reference deals form the regression test set. A change to any prompt t
 - Each scenario must explicitly account for the American Tower exclusive easement area (2,625 SF) being unbuildable
 - Each scenario flags entitlement risk as MEDIUM or HIGH
 
-**3C-HBU:** preferred_scenario_id likely "scheme_c_courtyard_95u" (highest unit count, best site utilization, but model could reasonably prefer A or B based on construction risk); use_flexibility_score.score = 2; recommendation addresses entitlement risk explicitly and ties recommendation to demonstrated CMA design work plus existing American Tower lease income as a holding-cost offset during entitlement; identifies pre-application meeting with Philadelphia City Planning Commission as the single most important diligence item.
+**3C-HBU:** preferred_scenario_id likely "scheme_c_courtyard_95u" (highest unit count, best site utilization, but model could reasonably prefer A or B based on construction risk); use_flexibility_score = 2; recommendation addresses entitlement risk explicitly and ties recommendation to demonstrated CMA design work plus existing American Tower lease income as a holding-cost offset during entitlement; identifies pre-application meeting with Philadelphia City Planning Commission as the single most important diligence item.
 
 ---
 

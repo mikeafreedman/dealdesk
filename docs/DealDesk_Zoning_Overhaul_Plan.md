@@ -502,6 +502,14 @@ Mike will identify Deal B and Deal C addresses before Session 2 begins.
 - Tag: `zoning-overhaul-session-3-passed`
 - Next: Session 4 (Financial integration in `financials.py` + `excel_builder.py`) — fan out the existing pro forma / Excel builder logic across `DealData.scenarios[]`, write per-scenario `financial_outputs` back to each `DevelopmentScenario`, and update `mirror_preferred_to_legacy()` to copy the preferred scenario's financials to legacy `deal.financial_outputs`. Per Session 3 kickoff Step 4: do NOT auto-proceed into Session 4 — Mike will prepare the Session 4 kickoff sheet from claude.ai when ready.
 
+### April 28, 2026 — Post-Session-3 docs realignment
+- Pure docs patch — no code changes, no schema changes — closing carry-forwards #1, #2, #3 from the Session 3 history-log entry above.
+- Catalog v5 §1 SCEN/HBU JSON schema blocks re-synced character-for-character to the canonical post-Session-1.6 shapes in `docs/Session_2_Prompt_Specification.md` §§3.4 and 4.4. Eight additional drift sites surfaced during realignment verification (catalog HBU mapping table, catalog §2.1 orchestrator pseudocode, catalog §2.4 fallback row, catalog §4 and spec §4.7 reference-deal HBU expectations) all realigned in the same patch — closing carry-forward #1 fully across both documents rather than at the JSON-schema layer only.
+- Spec §5.4 `_minimal_zoning_extensions` fallback row re-synced to the actual implementation in `market.py:_minimal_zoning_extensions` (`use_flexibility_score=1` sentinel + empty overlay list, matching CP2's fail-toward-manual-review reasoning) (carry-forward #2).
+- Spec §5.1 orchestrator pseudocode HBU success-log realigned from `deal.zoning_extensions.use_flexibility_score.score` (old nested shape) to `deal.zoning_extensions.use_flexibility_score` (flat int per Session 1.6 realignment) (carry-forward #3).
+- Carry-forwards #4 and #5 (Session 1.8 schema additions) and #6 (gate-failure short-circuit optimization) remain OPEN and DEFERRED per Session 3's carry-forward groupings.
+- Commit: `7dd732f` — no tag (consistent with prior docs commits).
+
 ---
 
 ## Glossary
