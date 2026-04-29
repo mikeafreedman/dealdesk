@@ -460,6 +460,19 @@ class FinancialAssumptions(BaseModel):
     loss_to_lease:       float = 0.03
     cam_reimbursements:  float = 0.0
     fee_income:          float = 0.0     # was 6000.0 — default to $0
+    rent_multiplier: float = Field(
+        default=1.0,
+        description=(
+            "Per-scenario rent multiplier applied at GPR computation. Default 1.0 "
+            "preserves baseline behavior. Per-scenario workers in financials.py "
+            "set this to (1.0 + scenario.rent_delta_pct) on the deep-copied "
+            "assumptions snapshot so GPR reflects the scenario's rent premium "
+            "without mutating shared deal.extracted_docs. Pre-Session-4 deals "
+            "always have 1.0; the multiplier never carries over from one "
+            "scenario to the next because each worker starts from a fresh "
+            "deep-copy of the baseline assumptions."
+        ),
+    )
 
     # §9 Fixed expenses (Year 1)
     # Taxes + insurance retain historical class defaults — their
@@ -1755,35 +1768,45 @@ def mirror_preferred_to_legacy(deal: DealData) -> None:
     multi-scenario path. This function is the only sanctioned write path.
     Direct writes to deal.financial_outputs should be avoided in new code.
 
-    Args:
-        deal: The DealData object to update. Mutates in place.
+    Skip-and-log semantics: in the Session 4 fan-out architecture, the
+    per-scenario financial worker may fail on the preferred scenario (leaving
+    its financial_outputs as None), or be called on a legacy / gate-fail deal
+    that arrived without scenarios. Both are non-fatal — the orchestrator must
+    continue. This function logs a WARNING and returns silently when the mirror
+    cannot proceed; it never raises.
 
-    Raises:
-        ValueError: If deal has no scenarios, or if no scenario is PREFERRED,
-                    or if the preferred scenario has no financial_outputs yet.
+    Args:
+        deal: The DealData object to update. Mutates in place on success.
     """
+    import logging as _lg
+    _log = _lg.getLogger("models.mirror")
+
     if not deal.scenarios:
-        raise ValueError(
-            "Cannot mirror: deal.scenarios is empty. "
-            "This function should only be called after scenarios are populated."
+        _log.warning(
+            "mirror_preferred_to_legacy: deal.scenarios is empty — "
+            "leaving deal.financial_outputs unchanged."
         )
+        return
 
     preferred = next(
         (s for s in deal.scenarios if s.verdict == ScenarioVerdict.PREFERRED),
         None,
     )
     if preferred is None:
-        raise ValueError(
-            "Cannot mirror: no scenario has verdict=PREFERRED. "
-            "DealData validators should have caught this."
+        _log.warning(
+            "mirror_preferred_to_legacy: no scenario has verdict=PREFERRED — "
+            "leaving deal.financial_outputs unchanged."
         )
+        return
 
     if preferred.financial_outputs is None:
-        raise ValueError(
-            f"Cannot mirror: preferred scenario '{preferred.scenario_id}' "
-            f"has no financial_outputs populated yet. "
-            f"Call this AFTER financials.py fan-out completes."
+        _log.warning(
+            "mirror_preferred_to_legacy: preferred scenario '%s' has no "
+            "financial_outputs populated (worker may have failed) — "
+            "leaving deal.financial_outputs unchanged.",
+            preferred.scenario_id,
         )
+        return
 
     deal.financial_outputs = preferred.financial_outputs
 

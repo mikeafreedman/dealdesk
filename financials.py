@@ -39,9 +39,11 @@ from config import MODEL_SONNET
 def _get_anthropic_api_key():
     return os.environ.get("ANTHROPIC_API_KEY", "") or None
 from models.models import (
-    AssetType, DealData, FinancialOutputs, InvestmentStrategy,
+    AssetType, DealData, DevelopmentScenario, FinancialAssumptions,
+    FinancialOutputs, InvestmentStrategy,
     ScenarioResult, WaterfallType,
     RenovationTier, RENOVATION_DOWNTIME_MONTHS,
+    mirror_preferred_to_legacy,
 )
 
 logger = logging.getLogger(__name__)
@@ -354,12 +356,23 @@ def _get_insurance_expense(deal: DealData) -> float:
 
 
 def _gpr_yr1(deal: DealData) -> float:
+    """Year-1 Gross Potential Rent.
+
+    Session 4 note: the final value is multiplied by
+    ``deal.assumptions.rent_multiplier`` (default 1.0) so the per-scenario
+    worker can apply ``scenario.rent_delta_pct`` without mutating the shared
+    ``deal.extracted_docs`` rent values. Multiplier is sourced via
+    ``getattr(..., 1.0) or 1.0`` so pre-Session-4 deals (no field) and any
+    bad-data ``None`` cases collapse to no-op.
+    """
+    rent_multiplier = getattr(deal.assumptions, "rent_multiplier", 1.0) or 1.0
+
     # Primary source: extracted from uploaded documents
     monthly = deal.extracted_docs.total_monthly_rent if deal.extracted_docs else None
     if monthly and monthly > 0:
         gpr = monthly * 12
         logger.info(f"GPR: from extracted docs = ${gpr:,.0f}/yr")
-        return gpr
+        return gpr * rent_multiplier
 
     # Fallback: compute from assumptions (num_units × avg monthly rent)
     # Try unit_mix (rent roll line items) next
@@ -375,7 +388,7 @@ def _gpr_yr1(deal: DealData) -> float:
                 f"GPR: from unit_mix sum = ${gpr:,.0f}/yr "
                 f"({len(deal.extracted_docs.unit_mix)} rows)"
             )
-            return gpr
+            return gpr * rent_multiplier
 
     # Last fallback: assumptions-based estimate. Use the extracted doc's
     # avg_rent_per_unit when present (it's populated by Prompt 1B from rent
@@ -392,7 +405,7 @@ def _gpr_yr1(deal: DealData) -> float:
     if num_units > 0 and avg_rent > 0:
         gpr = num_units * avg_rent * 12
         logger.info(f"GPR: from assumptions ({num_units} units × ${avg_rent}/mo) = ${gpr:,.0f}/yr")
-        return gpr
+        return gpr * rent_multiplier
 
     # Fallback 4: use market data rent if available.
     # Tries (a) MarketData PSF attributes — none exist today but kept for
@@ -426,7 +439,7 @@ def _gpr_yr1(deal: DealData) -> float:
             f"GPR: from market data (GBA {gba} SF × ${market_rent_psf:.2f}/SF/yr "
             f"from market research) = ${gpr:,.0f}/yr"
         )
-        return gpr
+        return gpr * rent_multiplier
 
     # Fallback 5 (last resort): hardcoded conservative commercial estimate
     if gba > 0:
@@ -436,7 +449,7 @@ def _gpr_yr1(deal: DealData) -> float:
             f"GPR: final fallback — GBA {gba} SF × ${rent_psf}/SF/yr "
             f"(no market data available) = ${gpr:,.0f}/yr"
         )
-        return gpr
+        return gpr * rent_multiplier
 
     logger.warning("GPR: all fallbacks exhausted — returning 0")
     return 0.0
@@ -2637,19 +2650,19 @@ def _run_scenario_core(deal: DealData,
 # §11  PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_financials(deal: DealData) -> DealData:
-    """Run the full financial engine and populate DealData.financial_outputs.
+def _compute_full_financials(deal: DealData) -> None:
+    """Run the full financial pipeline on a single deal and populate
+    deal.financial_outputs in place.
 
-    Pipeline position: after risk.py, before excel_builder.py.
+    Body extracted from the legacy ``run_financials`` in Session 4 so the
+    pipeline can be invoked per zoning scenario via
+    ``_run_financials_for_scenario``. Mutates deal.assumptions (title
+    insurance auto-calc, ``_scale_expenses_for_asset_type``, fee income
+    zeroing) and deal.financial_outputs.
 
-    Args:
-        deal: DealData with assumptions, extracted_docs, and insurance populated.
-
-    Returns:
-        The same DealData object with financial_outputs fully populated.
+    Pipeline position: after risk.py, before excel_builder.py — invoked
+    from ``run_financials`` (orchestrator).
     """
-    logger.info("run_financials: starting -- strategy=%s, purchase_price=%s, num_units=%s",
-                deal.investment_strategy, deal.assumptions.purchase_price, deal.assumptions.num_units)
     try:
         a = deal.assumptions
         fo = deal.financial_outputs
@@ -2848,7 +2861,10 @@ def run_financials(deal: DealData) -> DealData:
                 logger.info("Running Prompt 5A -- Monte Carlo Narrative...")
                 narrative = _call_5a(deal, mc)
                 fo.monte_carlo_narrative = narrative
-                deal.narratives.monte_carlo_narrative = narrative
+                # Session 4 note: the legacy `deal.narratives.monte_carlo_narrative`
+                # write that used to sit here was moved to the orchestrator-level
+                # `_sync_narratives_from_fo(deal)` so per-scenario workers cannot
+                # clobber the shared narratives object during fan-out.
                 if narrative:
                     logger.info("Prompt 5A complete -- narrative generated")
                 else:
@@ -2950,11 +2966,177 @@ def run_financials(deal: DealData) -> DealData:
         fo.scenario_results = scenario_results
 
     except Exception:
-        logger.error("run_financials FAILED:\n%s", traceback.format_exc())
+        logger.error("_compute_full_financials FAILED:\n%s", traceback.format_exc())
         raise
 
-    logger.info("run_financials: complete -- fo_is_none=%s, noi_yr1=%s, pro_forma_years_len=%s",
-                deal.financial_outputs is None,
-                getattr(deal.financial_outputs, 'noi_yr1', None),
-                len(deal.financial_outputs.pro_forma_years) if deal.financial_outputs and deal.financial_outputs.pro_forma_years else 0)
+
+def _apply_scenario_deltas_to_assumptions(
+    scenario: DevelopmentScenario,
+    base: FinancialAssumptions,
+) -> FinancialAssumptions:
+    """Return a deep-copied FinancialAssumptions with the scenario's deltas
+    applied. Caller-owned: callers should treat the return value as fresh
+    state and assign it to a scenario_deal.assumptions slot, never to the
+    base deal.assumptions slot.
+
+    Delta semantics (corrected post-Session-4-CP2 discovery):
+        construction_budget_delta_usd → snapshot.const_hard += delta
+        rent_delta_pct                → snapshot.rent_multiplier = 1.0 + delta
+                                        (applied at GPR computation in
+                                        _gpr_yr1; assignment-not-multiplication
+                                        because the snapshot is freshly deep-
+                                        copied from baseline where
+                                        rent_multiplier == 1.0)
+        timeline_delta_months         → snapshot.const_period_months += delta
+        unit_count                    → override snapshot.num_units (when truthy)
+        building_sf                   → override snapshot.gba_sf (when truthy)
+
+    Pre-Session-4 kickoff prescribed `snapshot.monthly_rent *= (1 + delta)`,
+    but FinancialAssumptions has no `monthly_rent` field. The corrected
+    pathway introduces a new `rent_multiplier` field on FinancialAssumptions
+    (default 1.0) consumed by _gpr_yr1; this preserves byte-identical output
+    for any deal where rent_multiplier stays at the default.
+    """
+    snapshot = base.model_copy(deep=True)
+    if scenario.construction_budget_delta_usd is not None:
+        snapshot.const_hard = snapshot.const_hard + scenario.construction_budget_delta_usd
+    if scenario.rent_delta_pct is not None:
+        # Apply via rent_multiplier — see _gpr_yr1 for the application site.
+        # Assignment (not *=) is correct: snapshot was just freshly deep-copied
+        # from baseline where rent_multiplier == 1.0, so 1.0 + delta IS the
+        # final multiplier. *= would compound across scenarios if the deep-
+        # copy ever broke; assignment is the safer pattern.
+        snapshot.rent_multiplier = 1.0 + scenario.rent_delta_pct
+    if scenario.timeline_delta_months is not None:
+        snapshot.const_period_months = snapshot.const_period_months + scenario.timeline_delta_months
+    # unit_count / building_sf are overrides, not deltas. Default-zero values on
+    # DevelopmentScenario mean "scenario did not specify" and should not stomp
+    # the baseline assumptions.
+    if scenario.unit_count:
+        snapshot.num_units = scenario.unit_count
+    if scenario.building_sf:
+        snapshot.gba_sf = scenario.building_sf
+    return snapshot
+
+
+def _run_financials_for_scenario(
+    deal: DealData,
+    scenario: DevelopmentScenario,
+) -> FinancialOutputs:
+    """Run the financial pipeline on a per-scenario assumptions snapshot
+    and return the populated FinancialOutputs.
+
+    Pure function — does NOT mutate deal.assumptions, deal.financial_outputs,
+    or any deal-level shared state. Constructs a shallow-copied scenario_deal
+    that shares unmutated fields (extracted_docs, parcel_data, market_data,
+    comps, provenance, etc.) with the parent deal but carries an isolated,
+    deep-copied assumptions snapshot and a fresh FinancialOutputs slot.
+
+    The scenario_deal's narratives slot is the same object as the parent
+    deal's, but ``_compute_full_financials`` no longer writes to
+    deal.narratives — that legacy write was moved to the orchestrator-level
+    ``_sync_narratives_from_fo`` after the per-scenario loop completes.
+    """
+    scenario_assumptions = _apply_scenario_deltas_to_assumptions(scenario, deal.assumptions)
+    scenario_deal = deal.model_copy(deep=False)
+    scenario_deal.assumptions = scenario_assumptions
+    scenario_deal.financial_outputs = FinancialOutputs()
+    _compute_full_financials(scenario_deal)
+    return scenario_deal.financial_outputs
+
+
+def _sync_narratives_from_fo(deal: DealData) -> None:
+    """Sync the legacy deal.narratives fields from the canonical
+    deal.financial_outputs values.
+
+    Preserves the pre-Session-4 contract that deal.narratives.monte_carlo_narrative
+    matches deal.financial_outputs.monte_carlo_narrative. Per master plan D6,
+    downstream readers should prefer deal.financial_outputs, but this keeps
+    the legacy field honest for code paths that still read deal.narratives.
+
+    Called from ``run_financials`` after both the legacy fallback path and
+    the multi-scenario fan-out's mirror, so behavior is consistent across
+    branches.
+    """
+    if deal.financial_outputs is None:
+        return
+    if deal.financial_outputs.monte_carlo_narrative:
+        deal.narratives.monte_carlo_narrative = deal.financial_outputs.monte_carlo_narrative
+
+
+def run_financials(deal: DealData) -> DealData:
+    """Orchestrate the per-scenario financial fan-out.
+
+    Pipeline position: after risk.py, before excel_builder.py.
+
+    Behavior:
+        - If deal.scenarios is empty (legacy / pre-Session-3 / gate-fail
+          deals with no scenarios): runs ``_compute_full_financials(deal)``
+          directly and syncs narratives. Byte-identical to pre-Session-4
+          behavior.
+        - Otherwise: loops deal.scenarios, calls
+          ``_run_financials_for_scenario`` per scenario, writes the
+          returned FinancialOutputs to scenario.financial_outputs. A failure
+          on any scenario is logged and that scenario's financial_outputs
+          stays None — other scenarios continue. After the loop,
+          ``mirror_preferred_to_legacy`` populates deal.financial_outputs
+          from the preferred scenario, then ``_sync_narratives_from_fo``
+          carries the preferred narrative into the legacy deal.narratives
+          field.
+
+    Args:
+        deal: DealData with assumptions, extracted_docs, and insurance
+            populated. May or may not have scenarios.
+
+    Returns:
+        The same DealData object. On the multi-scenario path,
+        deal.scenarios[i].financial_outputs is populated for each scenario
+        whose worker completed; deal.financial_outputs reflects the
+        preferred scenario via the mirror.
+    """
+    logger.info(
+        "run_financials: starting -- strategy=%s, purchase_price=%s, "
+        "num_units=%s, scenarios=%d",
+        deal.investment_strategy, deal.assumptions.purchase_price,
+        deal.assumptions.num_units, len(deal.scenarios),
+    )
+
+    if not deal.scenarios:
+        # Backward-compat fallback: legacy / pre-Session-3 / gate-fail-with-
+        # no-scenarios deals. Runs the pipeline directly on the deal —
+        # byte-identical to pre-Session-4 behavior.
+        _compute_full_financials(deal)
+        _sync_narratives_from_fo(deal)
+    else:
+        # Multi-scenario fan-out per master plan D6. Per-scenario try/except
+        # so a failure on one scenario does not abort the others; the mirror
+        # function logs WARNING and skips when the preferred scenario's
+        # financial_outputs is None.
+        for scenario in deal.scenarios:
+            try:
+                scenario.financial_outputs = _run_financials_for_scenario(deal, scenario)
+                logger.info(
+                    "FINANCIALS [%s]: NOI yr1=%s, project IRR=%s",
+                    scenario.scenario_id,
+                    scenario.financial_outputs.noi_yr1,
+                    scenario.financial_outputs.project_irr,
+                )
+            except Exception as exc:
+                logger.error(
+                    "FINANCIALS [%s] FAILED (non-fatal): %s",
+                    scenario.scenario_id, exc,
+                )
+                scenario.financial_outputs = None
+        mirror_preferred_to_legacy(deal)
+        _sync_narratives_from_fo(deal)
+
+    logger.info(
+        "run_financials: complete -- fo_is_none=%s, noi_yr1=%s, "
+        "pro_forma_years_len=%s",
+        deal.financial_outputs is None,
+        getattr(deal.financial_outputs, 'noi_yr1', None),
+        len(deal.financial_outputs.pro_forma_years)
+        if deal.financial_outputs and deal.financial_outputs.pro_forma_years
+        else 0,
+    )
     return deal

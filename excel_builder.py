@@ -19,14 +19,15 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import openpyxl
 from openpyxl.styles import PatternFill, Font
 
 from config import get_excel_template, OUTPUTS_DIR
 from models.models import (
-    AssetType, DealData, InvestmentStrategy,
+    AssetType, DealData, DevelopmentScenario, FinancialOutputs,
+    InvestmentStrategy, ScenarioVerdict,
     RENOVATION_TIER_MULTIPLIERS, RENOVATION_DOWNTIME_MONTHS,
 )
 
@@ -51,15 +52,22 @@ logger = logging.getLogger(__name__)
 # PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
-def populate_excel(deal: DealData) -> Path:
-    """
-    Copy the correct Excel template and populate the Assumptions tab
-    with all values from DealData.  Returns path to the output file.
+def _do_populate_excel(deal: DealData, output_path: Path) -> Path:
+    """Body of the legacy populate_excel, parameterized to take output_path
+    as input rather than computing it from deal.deal_id.
+
+    Reads from deal.assumptions and deal.financial_outputs throughout, so
+    Session 4's per-scenario worker (``_populate_excel_for_scenario``)
+    invokes this on a scenario_deal whose assumptions and financial_outputs
+    have been swapped to the scenario's snapshot/outputs.
+
+    Pure with respect to deal-level mutations: the legacy
+    ``deal.output_xlsx_path = str(output_path)`` write was removed because
+    main.py:1036-1037 already sets that field from the return value, and
+    keeping the in-body write would be a per-scenario clobber under the
+    fan-out architecture (last-scenario-wins).
     """
     template_path = get_excel_template(deal.investment_strategy)
-
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUTS_DIR / f"{deal.deal_id}_financial_model.xlsx"
 
     shutil.copy2(template_path, output_path)
 
@@ -191,8 +199,194 @@ def populate_excel(deal: DealData) -> Path:
 
     recalculate_xlsx(str(output_path))
 
-    deal.output_xlsx_path = str(output_path)
     return output_path
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SESSION 4 — Per-scenario fan-out + master index
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _populate_excel_for_scenario(
+    deal: DealData,
+    scenario: DevelopmentScenario,
+    output_path: Path,
+) -> Path:
+    """Per-scenario Excel worker. Constructs a scenario_deal that carries
+    the scenario's deltas-applied assumptions snapshot and the scenario's
+    financial_outputs, then runs ``_do_populate_excel`` on the scenario_deal.
+
+    Mirrors the financials.py CP2 worker pattern: shallow-copy of deal
+    shares unmutated state (extracted_docs, parcel_data, market_data, etc.)
+    while assumptions and financial_outputs are isolated per scenario.
+
+    Raises ValueError if scenario.financial_outputs is None — the orchestrator
+    is expected to filter those out before calling the worker.
+    """
+    if scenario.financial_outputs is None:
+        raise ValueError(
+            f"Cannot populate Excel for scenario '{scenario.scenario_id}' — "
+            f"financial_outputs is None (CP2 worker may have failed)."
+        )
+
+    # Imported lazily to avoid a circular import: financials.py imports
+    # mirror_preferred_to_legacy from models, and excel_builder is a peer
+    # at the pipeline level. Lazy import keeps module-load order safe.
+    from financials import _apply_scenario_deltas_to_assumptions
+
+    scenario_assumptions = _apply_scenario_deltas_to_assumptions(scenario, deal.assumptions)
+    scenario_deal = deal.model_copy(deep=False)
+    scenario_deal.assumptions = scenario_assumptions
+    scenario_deal.financial_outputs = scenario.financial_outputs
+
+    return _do_populate_excel(scenario_deal, output_path)
+
+
+def _build_scenarios_index(
+    deal: DealData,
+    scenario_files: List[Tuple[DevelopmentScenario, Path]],
+) -> Path:
+    """Build the master ``{deal_id}_scenarios_index.xlsx`` from scratch.
+
+    One sheet "Scenarios Comparison" with a header row plus one data row
+    per scenario, ordered by scenario.rank ascending (preferred at row 2).
+    No formulas, no LibreOffice recalc — pure value writes via openpyxl.
+    """
+    index_path = OUTPUTS_DIR / f"{deal.deal_id}_scenarios_index.xlsx"
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Scenarios Comparison"
+
+    headers = [
+        "Scenario ID", "Scenario Name", "Verdict",
+        "Unit Count", "Building SF",
+        "Total Project Cost", "Year 1 NOI",
+        "Project IRR", "LP IRR", "LP Equity Multiple", "Exit Value",
+        "Excel Filename",
+    ]
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+
+    # Sort by rank ascending; rank 1 = preferred → row 2.
+    sorted_files = sorted(scenario_files, key=lambda pair: pair[0].rank)
+    for row_idx, (scenario, xlsx_path) in enumerate(sorted_files, start=2):
+        fo = scenario.financial_outputs
+        ws.cell(row=row_idx, column=1,  value=scenario.scenario_id)
+        ws.cell(row=row_idx, column=2,  value=scenario.scenario_name)
+        ws.cell(row=row_idx, column=3,  value=scenario.verdict.value)
+        ws.cell(row=row_idx, column=4,  value=scenario.unit_count)
+        ws.cell(row=row_idx, column=5,  value=scenario.building_sf)
+        ws.cell(row=row_idx, column=6,  value=fo.total_project_cost)
+        ws.cell(row=row_idx, column=7,  value=fo.noi_yr1)
+        ws.cell(row=row_idx, column=8,  value=fo.project_irr)
+        ws.cell(row=row_idx, column=9,  value=fo.lp_irr)
+        ws.cell(row=row_idx, column=10, value=fo.lp_equity_multiple)
+        ws.cell(row=row_idx, column=11, value=fo.gross_sale_price)
+        ws.cell(row=row_idx, column=12, value=xlsx_path.name)
+
+    # Light column-width tuning for readability.
+    widths = {1: 22, 2: 36, 3: 14, 4: 12, 5: 12, 6: 18, 7: 14,
+              8: 12, 9: 12, 10: 18, 11: 16, 12: 44}
+    for col_idx, width in widths.items():
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = width
+
+    wb.save(index_path)
+    wb.close()
+    return index_path
+
+
+def populate_excel(deal: DealData) -> Path:
+    """Orchestrate per-scenario Excel emission.
+
+    Behavior:
+        - If deal.scenarios is empty: legacy single-file path. Produces
+          ``{deal_id}_financial_model.xlsx``, no index file. Byte-identical
+          to pre-Session-4 behavior except the legacy
+          ``deal.output_xlsx_path`` write is now performed by main.py from
+          the return value (was duplicated inside this function pre-CP3).
+        - Otherwise: emits one ``{deal_id}_{scenario_id}_financial_model.xlsx``
+          per scenario whose financial_outputs is populated, plus a master
+          ``{deal_id}_scenarios_index.xlsx`` with one row per scenario.
+          Returns the preferred scenario's Excel path. Per-scenario failures
+          are isolated: a scenario that raises during template population is
+          logged and skipped; other scenarios continue.
+
+    Edge cases on the multi-scenario path:
+        - Preferred scenario's worker fails but at least one alt succeeds:
+          returns the first successful scenario's path with a WARNING log
+          (preserves the legacy contract that the function returns *some*
+          Path so main.py:1037 can stash it on deal.output_xlsx_path).
+        - All scenario workers fail: falls through to the legacy single-file
+          path so the report builder still has *something* to consume.
+
+    Args:
+        deal: DealData. May or may not have scenarios.
+
+    Returns:
+        Path to the preferred scenario's Excel file (multi-scenario path)
+        or the single-deal Excel file (legacy path).
+    """
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not deal.scenarios:
+        # Backward-compat fallback.
+        output_path = OUTPUTS_DIR / f"{deal.deal_id}_financial_model.xlsx"
+        return _do_populate_excel(deal, output_path)
+
+    # Multi-scenario fan-out.
+    scenario_files: List[Tuple[DevelopmentScenario, Path]] = []
+    preferred_path: Optional[Path] = None
+    for scenario in deal.scenarios:
+        if scenario.financial_outputs is None:
+            logger.warning(
+                "EXCEL [%s]: skipping (financial_outputs is None — CP2 "
+                "worker may have failed)",
+                scenario.scenario_id,
+            )
+            continue
+        try:
+            output_path = OUTPUTS_DIR / (
+                f"{deal.deal_id}_{scenario.scenario_id}_financial_model.xlsx"
+            )
+            populated = _populate_excel_for_scenario(deal, scenario, output_path)
+            scenario.excel_filename = populated.name
+            scenario_files.append((scenario, populated))
+            if scenario.verdict == ScenarioVerdict.PREFERRED:
+                preferred_path = populated
+            logger.info(
+                "EXCEL [%s]: populated -> %s",
+                scenario.scenario_id, populated.name,
+            )
+        except Exception as exc:
+            logger.error(
+                "EXCEL [%s] FAILED (non-fatal): %s",
+                scenario.scenario_id, exc,
+            )
+
+    if scenario_files:
+        index_path = _build_scenarios_index(deal, scenario_files)
+        logger.info("EXCEL: scenarios index built at %s", index_path.name)
+
+    if preferred_path is None:
+        # Edge case: preferred scenario's Excel build failed.
+        if scenario_files:
+            preferred_path = scenario_files[0][1]
+            logger.warning(
+                "EXCEL: preferred scenario's Excel build failed -- returning "
+                "first successful scenario's path (%s) for legacy compat",
+                preferred_path.name,
+            )
+        else:
+            # Total failure: fall through to legacy single-file path.
+            logger.error(
+                "EXCEL: all scenario builds failed -- falling through to "
+                "legacy single-file path"
+            )
+            output_path = OUTPUTS_DIR / f"{deal.deal_id}_financial_model.xlsx"
+            return _do_populate_excel(deal, output_path)
+
+    return preferred_path
 
 
 def _find_libreoffice() -> str:

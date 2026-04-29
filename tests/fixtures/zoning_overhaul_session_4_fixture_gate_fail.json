@@ -1,0 +1,43 @@
+{
+  "deal_id": "session_4_test_fixture_gate_fail",
+  "deal_description": "Belmont fixture with zoning_code and permitted_uses cleared to force confidence-gate failure (carry-forward #6). Exercises the Session 4 short-circuit path: gate fails on 2 of 4 criteria (empty zoning_code, fewer than 3 permitted_uses), so run_zoning_synthesis_chain skips SCEN and HBU LLM calls and writes all three fallbacks directly.",
+
+  "address": {
+    "full_address": "2217 N 51st Street, Philadelphia, PA 19131",
+    "street": "2217 N 51st Street",
+    "city": "Philadelphia",
+    "state": "PA",
+    "zip_code": "19131"
+  },
+
+  "asset_type": "Multifamily",
+  "investment_strategy": "stabilized_hold",
+
+  "zoning": {
+    "zoning_code": "",
+    "zoning_district": "",
+    "permitted_uses": [],
+    "max_height_ft": 38,
+    "max_stories": 3,
+    "min_lot_area_sf": 5000,
+    "max_lot_coverage_pct": 0.30,
+    "front_setback_ft": 8,
+    "rear_setback_ft": 30,
+    "side_setback_ft": 8,
+    "min_parking_spaces": 1,
+    "source_verified": false
+  },
+
+  "assumptions": {
+    "purchase_price": 0,
+    "num_units": 36,
+    "gba_sf": 20640,
+    "lot_sf": 10140,
+    "year_built": 1926
+  },
+
+  "extracted_docs": {
+    "total_monthly_rent": 41401.0,
+    "noi_t12": 230438.0
+  }
+}

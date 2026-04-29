@@ -3221,13 +3221,24 @@ def run_zoning_synthesis_chain(deal: DealData) -> None:
     """
     # ─── GATE: confidence check before 3C-CONF ─────────────────────────
     if not _confidence_gate_passes(deal):
+        # Carry-forward #6 (closed in Session 4): when the confidence gate
+        # fails, short-circuit SCEN and HBU LLM calls entirely. The legacy
+        # behavior fell through to SCEN/HBU with essentially-empty zoning
+        # data and got back LLM guesses; the same fallback content gets
+        # written here directly, saving 2 LLM calls (~$0.05–0.10) and
+        # 5–10 seconds of latency per gate-failed deal.
         gate_reasons = _confidence_gate_reasons(deal)
         logger.info(
-            "Zoning confidence gate FAILED (%d criterion(a)) — writing "
-            "INDETERMINATE conformity. Reasons: %s",
+            "Zoning confidence gate FAILED (%d criterion(a)) — short-"
+            "circuiting SCEN and HBU LLM calls. Reasons: %s",
             len(gate_reasons), gate_reasons,
         )
+        # Order matters: _minimal_zoning_extensions(deal) reads from
+        # deal.scenarios (raises if empty), so scenarios must be set first.
         deal.conformity_assessment = _indeterminate_conformity_assessment(deal)
+        deal.scenarios = [_fallback_as_submitted_scenario(deal)]
+        deal.zoning_extensions = _minimal_zoning_extensions(deal)
+        return
     else:
         # ─── 3C-CONF (Conformity Assessment) ──────────────────────────
         try:
