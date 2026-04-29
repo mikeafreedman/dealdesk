@@ -160,11 +160,13 @@ a baseline copy, applies deltas, computes financials, and returns outputs.
 | Scenario field                  | Assumptions adjustment                                          |
 |---------------------------------|------------------------------------------------------------------|
 | `construction_budget_delta_usd` | `a.const_hard += delta` (hard construction cost)                |
-| `rent_delta_pct`                | `a.monthly_rent *= (1 + delta)` for residential; per-unit-mix loop for commercial |
+| `rent_delta_pct`                | `a.monthly_rent *= (1 + delta)` for residential; per-unit-mix loop for commercial **[CORRECTED post-CP2 — see note below]** |
 | `timeline_delta_months`         | `a.const_period_months += delta`                                 |
 | `unit_count`                    | `a.num_units = scenario.unit_count` (override, not delta)        |
 | `building_sf`                   | `a.gba_sf = scenario.building_sf` (override, not delta)          |
 | `use_mix`                       | Drives commercial rent roll if any non-residential allocation    |
+
+> **Post-Session-4 CP2 correction.** The original `rent_delta_pct` row above prescribed `a.monthly_rent *= (1 + delta)` against a `monthly_rent` field that does not exist on `FinancialAssumptions` (it was removed in a prior refactor — see the inline comment at `financials.py:386`). Caught during CP2 implementation when the gate-script test-fixture builder hit `ValidationError: extra fields not permitted`. **Actual post-CP2 implementation:** `snapshot.rent_multiplier = 1.0 + delta`, where `rent_multiplier: float = 1.0` is a new field added to `FinancialAssumptions` in CP2 and wired through every non-zero return path of `_gpr_yr1` as a final multiplier on Gross Potential Rent. Assignment (not multiplication) is correct here because the snapshot is freshly deep-copied from the baseline where `rent_multiplier == 1.0`. The original prescription is preserved above so the kickoff sheet's audit trail remains intact — future readers should see both the design-time prescription and the implementation-time correction. See the post-Session-4 docs realignment commit and the Session 4 history-log entry in the master plan for full context.
 
 The "as_submitted" fallback scenario carries zero deltas, so its computed
 financials are byte-identical to today's per-deal output. This is the
@@ -230,7 +232,7 @@ def _run_financials_for_scenario(deal: DealData, scenario: DevelopmentScenario) 
     scenario_assumptions = deal.assumptions.model_copy(deep=True)
     # Apply deltas
     scenario_assumptions.const_hard += (scenario.construction_budget_delta_usd or 0)
-    scenario_assumptions.monthly_rent *= (1 + (scenario.rent_delta_pct or 0))
+    scenario_assumptions.monthly_rent *= (1 + (scenario.rent_delta_pct or 0))  # [POST-CP2 CORRECTION — see note after this block]
     scenario_assumptions.const_period_months += (scenario.timeline_delta_months or 0)
     if scenario.unit_count is not None:
         scenario_assumptions.num_units = scenario.unit_count
@@ -244,6 +246,8 @@ def _run_financials_for_scenario(deal: DealData, scenario: DevelopmentScenario) 
     _compute_full_financials(scenario_deal)  # extracted body of old run_financials
     return scenario_deal.financial_outputs
 ```
+
+> **Post-Session-4 CP2 correction (applies to the `monthly_rent` line above).** Same correction as the Decision E table in §1: `monthly_rent` does not exist on `FinancialAssumptions`. The actual post-CP2 implementation lives in `_apply_scenario_deltas_to_assumptions(snapshot, scenario)` in `financials.py` and uses `snapshot.rent_multiplier = 1.0 + (scenario.rent_delta_pct or 0.0)` against the new `rent_multiplier: float = 1.0` field on `FinancialAssumptions`. The buggy line is preserved above as the original kickoff prescription; this note explains the implementation-time correction. See the Decision E note in §1 for the full rationale.
 
 Then the orchestrator:
 ```python
