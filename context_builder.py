@@ -3621,17 +3621,26 @@ def build_context(deal: DealData) -> dict:
                   'environmental', 'surveyor', 'architect', 'structural',
                   'civil_eng', 'meps', 'legal_zoning', 'geotech')
     )
-    # Hard cost: a.const_hard is supposed to be the dollar total
-    # (psf × gba_sf) but on deals where _psf_to_total runs before gba_sf
-    # is extracted, it stays at the per-SF rate (e.g. $15). Detect and
-    # convert: if gba_sf is realistic (>100), multiply psf × gba.
-    _hard_psf = getattr(a, 'const_hard_psf', 0) or getattr(a, 'const_hard', 0) or 0
-    _res_psf  = getattr(a, 'const_reserve_psf', 0) or getattr(a, 'const_reserve', 0) or 0
-    _gba      = getattr(a, 'gba_sf', 0) or 0
-    if _gba > 100:
-        _su_hard = round(_hard_psf * _gba + _res_psf * _gba, 2)
-    else:
-        _su_hard = (getattr(a, 'const_hard', 0) or 0) + (getattr(a, 'const_reserve', 0) or 0)
+    # Hard cost: a.const_hard / a.const_reserve are supposed to be dollar
+    # totals (psf × gba_sf) but on deals where _psf_to_total runs before
+    # gba_sf is extracted, they stay at the per-SF rate (e.g. $15). The
+    # leak signature is exact equality: const_hard == const_hard_psf.
+    # Otherwise trust the existing dollar total.
+    _hard_psf      = getattr(a, 'const_hard_psf', 0) or 0
+    _res_psf       = getattr(a, 'const_reserve_psf', 0) or 0
+    _hard_existing = getattr(a, 'const_hard', 0) or 0
+    _res_existing  = getattr(a, 'const_reserve', 0) or 0
+    _gba           = getattr(a, 'gba_sf', 0) or 0
+
+    def _su_resolve(existing, psf, gba):
+        if gba > 100 and psf > 0 and abs(existing - psf) < 0.01:
+            return round(psf * gba, 2)
+        return existing
+
+    _su_hard = (
+        _su_resolve(_hard_existing, _hard_psf, _gba)
+        + _su_resolve(_res_existing, _res_psf, _gba)
+    )
     logger.info(
         "S&U HARD COST CTX: psf=%.2f gba=%.0f → dollar_total=$%s",
         _hard_psf, _gba, f"{_su_hard:,.0f}",

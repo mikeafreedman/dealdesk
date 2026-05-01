@@ -1081,26 +1081,32 @@ def _section_uses(a, fo=None) -> CellMap:
     # Hard cost / reserve dollar totals — robust against the per-SF leak.
     # a.const_hard / a.const_reserve are supposed to be dollar totals
     # (psf × gba_sf) but on deals where _psf_to_total runs before gba_sf
-    # is extracted they stay at the per-SF rate (e.g. $15). Recompute
-    # from psf × gba when gba is realistic (>100 SF). Used both for the
-    # C65/C66 cell writes and for patching fo.total_uses below so that
-    # C89 (Total Uses) reconciles with the live Excel sum.
-    _hard_psf = getattr(a, 'const_hard_psf', 0) or getattr(a, 'const_hard', 0) or 0
-    _res_psf  = getattr(a, 'const_reserve_psf', 0) or getattr(a, 'const_reserve', 0) or 0
-    _gba      = getattr(a, 'gba_sf', 0) or 0
-    if _gba > 100:
-        _hard_total = round(_hard_psf * _gba, 2)
-        _res_total  = round(_res_psf  * _gba, 2)
-    else:
-        _hard_total = getattr(a, 'const_hard', 0) or 0
-        _res_total  = getattr(a, 'const_reserve', 0) or 0
+    # is extracted they stay at the per-SF rate (e.g. $15). The leak
+    # signature is unmistakable: const_hard == const_hard_psf (the field
+    # never got multiplied). Per-scenario alts that deliberately set a
+    # different dollar amount must be left alone, or we'll over-correct.
+    _hard_psf      = getattr(a, 'const_hard_psf', 0) or 0
+    _res_psf       = getattr(a, 'const_reserve_psf', 0) or 0
+    _hard_existing = getattr(a, 'const_hard', 0) or 0
+    _res_existing  = getattr(a, 'const_reserve', 0) or 0
+    _gba           = getattr(a, 'gba_sf', 0) or 0
+
+    def _resolve_dollar(existing, psf, gba):
+        # Leak only when both psf and existing are non-zero and identical
+        # (within penny rounding). Otherwise trust the existing value.
+        if gba > 100 and psf > 0 and abs(existing - psf) < 0.01:
+            return round(psf * gba, 2), True
+        return existing, False
+
+    _hard_total, _hard_was_leak = _resolve_dollar(_hard_existing, _hard_psf, _gba)
+    _res_total,  _res_was_leak  = _resolve_dollar(_res_existing,  _res_psf,  _gba)
     logger.info(
-        "EXCEL HARD COST WRITE: cell=C65 value=$%s (psf=%s gba=%s)",
-        f"{_hard_total:,.2f}", _hard_psf, _gba,
+        "EXCEL HARD COST WRITE: cell=C65 value=$%s (psf=%s gba=%s leak=%s)",
+        f"{_hard_total:,.2f}", _hard_psf, _gba, _hard_was_leak,
     )
     logger.info(
-        "EXCEL HARD COST WRITE: cell=C66 value=$%s (psf=%s gba=%s)",
-        f"{_res_total:,.2f}", _res_psf, _gba,
+        "EXCEL HARD COST WRITE: cell=C66 value=$%s (psf=%s gba=%s leak=%s)",
+        f"{_res_total:,.2f}", _res_psf, _gba, _res_was_leak,
     )
 
     # Overwrite C89 with Python's authoritative total_uses value. The
@@ -1112,23 +1118,25 @@ def _section_uses(a, fo=None) -> CellMap:
     # Total Uses to fo.total_uses so C91 (equity) and C84/C85 (GP/LP)
     # match Python exactly.
     #
-    # Patch fo.total_uses by swapping in the corrected hard cost / reserve
-    # dollar totals — when const_hard was left as a per-SF value it caused
-    # fo.total_uses to undercount by ~$128K and Excel's S&U tab showed a
-    # SURPLUS/(GAP) row instead of zero. _delta computes the per-SF→dollar
-    # adjustment that fo.total_uses missed.
+    # Patch fo.total_uses ONLY when a per-SF leak was actually detected.
+    # When the leak fires, fo.total_uses undercounted hard/reserve and
+    # Excel's S&U tab showed a SURPLUS/(GAP) row; add the recovered
+    # dollar amount so Total Uses reconciles to the live cell sum. When
+    # no leak fired (alt scenarios with deliberate per-scenario dollar
+    # totals), preserve fo.total_uses unchanged so Python and Excel KPIs
+    # stay aligned.
     c89_override = []
     if fo is not None and getattr(fo, "total_uses", None):
-        _delta = (
-            _hard_total + _res_total
-            - (getattr(a, 'const_hard', 0) or 0)
-            - (getattr(a, 'const_reserve', 0) or 0)
-        )
+        _delta = 0.0
+        if _hard_was_leak:
+            _delta += _hard_total - _hard_existing
+        if _res_was_leak:
+            _delta += _res_total  - _res_existing
         _c89_value = round(float(fo.total_uses) + _delta, 2)
         c89_override = [("C89", _c89_value)]
         logger.info(
             "EXCEL S&U: C89 overwritten with Python total_uses=$%s "
-            "(fo.total_uses=$%s + hard-cost delta=$%s)",
+            "(fo.total_uses=$%s + leak-correction delta=$%s)",
             f"{_c89_value:,.2f}",
             f"{fo.total_uses:,.2f}",
             f"{_delta:,.2f}",
