@@ -291,12 +291,21 @@ def _build_scenarios_index(
     sorted_files = sorted(scenario_files, key=lambda pair: pair[0].rank)
     for row_idx, (scenario, xlsx_path) in enumerate(sorted_files, start=2):
         fo = scenario.financial_outputs
+        # TPC must reconcile to Assumptions!C89, which excel_builder writes
+        # from fo.total_uses (all-in capital deployed including financing
+        # costs). fo.total_project_cost is the stricter pre-financing figure
+        # used for loan sizing — using it here would silently undercount.
+        tpc_value = fo.total_uses
+        logger.info(
+            "SCENARIOS INDEX [%s]: writing TPC=%s from source=fo.total_uses",
+            scenario.scenario_id, tpc_value,
+        )
         ws.cell(row=row_idx, column=1,  value=scenario.scenario_id)
         ws.cell(row=row_idx, column=2,  value=scenario.scenario_name)
         ws.cell(row=row_idx, column=3,  value=scenario.verdict.value)
         ws.cell(row=row_idx, column=4,  value=scenario.unit_count)
         ws.cell(row=row_idx, column=5,  value=scenario.building_sf)
-        ws.cell(row=row_idx, column=6,  value=fo.total_project_cost)
+        ws.cell(row=row_idx, column=6,  value=tpc_value)
         ws.cell(row=row_idx, column=7,  value=fo.noi_yr1)
         ws.cell(row=row_idx, column=8,  value=fo.project_irr)
         ws.cell(row=row_idx, column=9,  value=fo.lp_irr)

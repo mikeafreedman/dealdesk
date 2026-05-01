@@ -3785,6 +3785,21 @@ def build_context(deal: DealData) -> dict:
     for _k in _table_placeholders:
         ctx.setdefault(_k, "")
 
+    # Diagnostic: report the post-setdefault state of the 10 high-signal table
+    # CTX vars flagged in the audit. These are HTML-string placeholders that
+    # the docx pipeline rebuilds via _populate_data_tables; the HTML/PDF
+    # pipeline reads row-based vars (demographic_rows, sources_uses_rows,
+    # rent_comp_rows, sale_comp_rows, sensitivity_cells) instead. If any of
+    # these *_table strings is non-empty, something elsewhere is writing them.
+    for _tk in (
+        "parcel_data_table", "zoning_standards_table", "transportation_table",
+        "amenity_table", "demographics_table", "income_summary_table",
+        "scenario_comparison_table", "proforma_table",
+        "sources_uses_table", "waterfall_table",
+    ):
+        _tv = ctx.get(_tk, "") or ""
+        logger.info("TABLE CTX [%s]: len=%d", _tk, len(_tv))
+
     # ══════════════════════════════════════════════════════════════════════
     # SESSION 5 — ZONING OVERHAUL RENDERING KEYS
     # ══════════════════════════════════════════════════════════════════════
