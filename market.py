@@ -595,11 +595,18 @@ def _load_oz_tracts() -> set:
         resp.raise_for_status()
         df = pd.read_csv(StringIO(resp.text), dtype=str)
 
-        # Find GEOID column
+        # Find GEOID column — try the known column-name variants HUD has
+        # shipped across dataset revisions, then fall back to scanning for
+        # any column whose values look like 11-digit census tract IDs.
+        _oz_geoid_candidates = [
+            "GEOID", "geoid", "TRACT", "tract", "GEO_ID", "geo_id",
+            "CENSUS_TRACT", "census_tract", "GEOID10", "GEOID20",
+            "TRACTCE", "tract_geoid",
+        ]
         geoid_col = None
-        for candidate in ["GEOID", "geoid", "TRACTCE", "GEOID10", "GEOID20", "tract_geoid"]:
-            if candidate in df.columns:
-                geoid_col = candidate
+        for _cand in _oz_geoid_candidates:
+            if _cand in df.columns:
+                geoid_col = _cand
                 break
         if geoid_col is None:
             for col in df.columns:
@@ -609,11 +616,15 @@ def _load_oz_tracts() -> set:
                     break
 
         if geoid_col:
+            logger.info("OZ dataset: using column '%s' for GEOID lookup", geoid_col)
             _oz_tracts_cache = set(df[geoid_col].dropna().str.strip().str.zfill(11).tolist())
             _oz_tracts_cache_ts = now
             logger.info("OZ tracts loaded: %d", len(_oz_tracts_cache))
         else:
-            logger.warning("OZ dataset: could not identify GEOID column")
+            logger.warning(
+                "OZ dataset: could not identify GEOID column — columns are: %s",
+                list(df.columns)[:15],
+            )
             _oz_tracts_cache = set()
             _oz_tracts_cache_ts = now
     except Exception as exc:

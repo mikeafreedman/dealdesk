@@ -505,6 +505,9 @@ def _fmr_for_unit_type(deal: DealData, unit_type: str) -> float | None:
     elif re.match(r"^(3\s*br|3\s*bed|3-bed)", ut):
         attr = "fmr_3br"
     elif re.match(r"^(4\s*br|4\s*bed|4-bed)", ut):
+        # HUD FMR API publishes through fmr_3br as the highest tier;
+        # use it as the ceiling for 4BR units. If market_data ever gains
+        # fmr_4br, switch this attribute name.
         attr = "fmr_3br"
     if attr is None:
         return None
@@ -691,12 +694,16 @@ def _populate_rent_roll_residential(ws, units: list, deal: DealData | None = Non
             if not _rent and deal is not None:
                 _rent = _default_monthly_rent(deal, u.get("unit_type") or "")
             ws[f"E{row}"] = _rent
+            # Market rent (column J) — populate from unit_mix data so
+            # in-place vs. market is visible side-by-side. Skip when
+            # absent so the cell stays blank rather than showing 0/None.
+            _mkt = u.get("market_rent")
+            if _mkt:
+                ws[f"J{row}"] = _mkt
+                ws[f"J{row}"].fill = SAGE_MARKET_FILL
             # G (Annual Rent) is a formula; left intact
             ws[f"H{row}"] = _normalise_status(u.get("status"))
             ws[f"I{row}"] = u.get("lease_end")
-            ws[f"J{row}"] = u.get("market_rent")
-            # Visual distinction: Market Rent cell = sage-light fill.
-            ws[f"J{row}"].fill = SAGE_MARKET_FILL
             # Leasing fields
             ws[f"K{row}"] = u.get("market_rent_sf") or 0
             ws[f"L{row}"] = u.get("lease_term_years") or 1
@@ -1439,21 +1446,26 @@ def _populate_pro_forma_gpr(ws, deal: DealData) -> None:
         [f"Y{i+1}={v:.2f}" for i, v in enumerate(stab_factors[:num_years])]
     )
 
-    # ── GPR row 6 — formula-driven from Rent Roll ────────────────
-    # B6 reads the live Rent Roll total (E45). C6–K6 compound from B6
-    # using the rent-growth rate stored in Assumptions!C135. This
-    # preserves the workbook's chain of calculation: any Rent Roll
-    # edit or rent-growth change flows through automatically.
-    # Do NOT apply stab factors to GPR here — EGI row 17 already
-    # does that via =(B14+B15)*B4 where B4 is the stabilization factor.
-    ws["B6"] = "='Rent Roll'!E45"
+    # ── GPR row 6 — Python-driven Year 1, formula-compounded Y2–Y10 ──
+    # B6 was previously ='Rent Roll'!E45 (in-place rent total). That
+    # diverges from fo.gross_potential_rent (market rent), so write the
+    # Python value directly. C6–K6 still compound from B6 using the
+    # rent-growth rate in Assumptions!C135 — any rent-growth edit still
+    # flows through. Do NOT apply stab factors to GPR here — EGI row 17
+    # already does that via =(B14+B15)*B4 where B4 is the stab factor.
+    gpr_py = getattr(fo, "gross_potential_rent", None) or 0
+    ws["B6"] = round(gpr_py, 2)
+    logger.info(
+        "EXCEL Pro Forma: B6 GPR overridden with Python fo.gross_potential_rent=$%s "
+        "(was Rent Roll!E45 formula which reads in-place rent)",
+        f"{gpr_py:,.0f}",
+    )
     rent_growth_ref = "Assumptions!$C$135"
     for n in range(1, num_years):      # n=1 → col C (Year 2) … n=9 → col K (Year 10)
         col = cols[n]
         ws[f"{col}6"] = f"=B6*(1+{rent_growth_ref})^{n}"
     logger.info(
-        "EXCEL Pro Forma: GPR row 6 written as live formulas "
-        "(B6='Rent Roll'!E45, C6:K6 compound from B6)"
+        "EXCEL Pro Forma: GPR row 6 — B6 = Python value, C6:K6 compound from B6"
     )
 
     proforma = fo.pro_forma_years if fo else None
@@ -1637,7 +1649,7 @@ def _section_operating_income(a) -> CellMap:
         ("C136", a.expense_growth_rate),
         ("C137", a.loss_to_lease),
         ("C138", a.cam_reimbursements),
-        ("C139", 0.0 if a.fee_income == 6000.0 else a.fee_income),
+        ("C139", a.fee_income if a.fee_income is not None else 0.0),
     ]
 
 

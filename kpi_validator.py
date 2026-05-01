@@ -51,18 +51,28 @@ _KPI_MAP = [
 ]
 
 
-def _close(py: Any, xl: Any) -> bool:
-    """Values within $1 or 0.01% (relative) count as matching."""
+def _close(py: Any, xl: Any, is_rate: bool = False) -> bool:
+    """Values count as matching if within $1 or 0.01% relative (dollar fields)
+    or 10 basis points (rate / multiple fields).
+
+    is_rate=True is used for IRR, cap rate, CoC, DSCR, and equity multiple KPIs
+    where the $1 absolute tolerance is meaningless and would mask large errors.
+    """
     if py is None or xl is None:
         return py == xl
     try:
         pyf, xlf = float(py), float(xl)
     except (TypeError, ValueError):
         return str(py) == str(xl)
-    if abs(pyf - xlf) <= 1.0:
+    abs_diff = abs(pyf - xlf)
+    if is_rate:
+        # For percentage / multiple fields: match if within 10 bps (0.001)
+        return abs_diff <= 0.001
+    # Dollar fields: match if within $1 absolute OR 0.01% relative
+    if abs_diff <= 1.0:
         return True
     denom = max(abs(pyf), abs(xlf), 1.0)
-    return abs(pyf - xlf) / denom <= 0.0001
+    return abs_diff / denom <= 0.0001
 
 
 def validate(deal, xlsx_path: str | Path) -> Dict[str, Dict[str, Any]]:
@@ -129,6 +139,13 @@ def validate(deal, xlsx_path: str | Path) -> Dict[str, Dict[str, Any]]:
             logger.info("KPI PRECHECK Uses: OK (Python=$%s == Assumptions!C89)",
                         f"{_uses_py:,.0f}")
 
+    _RATE_KPIS = {
+        "going_in_cap_rate", "dscr_yr1", "cash_on_cash_yr1",
+        "project_irr", "project_equity_multiple",
+        "lp_irr", "lp_equity_multiple",
+        "gp_irr", "gp_equity_multiple",
+    }
+
     diff: Dict[str, Dict[str, Any]] = {}
     for kpi_name, attr, sheet, cell in _KPI_MAP:
         py_val = getattr(fo, attr, None)
@@ -142,12 +159,13 @@ def validate(deal, xlsx_path: str | Path) -> Dict[str, Dict[str, Any]]:
             except Exception as exc:
                 xl_val = None
                 note = f"read-error: {exc}"
-        matches = _close(py_val, xl_val)
+        matches = _close(py_val, xl_val, is_rate=(kpi_name in _RATE_KPIS))
         diff[kpi_name] = {"py": py_val, "xl": xl_val, "cell": note, "ok": matches}
         if not matches:
+            _kind = "RATE/MULT" if kpi_name in _RATE_KPIS else "DOLLAR"
             logger.warning(
-                "KPI DIFF %s: py=%s xl=%s (%s)",
-                kpi_name, py_val, xl_val, note,
+                "KPI DIFF [%s] %s: py=%s xl=%s (%s)",
+                _kind, kpi_name, py_val, xl_val, note,
             )
         else:
             logger.info("KPI OK   %s: py=%s xl=%s", kpi_name, py_val, xl_val)

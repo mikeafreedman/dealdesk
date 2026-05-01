@@ -877,14 +877,13 @@ def _get_stabilization_factors(deal_data: DealData) -> list[float]:
         factors.append(factor)
 
     # Log a compact summary for the server log
+    ext = getattr(deal_data, 'extracted_docs', None)
     logger.info(
-        "STAB DEBUG: ext=%s, ext.occupancy_rate=%s, deal.current_occupancy_rate=%s, "
-        "const_months=%.0f, leaseup_months=%.0f",
-        getattr(deal_data, 'extracted_docs', None) is not None,
-        getattr(getattr(deal_data, 'extracted_docs', None), 'occupancy_rate', 'MISSING'),
-        getattr(deal_data, 'current_occupancy_rate', 'MISSING'),
-        const_months,
-        leaseup_months,
+        "STAB DEBUG: ext=%s, ext.occupancy_rate=%s, const_months=%d, leaseup_months=%d",
+        ext is not None,
+        getattr(ext, 'occupancy_rate', None),
+        int(const_months),
+        int(leaseup_months),
     )
     logger.info("STAB FACTORS: factors=%s", factors[:10])
 
