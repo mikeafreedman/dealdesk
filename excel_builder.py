@@ -173,6 +173,20 @@ def _do_populate_excel(deal: DealData, output_path: Path) -> Path:
         wb["Cover"]["B27"] = "Prepared by DealDesk."
         logger.info("COVER: B27 overwritten → 'Prepared by DealDesk.'")
 
+    # ── Sources & Uses: fold closing_costs into Acquisition subtotal ──
+    # The S&U template's Acquisition section has rows for Purchase Price,
+    # Transfer Tax, and Tenant Buyout but no Closing Costs row, even though
+    # closing_costs_fixed is part of fo.total_uses (and Assumptions!C20).
+    # That left a SURPLUS/(GAP) on the S&U tab equal to closing_costs_fixed.
+    # Patch the subtotal formula to also pull Assumptions!C20 — closing
+    # costs stays visible in the Acquisition section of the Assumptions
+    # tab, and Total Uses now reconciles with Total Sources.
+    if "Sources & Uses" in wb.sheetnames:
+        ws_su = wb["Sources & Uses"]
+        ws_su["B9"] = "=SUM(B6:B8)+Assumptions!C20"
+        logger.info("S&U: B9 (Acquisition Subtotal) patched to include "
+                    "Assumptions!C20 (closing_costs)")
+
     # ── Cash Waterfall return metrics — override formula cells with Python values ──
     # D30 = Project IRR, D31 = Project EM, D41 = LP IRR, D42 = LP EM,
     # D49 = GP IRR, D50 = GP EM.

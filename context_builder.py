@@ -954,7 +954,13 @@ def _build_4rec_payload(deal) -> dict:
         "solver_gap_pct":         (f"{solver_gap_val * 100:+.1f}%" if solver_gap_val is not None else "N/A"),
 
         # Sources & Uses
-        "total_project_cost":     _fmt_money(fo.total_project_cost or fo.total_uses),
+        # Use fo.total_uses (the full all-in figure including origination
+        # fee + construction interest carry) so the LLM-generated narrative
+        # matches the TPC shown on the cover, scenarios index, and S&U
+        # table. fo.total_project_cost is the pre-financing loan-sizing
+        # basis — feeding that to the LLM produced narrative copy that
+        # disagreed with every other TPC reference in the same report.
+        "total_project_cost":     _fmt_money(fo.total_uses),
         "total_equity_required":  _fmt_money(fo.total_equity_required),
         "initial_loan_amount":    _fmt_money(fo.initial_loan_amount),
         "ltv_pct":                _fmt_pct(a.ltv_pct, 1, default="N/A"),
@@ -3682,11 +3688,9 @@ def build_context(deal: DealData) -> dict:
          "amount": f"${fo.lp_equity or 0:,.0f}",
          "pct":    f"{(getattr(a,'lp_equity_pct',0.90) or 0.90)*100:.0f}%",
          "note":   "Limited partner"},
-        {"item": "Total Project Cost",
-         "amount": f"${fo.total_uses or 0:,.0f}",
-         "pct":    "100.0%",
-         "note":   "Sources = Uses",
-         "is_total": True},
+        # Total Project Cost row is rendered by report_template.html (the
+        # hardcoded total-row block right after this loop). Adding it here
+        # produced a duplicate row in the PDF S&U table.
     ]
     ctx["sources_uses_rows"] = sources_uses_rows
     logger.info("SOURCES_USES_ROWS: %d rows (TPC=$%s, loan=$%s)",
