@@ -173,13 +173,32 @@ def _do_populate_excel(deal: DealData, output_path: Path) -> Path:
         wb["Cover"]["B27"] = "Prepared by DealDesk."
         logger.info("COVER: B27 overwritten → 'Prepared by DealDesk.'")
 
-    # ── Cash Waterfall D30: contextual N/A note on IRR non-convergence ──
-    # Template cell D30 is =IFERROR(IRR(F28:P28),"N/A"). When Python has
-    # also computed fo.project_irr as None (non-convergent cash flows),
-    # replace with an explanatory note instead of a bare "N/A".
-    if "Cash Waterfall" in wb.sheetnames and fo.project_irr is None:
-        wb["Cash Waterfall"]["D30"] = "N/A — non-convergent due to mid-hold equity injection"
-        logger.info("WATERFALL D30: Project IRR annotated — non-convergent")
+    # ── Cash Waterfall return metrics — override formula cells with Python values ──
+    # D30 = Project IRR, D31 = Project EM, D41 = LP IRR, D42 = LP EM,
+    # D49 = GP IRR, D50 = GP EM.
+    # Excel uses IRR()/SUMIF() formulas on waterfall distribution rows. These
+    # diverge from Python's numpy_financial.irr() on low/negative cash flows
+    # (different starting guess, different convergence path on the waterfall
+    # tier rows). Write Python values as plain floats — same pattern as C71/C89.
+    if "Cash Waterfall" in wb.sheetnames:
+        ws_cw = wb["Cash Waterfall"]
+        _cw_overrides = [
+            ("D30", fo.project_irr,             "Project IRR"),
+            ("D31", fo.project_equity_multiple, "Project Equity Multiple"),
+            ("D41", fo.lp_irr,                  "LP IRR"),
+            ("D42", fo.lp_equity_multiple,      "LP Equity Multiple"),
+            ("D49", fo.gp_irr,                  "GP IRR"),
+            ("D50", fo.gp_equity_multiple,      "GP Equity Multiple"),
+        ]
+        for _cell, _val, _label in _cw_overrides:
+            if _val is None:
+                ws_cw[_cell] = "N/A — non-convergent"
+                logger.info("WATERFALL %s (%s): non-convergent — wrote N/A string",
+                            _cell, _label)
+            else:
+                ws_cw[_cell] = round(float(_val), 8)
+                logger.info("WATERFALL %s (%s): wrote Python value %s (overriding Excel formula)",
+                            _cell, _label, f"{_val:.6f}")
 
     # Cash Waterfall Refi proceeds rows (24/25/26) are intentionally left
     # as template formulas so the workbook stays fully dynamic: changing a
