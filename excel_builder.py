@@ -1078,6 +1078,31 @@ def _section_uses(a, fo=None) -> CellMap:
     )
     logger.info("EXCEL S&U total written (excl origination, closing_costs, mortgage_carry): %s", excel_total_uses)
 
+    # Hard cost / reserve dollar totals — robust against the per-SF leak.
+    # a.const_hard / a.const_reserve are supposed to be dollar totals
+    # (psf × gba_sf) but on deals where _psf_to_total runs before gba_sf
+    # is extracted they stay at the per-SF rate (e.g. $15). Recompute
+    # from psf × gba when gba is realistic (>100 SF). Used both for the
+    # C65/C66 cell writes and for patching fo.total_uses below so that
+    # C89 (Total Uses) reconciles with the live Excel sum.
+    _hard_psf = getattr(a, 'const_hard_psf', 0) or getattr(a, 'const_hard', 0) or 0
+    _res_psf  = getattr(a, 'const_reserve_psf', 0) or getattr(a, 'const_reserve', 0) or 0
+    _gba      = getattr(a, 'gba_sf', 0) or 0
+    if _gba > 100:
+        _hard_total = round(_hard_psf * _gba, 2)
+        _res_total  = round(_res_psf  * _gba, 2)
+    else:
+        _hard_total = getattr(a, 'const_hard', 0) or 0
+        _res_total  = getattr(a, 'const_reserve', 0) or 0
+    logger.info(
+        "EXCEL HARD COST WRITE: cell=C65 value=$%s (psf=%s gba=%s)",
+        f"{_hard_total:,.2f}", _hard_psf, _gba,
+    )
+    logger.info(
+        "EXCEL HARD COST WRITE: cell=C66 value=$%s (psf=%s gba=%s)",
+        f"{_res_total:,.2f}", _res_psf, _gba,
+    )
+
     # Overwrite C89 with Python's authoritative total_uses value. The
     # template formula at C89 historically summed SUM(C29:C31) +
     # SUM(C34:C45) + SUM(C48:C51) + SUM(C54:C60) + SUM(C63:C67), which
@@ -1086,11 +1111,28 @@ def _section_uses(a, fo=None) -> CellMap:
     # any construction interest carry. Writing the value directly locks
     # Total Uses to fo.total_uses so C91 (equity) and C84/C85 (GP/LP)
     # match Python exactly.
+    #
+    # Patch fo.total_uses by swapping in the corrected hard cost / reserve
+    # dollar totals — when const_hard was left as a per-SF value it caused
+    # fo.total_uses to undercount by ~$128K and Excel's S&U tab showed a
+    # SURPLUS/(GAP) row instead of zero. _delta computes the per-SF→dollar
+    # adjustment that fo.total_uses missed.
     c89_override = []
     if fo is not None and getattr(fo, "total_uses", None):
-        c89_override = [("C89", float(fo.total_uses))]
-        logger.info("EXCEL S&U: C89 overwritten with Python total_uses=$%s",
-                    f"{fo.total_uses:,.2f}")
+        _delta = (
+            _hard_total + _res_total
+            - (getattr(a, 'const_hard', 0) or 0)
+            - (getattr(a, 'const_reserve', 0) or 0)
+        )
+        _c89_value = round(float(fo.total_uses) + _delta, 2)
+        c89_override = [("C89", _c89_value)]
+        logger.info(
+            "EXCEL S&U: C89 overwritten with Python total_uses=$%s "
+            "(fo.total_uses=$%s + hard-cost delta=$%s)",
+            f"{_c89_value:,.2f}",
+            f"{fo.total_uses:,.2f}",
+            f"{_delta:,.2f}",
+        )
     return c89_override + [
         # Acquisition
         ("C31", a.tenant_buyout),
@@ -1124,17 +1166,17 @@ def _section_uses(a, fo=None) -> CellMap:
         ("C63", a.stormwater),
         ("C64", a.demo),
         # Construction hard cost: user enters $/SF on the frontend. Write
-        # the PSF rate to D65 (user-editable) and the total in C65 as an
-        # Excel formula that multiplies by GBA (C10). If the user later
-        # edits GBA or the PSF rate in Excel, the total recomputes live.
-        # Fall back to the Python-computed dollar total when the PSF is
-        # not populated (e.g. legacy saved deals).
+        # the PSF rate to D65 (user-editable) and the dollar total to C65
+        # as a Python literal computed above (psf × gba_sf with per-SF leak
+        # protection). The literal write trades live recompute for
+        # correctness when const_hard stayed at a per-SF value upstream;
+        # the diagnostic log confirms the dollar amount written.
         ("D65", a.const_hard_psf),
         ("E65", "$/SF × GBA"),
-        ("C65", (f"=D65*C10" if a.const_hard_psf else a.const_hard)),
+        ("C65", _hard_total),
         ("D66", a.const_reserve_psf),
         ("E66", "$/SF × GBA"),
-        ("C66", (f"=D66*C10" if a.const_reserve_psf else a.const_reserve)),
+        ("C66", _res_total),
         ("C67", a.gc_overhead),
     ]
 

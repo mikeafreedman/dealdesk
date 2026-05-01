@@ -3621,10 +3621,25 @@ def build_context(deal: DealData) -> dict:
                   'environmental', 'surveyor', 'architect', 'structural',
                   'civil_eng', 'meps', 'legal_zoning', 'geotech')
     )
-    _su_hard = (getattr(a, 'const_hard', 0) or 0) + (getattr(a, 'const_reserve', 0) or 0)
+    # Hard cost: a.const_hard is supposed to be the dollar total
+    # (psf × gba_sf) but on deals where _psf_to_total runs before gba_sf
+    # is extracted, it stays at the per-SF rate (e.g. $15). Detect and
+    # convert: if gba_sf is realistic (>100), multiply psf × gba.
+    _hard_psf = getattr(a, 'const_hard_psf', 0) or getattr(a, 'const_hard', 0) or 0
+    _res_psf  = getattr(a, 'const_reserve_psf', 0) or getattr(a, 'const_reserve', 0) or 0
+    _gba      = getattr(a, 'gba_sf', 0) or 0
+    if _gba > 100:
+        _su_hard = round(_hard_psf * _gba + _res_psf * _gba, 2)
+    else:
+        _su_hard = (getattr(a, 'const_hard', 0) or 0) + (getattr(a, 'const_reserve', 0) or 0)
+    logger.info(
+        "S&U HARD COST CTX: psf=%.2f gba=%.0f → dollar_total=$%s",
+        _hard_psf, _gba, f"{_su_hard:,.0f}",
+    )
     _su_orig = (fo.initial_loan_amount or 0) * (getattr(a, 'origination_fee_pct', 0.01) or 0.01)
     _su_xtax = (a.purchase_price or 0) * (getattr(a, 'transfer_tax_rate', 0.02139) or 0.02139)
     _su_loan = fo.initial_loan_amount or 0
+    _su_ltv  = (getattr(a, 'ltv_pct', 0.70) or 0.70)
     sources_uses_rows = [
         {"item": "Purchase Price",
          "amount": f"${a.purchase_price:,.0f}",     "pct": _su_pct(a.purchase_price or 0),
@@ -3643,8 +3658,8 @@ def build_context(deal: DealData) -> dict:
          "note":   f"{(getattr(a,'origination_fee_pct',0.01) or 0.01)*100:.1f}% of loan"},
         {"item": "Senior Debt",
          "amount": f"${_su_loan:,.0f}",
-         "pct":    f"{(_su_loan / _su_tpc * 100):.0f}% LTV" if _su_tpc > 0 else "",
-         "note":   f"{(getattr(a,'ltv_pct',0.70) or 0.70)*100:.0f}% LTV of TPC",
+         "pct":    f"{_su_ltv*100:.0f}% LTV",
+         "note":   f"{_su_ltv*100:.0f}% LTV of TPC",
          "is_debt": True},
         {"item": "Total Equity Required",
          "amount": f"${fo.total_equity_required or 0:,.0f}",
@@ -3658,6 +3673,11 @@ def build_context(deal: DealData) -> dict:
          "amount": f"${fo.lp_equity or 0:,.0f}",
          "pct":    f"{(getattr(a,'lp_equity_pct',0.90) or 0.90)*100:.0f}%",
          "note":   "Limited partner"},
+        {"item": "Total Project Cost",
+         "amount": f"${fo.total_uses or 0:,.0f}",
+         "pct":    "100.0%",
+         "note":   "Sources = Uses",
+         "is_total": True},
     ]
     ctx["sources_uses_rows"] = sources_uses_rows
     logger.info("SOURCES_USES_ROWS: %d rows (TPC=$%s, loan=$%s)",
