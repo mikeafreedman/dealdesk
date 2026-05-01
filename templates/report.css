@@ -963,22 +963,69 @@ table.comp-table td:not(:first-child) { white-space: nowrap; }
 /* Deed transfers & title exceptions: 5-6 cols, one free-wrap summary col. */
 table.deed-table, table.exception-table {
     table-layout: auto;
-    font-size: 10pt;
+    font-size: 9.5pt;
 }
 table.deed-table th, table.deed-table td,
 table.exception-table th, table.exception-table td {
-    padding: 5pt 8pt;
+    padding: 5pt 6pt;
     vertical-align: middle;
     white-space: nowrap;
 }
-/* Grantor/grantee (deed) + summary (exception) columns wrap */
+/* Grantor/grantee (deed) + summary (exception) columns wrap. Reduced
+   min-width from 120pt to 80pt so the 6-col deed layout (incl. wide
+   Document ID) fits without truncating the last column header. */
 table.deed-table td:nth-child(3),
 table.deed-table td:nth-child(4),
 table.exception-table td:last-child {
     white-space: normal;
     word-break: break-word;
-    min-width: 120pt;
+    min-width: 80pt;
 }
+/* Document ID (col 6) — long alphanumeric, allow wrap to keep header visible */
+table.deed-table th:nth-child(6),
+table.deed-table td:nth-child(6) {
+    white-space: normal;
+    word-break: break-all;
+    min-width: 60pt;
+}
+
+/* Insurance Coverage Summary: 5 cols (Coverage Type, Required, Est. Annual
+   Cost, Notes, Flag). Without explicit widths the auto layout starves the
+   "Coverage Type" column and wraps "Property Insurance (Replacement Cost)"
+   across three lines. Fixed split gives type/notes/flag enough room. */
+table.insurance-summary-table {
+    table-layout: fixed;
+    font-size: 10pt;
+}
+table.insurance-summary-table th,
+table.insurance-summary-table td {
+    padding: 5pt 8pt;
+    vertical-align: top;
+    word-break: break-word;
+}
+table.insurance-summary-table th:nth-child(1),
+table.insurance-summary-table td:nth-child(1) { width: 22%; }
+table.insurance-summary-table th:nth-child(2),
+table.insurance-summary-table td:nth-child(2) { width: 10%; }
+table.insurance-summary-table th:nth-child(3),
+table.insurance-summary-table td:nth-child(3) { width: 14%; }
+table.insurance-summary-table th:nth-child(4),
+table.insurance-summary-table td:nth-child(4) { width: 30%; }
+table.insurance-summary-table th:nth-child(5),
+table.insurance-summary-table td:nth-child(5) { width: 24%; }
+
+/* Zoning Standards: 3 cols (Parameter, Standard, Proposed) where the
+   Proposed column is frequently empty. Equal-thirds wastes the right
+   side, so weight toward Parameter / Standard. */
+table.zoning-standards-table {
+    table-layout: fixed;
+}
+table.zoning-standards-table th:nth-child(1),
+table.zoning-standards-table td:nth-child(1) { width: 38%; }
+table.zoning-standards-table th:nth-child(2),
+table.zoning-standards-table td:nth-child(2) { width: 37%; }
+table.zoning-standards-table th:nth-child(3),
+table.zoning-standards-table td:nth-child(3) { width: 25%; }
 
 tfoot td {
   background: var(--sage-light);
