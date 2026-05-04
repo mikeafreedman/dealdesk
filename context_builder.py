@@ -2973,6 +2973,11 @@ def build_context(deal: DealData) -> dict:
         {"label": "Hold Period",
          "value": (f"{a.hold_period} years" if a.hold_period else "N/A")},
     ]
+    if _ps.get("solved_purchase_price"):
+        kpi_rows.append({
+            "label": "Recommended Price",
+            "value": f"${_ps['solved_purchase_price']:,.0f}",
+        })
     ctx["kpi_rows"] = kpi_rows
     logger.info("KPI_ROWS built: %d rows", len(kpi_rows))
     for r in kpi_rows:

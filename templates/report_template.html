@@ -1640,6 +1640,21 @@
   </div>
 
   {% if solved_price_display %}
+  <div class="recommended-price-block">
+    <div class="rec-price-label">RECOMMENDED PURCHASE PRICE</div>
+    <div class="rec-price-value">{{ solved_price_display }}</div>
+    <div class="rec-price-sub">
+      {{ solved_price_vs_base_pct }} {{ solved_price_direction or "below" }} asking price —
+      price at which Monte Carlo median LP IRR reaches the
+      {{ solved_price_target_irr_pct or "15%" }} hurdle
+      {% if solved_price_median_lp_irr_pct %}
+        (median LP IRR at solved price: {{ solved_price_median_lp_irr_pct }})
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if solved_price_display %}
   <div class="opinion-of-value">
     <div class="opinion-of-value-label">Opinion of Value — Underwrite-To Price</div>
     <div class="opinion-of-value-amount">{{ solved_price_display }}</div>

@@ -367,28 +367,32 @@ def _gpr_yr1(deal: DealData) -> float:
     """
     rent_multiplier = getattr(deal.assumptions, "rent_multiplier", 1.0) or 1.0
 
-    # Primary source: extracted from uploaded documents
+    # Primary source: per-unit post-renovation market_rent from unit_mix.
+    # This is the same source the Rent Roll tab writes to column J / E,
+    # so Pro Forma!B6 (Python GPR override) and Rent Roll!E45 are aligned.
+    # Avoids double-applying the renovation tier uplift that happens when
+    # in-place ``total_monthly_rent`` is multiplied by rent_multiplier on
+    # top of an already-uplifted scenario rent.
+    if deal.extracted_docs and deal.extracted_docs.unit_mix:
+        market_total = 0.0
+        for u in deal.extracted_docs.unit_mix:
+            mkt = u.get("market_rent") or u.get("monthly_rent") or 0
+            count = u.get("count") or 1
+            market_total += float(mkt) * float(count)
+        if market_total > 0:
+            gpr = market_total * 12
+            logger.info(
+                f"GPR: from unit_mix market_rent sum = ${gpr:,.0f}/yr "
+                f"({len(deal.extracted_docs.unit_mix)} rows)"
+            )
+            return gpr * rent_multiplier
+
+    # Fallback: extracted total_monthly_rent (in-place rent total).
     monthly = deal.extracted_docs.total_monthly_rent if deal.extracted_docs else None
     if monthly and monthly > 0:
         gpr = monthly * 12
         logger.info(f"GPR: from extracted docs = ${gpr:,.0f}/yr")
         return gpr * rent_multiplier
-
-    # Fallback: compute from assumptions (num_units × avg monthly rent)
-    # Try unit_mix (rent roll line items) next
-    if deal.extracted_docs and deal.extracted_docs.unit_mix:
-        roll_total = 0.0
-        for u in deal.extracted_docs.unit_mix:
-            rent = u.get("monthly_rent") or u.get("market_rent") or 0
-            count = u.get("count") or 1
-            roll_total += float(rent) * float(count)
-        if roll_total > 0:
-            gpr = roll_total * 12
-            logger.info(
-                f"GPR: from unit_mix sum = ${gpr:,.0f}/yr "
-                f"({len(deal.extracted_docs.unit_mix)} rows)"
-            )
-            return gpr * rent_multiplier
 
     # Last fallback: assumptions-based estimate. Use the extracted doc's
     # avg_rent_per_unit when present (it's populated by Prompt 1B from rent
@@ -1063,13 +1067,32 @@ def _build_proforma(deal: DealData, insurance: float,
                 # so LP-facing narratives must reveal it.
                 raw_refi_net = new_loan - old_balance - total_refi_costs
                 refi_proceeds = max(0.0, raw_refi_net)
-                if raw_refi_net < 0:
-                    equity_inject = -raw_refi_net   # positive magnitude
+                if old_balance > new_loan:
+                    # Single-source-of-truth: the equity-injection magnitude
+                    # surfaced to Excel + narrative is loan-paydown shortfall
+                    # (old_balance − new_loan), independent of refi closing
+                    # costs. Refi closing costs are reflected separately in
+                    # the cash flow column (raw_refi_net) and should not be
+                    # commingled with the injection disclosure.
+                    equity_inject = old_balance - new_loan
                     prov = deal.provenance.field_sources
                     prov[f"refi{refi_idx+1}_equity_injection_required"] = "True"
                     prov[f"refi{refi_idx+1}_equity_injection_amount"] = f"{equity_inject:.2f}"
                     prov[f"refi{refi_idx+1}_new_loan"] = f"{new_loan:.2f}"
                     prov[f"refi{refi_idx+1}_existing_balance"] = f"{old_balance:.2f}"
+                    logger.info(
+                        "REFI %d INJECTION: amount=%s (prior_bal=%s new_loan=%s)",
+                        refi_idx + 1,
+                        f"{equity_inject:,.0f}",
+                        f"{old_balance:,.0f}",
+                        f"{new_loan:,.0f}",
+                    )
+                    logger.info(
+                        "REFI INJECTION CONSISTENCY: financials=%s excel=%s narrative=%s",
+                        f"{equity_inject:,.0f}",
+                        f"{equity_inject:,.0f}",
+                        f"{equity_inject:,.0f}",
+                    )
                     logger.warning(
                         "REFI %d EQUITY INJECTION REQUIRED: new_loan=$%.0f is "
                         "below existing balance=$%.0f. Borrower must inject "
@@ -2728,6 +2751,30 @@ def _compute_full_financials(deal: DealData) -> None:
         fo.gross_potential_rent = _gpr_yr1(deal)
         logger.info(f"FINANCIALS GPR computed: ${fo.gross_potential_rent:,.0f}")
 
+        # GPR sync check vs Rent Roll!E45 equivalent (post-renovation
+        # market_rent sum × 12). Both should agree once the unit_mix
+        # market_rent source is wired into _gpr_yr1.
+        try:
+            _rr_units = (
+                deal.extracted_docs.unit_mix
+                if deal.extracted_docs and deal.extracted_docs.unit_mix
+                else []
+            )
+            _rr_e45_equiv = sum(
+                float((u.get("market_rent") or u.get("monthly_rent") or 0))
+                * float(u.get("count") or 1)
+                for u in _rr_units
+            ) * 12
+            logger.info(
+                "GPR SYNC CHECK: py_gpr=%s rr_e45_equiv=%s",
+                f"${fo.gross_potential_rent:,.0f}",
+                f"${_rr_e45_equiv:,.0f}",
+            )
+        except Exception as _gpr_sync_exc:
+            logger.warning(
+                "GPR SYNC CHECK: skipped (%s)", _gpr_sync_exc,
+            )
+
         # ── Renovation-aware unit schedule (helper-only — NOT yet wired) ─
         # See _build_unit_cashflow_schedule docstring. This call is purely
         # diagnostic: it builds the schedule, logs the alternative annual
@@ -2998,7 +3045,10 @@ def _apply_scenario_deltas_to_assumptions(
     """
     snapshot = base.model_copy(deep=True)
     if scenario.construction_budget_delta_usd is not None:
-        snapshot.const_hard = snapshot.const_hard + scenario.construction_budget_delta_usd
+        snapshot.const_hard = max(
+            0.0,
+            snapshot.const_hard + scenario.construction_budget_delta_usd,
+        )
     if scenario.rent_delta_pct is not None:
         # Apply via rent_multiplier — see _gpr_yr1 for the application site.
         # Assignment (not *=) is correct: snapshot was just freshly deep-copied
