@@ -2424,9 +2424,10 @@ CRITICAL RULES — PADDING IS PROHIBITED
    non-anchored absolute number will produce wrong NOI / IRR.
 
 OUTPUT FORMAT
-Return ONLY the JSON array of scenario objects below. No preamble, no
-postamble, no markdown fences. The array length is between 1 and
-{max_scenarios}. The first element is always rank 1 / PREFERRED.
+Return ONLY a JSON object with a single key `scenarios` whose value is
+the array of scenario objects (shape shown in the user message). No
+preamble, no postamble, no markdown fences. The array length is between
+1 and {max_scenarios}. The first element is always rank 1 / PREFERRED.
 """
 
 _USER_3C_SCEN = """\
@@ -2861,7 +2862,14 @@ def _apply_3c_scen(data: dict, deal: DealData) -> None:
     via _fallback_as_submitted_scenario. This function raises in that case
     so the orchestrator's except branch fires.
     """
-    scenarios_raw = data.get("scenarios") or []
+    # The system prompt instructs "Return ONLY the JSON array of scenario
+    # objects" while the user prompt shows a {"scenarios": [...]} envelope.
+    # Accept either shape so the LLM's choice between the two doesn't blow
+    # up the chain (`'list' object has no attribute 'get'`).
+    if isinstance(data, list):
+        scenarios_raw = data
+    else:
+        scenarios_raw = data.get("scenarios") or []
     if not scenarios_raw:
         raise ValueError(
             "3C-SCEN response missing 'scenarios' or returned an empty array"
