@@ -1900,6 +1900,12 @@ def _fetch_historical_status(deal: DealData) -> None:
     if not result:
         logger.warning("HISTORICAL: Sonnet lookup failed — historical status unavailable")
         return
+    if not isinstance(result, dict):
+        logger.warning(
+            "HISTORICAL: Sonnet returned non-object JSON (%s) — skipping",
+            type(result).__name__,
+        )
+        return
 
     # ── Designation string: lead with NRHP individual, fall back to
     #    NRHP district, then local, then state. Keep the label concise.
