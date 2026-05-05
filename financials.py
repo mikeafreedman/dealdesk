@@ -240,6 +240,33 @@ def _compute_sources_uses(deal: DealData) -> dict:
     a = deal.assumptions
     is_sale = deal.investment_strategy == InvestmentStrategy.OPPORTUNISTIC
 
+    # Per-SF leak correction (mirror of excel_builder._resolve_dollar): if
+    # const_hard / const_reserve still carry the $/SF rate (because the form
+    # arrived before GBA was populated and _psf_to_total returned the raw
+    # PSF), recover the dollar total here so Python S&U matches the Excel
+    # tab. Only fires when the dollar field is identical to the PSF field
+    # (the leak signature) and GBA is plausibly populated; intentional
+    # alt-scenario dollar deltas trigger neither branch.
+    _gba = float(getattr(a, "gba_sf", 0) or 0)
+    _hard_psf = float(getattr(a, "const_hard_psf", 0) or 0)
+    _res_psf = float(getattr(a, "const_reserve_psf", 0) or 0)
+    if _gba > 100 and _hard_psf > 0 and abs(a.const_hard - _hard_psf) < 0.01:
+        _recovered = round(_hard_psf * _gba, 2)
+        logger.warning(
+            "S&U LEAK FIX: const_hard=%s appears to be $/SF, not dollar "
+            "total — recovering to %s × GBA(%s) = %s",
+            a.const_hard, _hard_psf, _gba, _recovered,
+        )
+        a.const_hard = _recovered
+    if _gba > 100 and _res_psf > 0 and abs(a.const_reserve - _res_psf) < 0.01:
+        _recovered = round(_res_psf * _gba, 2)
+        logger.warning(
+            "S&U LEAK FIX: const_reserve=%s appears to be $/SF, not dollar "
+            "total — recovering to %s × GBA(%s) = %s",
+            a.const_reserve, _res_psf, _gba, _recovered,
+        )
+        a.const_reserve = _recovered
+
     transfer_tax = a.purchase_price * a.transfer_tax_rate
     professional = (a.legal_closing + a.title_insurance + a.legal_bank +
                     a.appraisal + a.environmental + a.surveyor +
@@ -2752,7 +2779,8 @@ def _compute_full_financials(deal: DealData) -> None:
         logger.info(f"FINANCIALS GPR computed: ${fo.gross_potential_rent:,.0f}")
 
         # GPR sync check vs Rent Roll!E45 equivalent (post-renovation
-        # market_rent sum × 12). Both should agree once the unit_mix
+        # market_rent sum × 12, scaled by the same rent_multiplier the
+        # scenario applies). Both should agree once the unit_mix
         # market_rent source is wired into _gpr_yr1.
         try:
             _rr_units = (
@@ -2760,15 +2788,17 @@ def _compute_full_financials(deal: DealData) -> None:
                 if deal.extracted_docs and deal.extracted_docs.unit_mix
                 else []
             )
+            _rent_mult = getattr(a, "rent_multiplier", 1.0) or 1.0
             _rr_e45_equiv = sum(
                 float((u.get("market_rent") or u.get("monthly_rent") or 0))
                 * float(u.get("count") or 1)
                 for u in _rr_units
-            ) * 12
+            ) * 12 * _rent_mult
             logger.info(
-                "GPR SYNC CHECK: py_gpr=%s rr_e45_equiv=%s",
+                "GPR SYNC CHECK: py_gpr=%s rr_e45_equiv=%s (rent_multiplier=%.4f)",
                 f"${fo.gross_potential_rent:,.0f}",
                 f"${_rr_e45_equiv:,.0f}",
+                _rent_mult,
             )
         except Exception as _gpr_sync_exc:
             logger.warning(
