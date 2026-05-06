@@ -1018,7 +1018,7 @@ def _build_cell_map(deal: DealData) -> CellMap:
         cells += _section_fixed_expenses(a)
         cells += _section_variable_expenses(a)
         cells += _section_below_the_line(a)
-        cells += _section_dev_period(a)
+        cells += _section_dev_period(a, fo)
         cells += _section_renovation(a)
 
     # ── Sections 12–15: Exit, Waterfall, EM, Sensitivity ────────
@@ -1798,11 +1798,26 @@ def _section_below_the_line(a) -> CellMap:
     ]
 
 
-def _section_dev_period(a) -> CellMap:
-    """Section 11A: Development Period & Carry Costs (rows 172–184)."""
-    return [
+def _section_dev_period(a, fo=None) -> CellMap:
+    """Section 11A: Development Period & Carry Costs (rows 172–184).
+
+    C173 / C178 are kept consistent with the actual carry computation in
+    financials.py:
+      - C173 falls back to ``a.interest_rate`` when ``const_loan_rate`` is
+        unset / 0, so the rate displayed here matches the rate
+        ``_compute_construction_interest`` actually used (which always
+        keys on ``a.interest_rate``, never on ``const_loan_rate``).
+      - C178 is overridden with ``fo.construction_interest_carry`` —
+        single source of truth that reconciles to the value already
+        written into the USES section at row 49 (Mortgage Interest /
+        Carry). The template's C173 × C174 × C172/12 formula previously
+        evaluated to $0 when const_loan_rate was 0, contradicting the
+        $248K carry shown in the USES section.
+    """
+    _const_rate = a.const_loan_rate or a.interest_rate
+    cells: CellMap = [
         ("C172", a.const_period_months),
-        ("C173", a.const_loan_rate),
+        ("C173", _const_rate),
         # Development-period hard cost — keyed to the same PSF × GBA logic
         # as C65 above. Uses a direct reference to C65 so both cells stay
         # in sync when the user edits PSF or GBA in Excel.
@@ -1811,13 +1826,15 @@ def _section_dev_period(a) -> CellMap:
         # C175 = Construction Budget Soft Costs (no single model field)
         # C176 = Total Construction Budget (formula)
         # C177 = Monthly Draw Rate (no model field)
-        # C178 = Est. Interest Carry (formula)
         ("C181", a.leaseup_period_months),
         ("C182", a.leaseup_vacancy_rate),
         ("C183", a.leaseup_concessions),
         ("C184", a.leaseup_marketing),
         # C187 = Total Carry Costs (formula)
     ]
+    if fo is not None and getattr(fo, "construction_interest_carry", None) is not None:
+        cells.append(("C178", round(float(fo.construction_interest_carry), 2)))
+    return cells
 
 
 def _section_renovation(a) -> CellMap:
