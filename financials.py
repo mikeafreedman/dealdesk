@@ -3180,6 +3180,16 @@ def run_financials(deal: DealData) -> DealData:
         deal.assumptions.num_units, len(deal.scenarios),
     )
 
+    # Pre-apply expense scaling (incl. public-data tax/insurance estimator)
+    # to the base deal.assumptions before the per-scenario fan-out. The
+    # values produced by ``_scale_expenses_for_asset_type`` depend on the
+    # parcel's assessed value, GBA, and asset type — all scenario-invariant
+    # — so they belong on the base. Without this, _populate_excel_for_scenario
+    # rebuilds scenario_assumptions from the unscaled base and writes $0 to
+    # Assumptions!C142 (re_taxes) / C143 (insurance). The per-scenario
+    # workers still call the helper internally; it's idempotent.
+    _scale_expenses_for_asset_type(deal)
+
     if not deal.scenarios:
         # Backward-compat fallback: legacy / pre-Session-3 / gate-fail-with-
         # no-scenarios deals. Runs the pipeline directly on the deal —
