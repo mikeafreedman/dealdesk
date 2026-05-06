@@ -236,17 +236,32 @@ def _compute_construction_interest(
 # §2  SOURCES & USES
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _compute_sources_uses(deal: DealData) -> dict:
-    a = deal.assumptions
-    is_sale = deal.investment_strategy == InvestmentStrategy.OPPORTUNISTIC
+def _fix_psf_leak_in_place(deal: DealData) -> None:
+    """Recover dollar totals on const_hard / const_reserve when they leaked
+    through the form as raw $/SF values.
 
-    # Per-SF leak correction (mirror of excel_builder._resolve_dollar): if
-    # const_hard / const_reserve still carry the $/SF rate (because the form
-    # arrived before GBA was populated and _psf_to_total returned the raw
-    # PSF), recover the dollar total here so Python S&U matches the Excel
-    # tab. Only fires when the dollar field is identical to the PSF field
-    # (the leak signature) and GBA is plausibly populated; intentional
-    # alt-scenario dollar deltas trigger neither branch.
+    Mirror of ``excel_builder._resolve_dollar``: if the dollar field equals
+    the PSF field (the leak signature, produced when ``_psf_to_total`` ran
+    before GBA was populated) and GBA is plausibly populated, replace the
+    leaked PSF with PSF × GBA. Idempotent — once the correction has been
+    applied, ``a.const_hard != a.const_hard_psf`` and the branch no-ops.
+
+    Must run on the BASE ``deal.assumptions`` before the per-scenario fan-
+    out so that:
+      - ``_compute_sources_uses`` sees corrected dollar totals → fo.total_uses
+        is accurate.
+      - ``_populate_excel_for_scenario`` rebuilds scenario_assumptions from a
+        base that already has the correction → ``excel_builder._resolve_dollar``
+        does not fire → the C89 override does not double-add the delta on top
+        of fo.total_uses.
+
+    Applying the fix only inside the per-scenario worker (where the assumptions
+    deep-copy is thrown away after financials returns) leaves the base
+    untouched, so Excel re-detects the leak and double-counts. (See
+    server_output.log:654 / KPI PRECHECK Uses warning before this helper
+    was hoisted.)
+    """
+    a = deal.assumptions
     _gba = float(getattr(a, "gba_sf", 0) or 0)
     _hard_psf = float(getattr(a, "const_hard_psf", 0) or 0)
     _res_psf = float(getattr(a, "const_reserve_psf", 0) or 0)
@@ -266,6 +281,17 @@ def _compute_sources_uses(deal: DealData) -> dict:
             a.const_reserve, _res_psf, _gba, _recovered,
         )
         a.const_reserve = _recovered
+
+
+def _compute_sources_uses(deal: DealData) -> dict:
+    a = deal.assumptions
+    is_sale = deal.investment_strategy == InvestmentStrategy.OPPORTUNISTIC
+
+    # Defense-in-depth: the leak correction is also applied on the base in
+    # ``run_financials`` before fan-out; calling here too is idempotent and
+    # protects the legacy ``_compute_full_financials(deal)`` direct-call path
+    # used by tests / no-scenario deals.
+    _fix_psf_leak_in_place(deal)
 
     transfer_tax = a.purchase_price * a.transfer_tax_rate
     professional = (a.legal_closing + a.title_insurance + a.legal_bank +
@@ -3189,6 +3215,14 @@ def run_financials(deal: DealData) -> DealData:
     # Assumptions!C142 (re_taxes) / C143 (insurance). The per-scenario
     # workers still call the helper internally; it's idempotent.
     _scale_expenses_for_asset_type(deal)
+
+    # Recover dollar totals on const_hard / const_reserve if the form posted
+    # them as raw $/SF (leak signature). Must run on the base before fan-out
+    # so the corrected values flow into both fo.total_uses and the
+    # scenario_assumptions Excel rebuilds — otherwise excel_builder's own
+    # leak detection fires a second time and the C89 override double-adds
+    # the recovery delta on top of fo.total_uses.
+    _fix_psf_leak_in_place(deal)
 
     if not deal.scenarios:
         # Backward-compat fallback: legacy / pre-Session-3 / gate-fail-with-
