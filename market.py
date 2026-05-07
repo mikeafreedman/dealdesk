@@ -2528,8 +2528,8 @@ VERIFICATION BEFORE RETURNING:
   - For non-residential asset_type (office/retail/industrial): every
     scenario has unit_count=null, and use_mix is populated by SF
   - For residential asset_type: every scenario has unit_count >= 1
-  - Every scenario has zoning_pathway with pathway_type ∈
-    {BY_RIGHT, CONDITIONAL_USE, SPECIAL_EXCEPTION, VARIANCE, REZONE}
+  - Every scenario has zoning_pathway with pathway_type set to one of:
+    BY_RIGHT, CONDITIONAL_USE, SPECIAL_EXCEPTION, VARIANCE, or REZONE
   - construction_budget_delta_usd is a number (0 = no change) or null,
     NOT a percentage; rent_delta_pct is a fractional decimal or null
   - business_thesis is 2-3 sentences (not bulleted, no markdown)
