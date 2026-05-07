@@ -1167,8 +1167,26 @@ _SYSTEM_5B = (
     "  (c) DSCR trajectory and refinance risk over hold period.\n"
     "  (d) one sentence on CPI vs. underwritten expense growth assumption.\n"
     "- Do not recommend whether to proceed. State facts and implications only.\n"
-    '- If a FRED field is "data unavailable": acknowledge and work around it.\n'
-    "- Tone: Precise, institutional, neutral. Length: 100–150 words. Output plain text only."
+    "- Tone: Precise, institutional, neutral. Length: 100-150 words. Output plain text only.\n"
+    "\n"
+    "FRED NULL-HANDLING — explicit fallback strategy when a rate is unavailable:\n"
+    "  The user message renders unavailable FRED fields as the literal string\n"
+    "  'data unavailable' (formatted by _fmt_rate). Apply these rules:\n"
+    "  - 10-yr Treasury (DGS10) unavailable: open the paragraph with the\n"
+    "    deal's underwritten interest rate as the anchor and explicitly note\n"
+    "    that 'the live 10-year benchmark was unavailable at the time of\n"
+    "    this analysis.' Do NOT cite a number from training data.\n"
+    "  - SOFR unavailable: skip the SOFR sentence entirely (do not invent a\n"
+    "    floating-rate context). Mention it only if the deal is floating-rate\n"
+    "    AND a SOFR figure is provided.\n"
+    "  - 30-yr mortgage unavailable: skip the consumer-mortgage cross-check.\n"
+    "  - CPI unavailable: skip the CPI vs expense-growth sentence entirely;\n"
+    "    do NOT default to '3% CPI'.\n"
+    "  - All four unavailable: write a single short paragraph noting that\n"
+    "    'real-time benchmark data was unavailable at the time of this\n"
+    "    analysis' and proceed with deal-specific debt-structure commentary\n"
+    "    only (loan rate, LTV, DSCR, refi risk over hold).\n"
+    "  Never silently substitute training-data values for missing FRED data."
 )
 
 _USER_5B = (
