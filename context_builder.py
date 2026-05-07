@@ -405,6 +405,13 @@ _SYSTEM_4REC = (
     "   Aggregate these into a single judgment: CORROBORATED / MIXED /\n"
     "   CONTRADICTED. A CLEAR PASS + MIXED or CONTRADICTED is a\n"
     "   CONDITIONAL GO candidate, not a straight GO.\n\n"
+    "   MISSING-SIGNAL HANDLING — the briefing includes a 'MISSING /\n"
+    "   NON-COMPUTED SIGNALS' section. Treat any field listed there as\n"
+    "   non-convergent: do NOT invent a value, do NOT pretend the model\n"
+    "   ran. In the reasoning block, name each missing signal you would\n"
+    "   normally use ('MC P10 not computed — non-convergent') and route\n"
+    "   the absence into the corroboration judgment as a downgrade pressure\n"
+    "   (a missing MC almost always implies MIXED, never CORROBORATED).\n\n"
     "BEAT 3 — DD FLAG ABSORPTION\n\n"
     "   RED flag taxonomy:\n"
     "     BINDING RED   = flag where no structural remediation exists at\n"
@@ -830,6 +837,8 @@ _USER_4REC = (
     "{dd_flag_summary}\n\n"
     "═══ SENSITIVITY SNAPSHOT ═══\n"
     "{sensitivity_snapshot}\n\n"
+    "═══ MISSING / NON-COMPUTED SIGNALS ═══\n"
+    "{missing_signals}\n\n"
     "Return the <reasoning>...</reasoning> block and then the JSON now."
 )
 
@@ -998,6 +1007,25 @@ def _build_4rec_payload(deal) -> dict:
 
     peak_eq = _compute_peak_funded_equity(deal)
 
+    # ── B1: pre-validate inputs the BEAT 1-6 reasoning template references ───
+    # Surface a `missing_signals` list naming any field the model would
+    # otherwise be tempted to fabricate. The reasoning template should treat
+    # these as "not computed: <reason>" rather than inventing values.
+    _missing_signals: list[str] = []
+    if realized is None:
+        _missing_signals.append(f"realized_value (hurdle_metric={hurdle_metric}) — non-convergent")
+    if fo.dscr_yr1 is None:
+        _missing_signals.append("dscr_yr1 — non-convergent (likely Year-1 NOI < 0)")
+    if fo.lp_equity_multiple is None:
+        _missing_signals.append("lp_equity_multiple — non-convergent")
+    if not mc or mc.get("median_irr") is None:
+        _missing_signals.append("monte_carlo (median_irr / p10 / p90 / prob_above_target) — MC did not converge")
+    if not ps or solver_price_val is None:
+        _reason = (ps or {}).get("reason") or "no result"
+        _missing_signals.append(f"price_solver — {_reason}")
+    if fo.stabilized_cap_rate is None:
+        _missing_signals.append("stabilized_cap_rate — non-convergent")
+
     return {
         # Deal identity
         "property_address":       _fmt_text(addr.full_address, default="N/A"),
@@ -1074,6 +1102,13 @@ def _build_4rec_payload(deal) -> dict:
 
         # Sensitivity
         "sensitivity_snapshot":   _build_sensitivity_snapshot(fo),
+
+        # B1: explicit list of analytics fields that did NOT compute. The
+        # reasoning template should treat these as "not computed: <reason>"
+        # rather than fabricating values. Empty list = all signals present.
+        "missing_signals": (
+            "; ".join(_missing_signals) if _missing_signals else "none"
+        ),
     }
 
 
@@ -1296,7 +1331,21 @@ _SYSTEM_4MASTER = (
     "opportunity_1/2/3 (15-25 words each): Three strongest value creation levers.\n"
     "prop_desc_p1 (80-110 words): Building type, construction, condition, layout, parking.\n"
     "prop_desc_p2 (60-80 words): Unit mix, interior conditions, renovation opportunity.\n"
+    "  Asset-type override:\n"
+    "    multifamily/mixed_use: unit mix by bedroom count, interior condition,\n"
+    "      renovation premium opportunity per unit.\n"
+    "    retail: tenant suite mix by SF, anchor vs. in-line breakdown, condition\n"
+    "      of leasable improvements, vacancy SF available for re-tenanting.\n"
+    "    office: floorplate efficiency, suite sizes, occupancy by SF, divisible\n"
+    "      vs. single-tenant; capex needed to re-tenant vacant SF.\n"
+    "    industrial: clear height, dock-door count, column spacing, office\n"
+    "      finish %, current vs. modern spec capex gap.\n"
     "prop_desc_p3 (60-80 words): Tenant profile, occupancy, lease terms.\n"
+    "  Asset-type override:\n"
+    "    multifamily: occupancy %, in-place avg rent, MTM vs. lease %, renewal\n"
+    "      retention if known.\n"
+    "    retail/office/industrial: WALT, top-3 tenant concentration as % of NOI,\n"
+    "      lease structure (NNN/MG/Gross), expiration profile by year.\n"
     "prop_desc_p4 (50-70 words): Utilities and infrastructure systems.\n"
     "utilities_analysis (50-70 words): Systems condition, deferred maintenance.\n"
     "ownership_narrative (80-110 words): Chain of title, entity structure, notable events.\n"
@@ -1330,9 +1379,43 @@ _SYSTEM_4MASTER = (
     "  1 mile, expected delivery timeline, and the likely impact on absorption and\n"
     "  exit cap rates. Be specific — name counts and delivery years.\n"
     "rent_roll_intro (50-70 words): Total units, occupancy, rent roll framing.\n"
-    "rent_comp_narrative (80-100 words): Rents vs. comp set, upside assessment.\n"
-    "commercial_comp_narrative (70-90 words): Commercial comp analysis. Abbreviate if no retail.\n"
-    "sale_comp_narrative (80-100 words): Price vs. closed sales per-unit and per-SF.\n"
+    "  For office/retail/industrial: lead with leasable SF, WALT, occupancy by SF\n"
+    "  rather than unit count.\n"
+    "rent_comp_narrative (80-100 words):\n"
+    "  Ground in comps.rent_comps[]. Required analytical procedure:\n"
+    "    1. Compute the median asking rent across the comp set (or per-SF for\n"
+    "       office/retail/industrial) — state it as a number.\n"
+    "    2. Compute the subject's in-place avg vs. that median — state the gap\n"
+    "       in $ AND %.\n"
+    "    3. Compute the subject's underwritten Year 1 stabilized rent vs. the\n"
+    "       median — state the gap in $ AND %.\n"
+    "    4. Verdict: is the subject below market (upside), at market, or above\n"
+    "       market (risk)? Use the Year 1 stabilized comparison.\n"
+    "  Cite at least two specific comp addresses or property names from the set.\n"
+    "  Do NOT write 'rents are competitive' without naming the median.\n"
+    "  Asset-type override: for office/retail/industrial, all numbers are per SF,\n"
+    "  not per unit. State WALT delta vs. comp set if comp WALT data is present.\n"
+    "commercial_comp_narrative (70-90 words):\n"
+    "  Ground in comps.commercial_comps[]. Required analytical procedure:\n"
+    "    1. State the median per-SF asking rent across commercial comps.\n"
+    "    2. Compare subject ground-floor / commercial space rent per SF to that\n"
+    "       median — state the $/SF gap.\n"
+    "    3. Note tenant-mix differences (NNN vs gross, anchor vs in-line, term).\n"
+    "  If no commercial comps are available, state that explicitly and skip the\n"
+    "  numeric comparison — do NOT pad with generic submarket commentary.\n"
+    "  If the deal has no commercial / retail component, write: 'No commercial\n"
+    "  component — comp analysis not applicable.' (one sentence, do not pad).\n"
+    "sale_comp_narrative (80-100 words):\n"
+    "  Ground in comps.sale_comps[]. Required analytical procedure:\n"
+    "    1. Compute the median price-per-unit and median price-per-SF across the\n"
+    "       comp set (filter to closed sales within trailing 24 months).\n"
+    "    2. Compute the subject's price-per-unit and price-per-SF at the asking\n"
+    "       price — state both as numbers.\n"
+    "    3. Compute the subject's per-unit and per-SF gaps vs. medians, in %.\n"
+    "    4. Verdict: priced below market (basis advantage), at market, or above.\n"
+    "  Cite at least two specific comp addresses with their per-unit/per-SF values.\n"
+    "  Asset-type override: for office/retail/industrial, lead with per-SF; state\n"
+    "  per-unit only if the deal has a unit count.\n"
     "financial_pullquote (15-25 words): Financial thesis pull-quote.\n"
     "sources_uses_narrative (70-90 words):\n"
     "  Reference actual values from: total_project_cost, initial_loan, total_equity,\n"
@@ -1355,21 +1438,47 @@ _SYSTEM_4MASTER = (
     "    Para 3: Key assumption (rent growth rate) and sensitivity to that assumption.\n"
     "  Do NOT use vague language ('strong NOI growth') without citing the actual rate.\n"
     "proforma_pullquote (15-25 words): Pro forma pull-quote (NOI growth or cash-on-cash).\n"
-    "sensitivity_narrative (70-90 words): Sensitivity matrix — what passes/fails threshold.\n"
+    "sensitivity_narrative (70-90 words):\n"
+    "  Ground in fo.sensitivity_matrix. Required analytical procedure:\n"
+    "    1. Identify the BEST corner (highest IRR cell) — state it as a tuple:\n"
+    "       (rent_growth=+200bps, exit_cap=5.5%) -> 18.4% IRR.\n"
+    "    2. Identify the WORST corner (lowest converged IRR cell) — same tuple form.\n"
+    "    3. Identify the base-case cell (rent_growth=0, exit_cap=base) — state IRR.\n"
+    "    4. Compute the bps spread between best and worst corners.\n"
+    "  Write the narrative grounded in those four values:\n"
+    "    Sentence 1: Base-case IRR vs. hurdle. Pass/watch/fail.\n"
+    "    Sentence 2: Best-corner tuple and IRR — what assumption combination\n"
+    "      drives the upside.\n"
+    "    Sentence 3: Worst-corner tuple and IRR — the downside risk anchor.\n"
     "  IMPORTANT matrix-state handling:\n"
     "  - If the matrix is TRULY empty (no cells contain any numeric value at\n"
     "    all, including no N/A strings), write exactly: 'Sensitivity analysis\n"
     "    requires stabilized revenue data. Matrix will be populated following\n"
     "    lease-up and rent roll stabilization.'\n"
-    "  - If cells are mostly 'N/A' with a few numeric values: state that most\n"
-    "    scenarios produce cash flows too negative for IRR convergence, name\n"
-    "    the favorable corner(s) where returns do compute, and describe those\n"
-    "    numeric results against the 12% threshold.\n"
-    "  - If cells are all numeric: normal sensitivity commentary — identify\n"
-    "    pass/watch/fail regions and the base-case outcome.\n"
-    "  Never describe 'N/A' cells as zero or failure — they mean non-convergent.\n"
+    "  - If fewer than 3 cells converged numerically: state that most scenarios\n"
+    "    produce cash flows too negative for IRR convergence, name the\n"
+    "    converged tuple(s) and describe vs. the hurdle.\n"
+    "  - 'N/A' cells mean non-convergent, not failure — never describe them as zero.\n"
+    "  Never write 'the upside corner holds up well' without naming the tuple.\n"
     "exit_narrative (70-90 words): Exit cap assumption, terminal value, net proceeds.\n"
-    "capital_stack_narrative (80-100 words): LTV, debt terms, equity split, structure rationale.\n"
+    "capital_stack_narrative (80-100 words):\n"
+    "  Ground in: initial_loan_amount, ltv_pct, interest_rate, amortization_years,\n"
+    "  io_period_months, refi_events, total_equity, gp_equity, lp_equity.\n"
+    "  Required analytical procedure:\n"
+    "    1. Compute debt service as % of stabilized NOI — state the coverage gap\n"
+    "       to the 1.20x DSCR threshold.\n"
+    "    2. Identify whether the loan structure is IO-then-amort or fully amort;\n"
+    "       state the IO period in months and the projected debt-service step-up.\n"
+    "    3. Note the LP/GP equity split with dollar amounts AND percentages.\n"
+    "    4. State the number of programmed refis and the maximum refi LTV.\n"
+    "  Sentence 1: Debt size, LTV, rate, amort/IO structure with the actual numbers.\n"
+    "  Sentence 2: Equity stack — GP $X (Y%) / LP $X (Z%) — and one sentence on\n"
+    "    why this split is appropriate to the strategy.\n"
+    "  Sentence 3: Refi profile and the carry-period DSCR risk if any.\n"
+    "  Never describe the capital stack without stating the actual LTV percentage.\n"
+    "  Asset-type override: for office/retail/industrial, debt service is keyed\n"
+    "  off NNN base rent + reimbursements; mention WALT-vs-loan-term spread if\n"
+    "  WALT < loan term + 2 years (refi risk).\n"
     "capital_structure_pullquote (15-25 words): Capital structure pull-quote.\n"
     "debt_comparison_narrative (60-80 words): Two alternative debt structures considered.\n"
     "waterfall_narrative (70-90 words): Promote structure, pref return, alignment of interests.\n"
