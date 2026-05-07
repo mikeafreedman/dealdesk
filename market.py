@@ -1977,7 +1977,14 @@ _SYSTEM_3A = (
     "- List permitted_uses_by_right, special_exception, and prohibited separately.\n"
     "- SOURCE VERIFICATION: Compare expected_zoning_code to actual code found in text.\n"
     "  If different, set source_mismatch = true.\n"
-    "Output ONLY valid JSON."
+    "Output ONLY valid JSON.\n\n"
+    "VERIFICATION BEFORE RETURNING:\n"
+    "  - All dimensional values are non-negative numbers or null (no strings)\n"
+    "  - max_far is a decimal (5.0, not '5.0' or '500%')\n"
+    "  - Setbacks are in feet; if the code expresses setbacks in stories or relative\n"
+    "    to building height, leave the field null and explain in extraction_notes\n"
+    "  - permitted_uses lists contain short phrases, not entire code paragraphs\n"
+    "  - source_verification block is populated; do not omit it"
 )
 
 _USER_3A = (
@@ -2089,8 +2096,9 @@ _SYSTEM_3B = (
     "  formula, its input values, and the result. Each step must read like a\n"
     "  math problem, not a sentence.\n"
     "- Typical steps: (1) FAR capacity, (2) Lot coverage footprint,\n"
-    "  (3) Height / stories cap, (4) Density (units × min_lot_area),\n"
-    "  (5) Setback-envelope adjustment when it binds before FAR.\n"
+    "  (3) Height / stories cap, (4) Density (units × min_lot_area — RESIDENTIAL ONLY),\n"
+    "  (5) Setback-envelope adjustment when it binds before FAR,\n"
+    "  (6) Parking-driven capacity (office/retail when parking minimum binds).\n"
     "- Each step object must carry: label (short title), formula (symbolic,\n"
     "  e.g. 'Lot SF × Max FAR'), inputs (list of 'Name = value' strings),\n"
     "  result (final number with unit), and a one-sentence note on what this\n"
@@ -2099,8 +2107,29 @@ _SYSTEM_3B = (
     "- Identify the BINDING constraint (the smallest-SF cap) in\n"
     "  binding_constraint, and restate its result as binding_result.\n"
     "- Return null (or an empty calculation_steps array) with explanation in\n"
-    "  data_gaps if inputs are insufficient to compute.\n"
-    "Output ONLY valid JSON."
+    "  data_gaps if inputs are insufficient to compute.\n\n"
+    "ASSET-TYPE FORKING — capacity calculations differ by asset type:\n"
+    "  multifamily / mixed_use / single_family (residential):\n"
+    "    Run all five typical steps. max_units_by_right = lot_sf / min_lot_area_sf\n"
+    "    (rounded down). Density step is required.\n"
+    "  office / retail / industrial (non-residential):\n"
+    "    SKIP the density step entirely — there is no per-unit density rule.\n"
+    "    Set max_units_by_right = null. Capacity is FAR × coverage × height\n"
+    "    only. For office and retail, ALSO compute the parking-driven cap\n"
+    "    (parking spaces required per 1,000 SF) when a minimum exists; if\n"
+    "    that cap is the binding constraint, name it explicitly.\n"
+    "  Industrial: include a clear-height note in extraction_notes if the\n"
+    "    code defines minimum or maximum stack heights.\n\n"
+    "Output ONLY valid JSON.\n\n"
+    "VERIFICATION BEFORE RETURNING:\n"
+    "  - calculation_steps is a non-empty array (or empty with data_gaps populated)\n"
+    "  - For non-residential asset_type: max_units_by_right and units_per_acre are\n"
+    "    null; no density step appears in calculation_steps\n"
+    "  - For residential asset_type: a density step is present unless the input\n"
+    "    zoning lacks min_lot_area_sf (then explain in data_gaps)\n"
+    "  - binding_constraint matches the label of the step that produced the\n"
+    "    smallest result, and binding_result is that step's result string\n"
+    "  - All step results are numeric strings with units (e.g. '28,956 SF')"
 )
 
 _USER_3B = (
@@ -2245,13 +2274,17 @@ CONFORMITY STATUS — pick exactly ONE (describes the EXISTING condition)
   zoning, but is presumed grandfathered because it predates the current
   code and has been continuously maintained. Dimensional standards may
   also be nonconforming.
-- LEGAL_NONCONFORMING_DENSITY: the use is permitted, but unit count or
-  FAR exceeds current density caps, and the property is presumed
-  grandfathered. Use this status when density is the primary or only
-  nonconformity.
+- LEGAL_NONCONFORMING_DENSITY: applies ONLY to residential asset types
+  (multifamily, mixed_use with residential component, single_family).
+  The use is permitted but unit count exceeds the current density cap
+  (lot_sf / min_lot_area_sf), and the property is presumed grandfathered.
+  For non-residential assets (office, retail, industrial), there is no
+  per-unit density rule — use LEGAL_NONCONFORMING_DIMENSIONAL when FAR or
+  other dimensional standards are exceeded, NOT this status.
 - LEGAL_NONCONFORMING_DIMENSIONAL: the use is permitted, but one or more
-  dimensional standards (height, setbacks, lot coverage, parking) do not
-  comply, and the property is presumed grandfathered.
+  dimensional standards (height, setbacks, lot coverage, parking, or FAR
+  for non-residential) do not comply, and the property is presumed
+  grandfathered.
 - MULTIPLE_NONCONFORMITIES: two or more LEGAL_NONCONFORMING_* conditions
   apply simultaneously (e.g., both use AND density, or both use AND
   multiple dimensional standards). Use this when no single category
@@ -2305,6 +2338,17 @@ OUTPUT FORMAT
 Return ONLY the JSON object below. No preamble, no postamble, no markdown
 fences. All fields are required; use null for fields that do not apply
 (e.g., grandfathering_status when CONFORMING).
+
+VERIFICATION BEFORE RETURNING:
+  - status is exactly one of the seven enum values listed above
+  - LEGAL_NONCONFORMING_DENSITY appears ONLY for residential asset types
+  - For non-residential, density nonconformity → LEGAL_NONCONFORMING_DIMENSIONAL
+  - confidence is one of HIGH | MEDIUM | LOW | INDETERMINATE
+  - Every entry in nonconformity_details has all five fields populated
+  - magnitude_description is plain English with the actual gap quantified
+    (e.g., "20 units exceeds 6-unit by-right cap by 233%")
+  - grandfathering_status is null when status=CONFORMING; otherwise present
+  - diligence_actions_required is non-empty when status != CONFORMING
 """
 
 _USER_3C_CONF = """\
@@ -2379,9 +2423,33 @@ sensitivity case. Rank them by expected risk-adjusted return, with rank 1
 being the recommended PREFERRED scenario.
 
 A SCENARIO IS MEANINGFULLY DIFFERENT WHEN IT HAS A DIFFERENT
-- physical configuration (unit count, building SF, or use mix), OR
+- physical configuration (unit count for residential, leasable SF mix
+  for non-residential, or use mix), OR
 - operating strategy (stabilized hold vs. renovation vs. ground-up), OR
 - zoning pathway (by-right vs. variance vs. rezone)
+
+ASSET-TYPE FRAMING — apply to every scenario you generate:
+  multifamily / mixed_use (residential):
+    Frame in unit-count terms. unit_count is required. use_mix carries
+    residential / commercial SF allocation. Operating strategy emphasizes
+    rent premium, lease-up timing, and renewal retention.
+  retail:
+    unit_count may be null; use_mix carries leasable SF by tenant type.
+    Operating strategy emphasizes WALT, tenant credit, NNN structure,
+    co-tenancy, and percentage-rent kicks.
+  office:
+    unit_count = null. Capacity is SF-driven; parking ratios often bind.
+    Operating strategy emphasizes WALT, tenant concentration, sublease
+    risk, and TI/leasing-commission exposure.
+  industrial:
+    unit_count = null. Capacity is SF-driven with clear-height and
+    dock-door considerations. Operating strategy emphasizes single-
+    tenant credit (if applicable), lease structure (typically NNN),
+    and last-mile vs. bulk distribution submarket fit.
+  for_sale (any asset, opportunistic strategy):
+    Frame as a development/sellout, not a hold. Operating strategy
+    emphasizes pre-sale velocity, construction duration, exit pricing
+    per unit (residential) or per SF (commercial), and carry burn.
 
 A SCENARIO IS NOT MEANINGFULLY DIFFERENT WHEN IT IS
 - the same business plan with different rent assumptions
@@ -2434,6 +2502,19 @@ Return ONLY a JSON object with a single key `scenarios` whose value is
 the array of scenario objects (shape shown in the user message). No
 preamble, no postamble, no markdown fences. The array length is between
 1 and {max_scenarios}. The first element is always rank 1 / PREFERRED.
+
+VERIFICATION BEFORE RETURNING:
+  - scenarios array length is between 1 and {max_scenarios}
+  - Exactly one scenario has verdict="PREFERRED" with rank=1
+  - All scenario_id values are unique snake_case strings ≤ 30 chars
+  - For non-residential asset_type (office/retail/industrial): every
+    scenario has unit_count=null, and use_mix is populated by SF
+  - For residential asset_type: every scenario has unit_count >= 1
+  - Every scenario has zoning_pathway with pathway_type ∈
+    {BY_RIGHT, CONDITIONAL_USE, SPECIAL_EXCEPTION, VARIANCE, REZONE}
+  - construction_budget_delta_usd is a number (0 = no change) or null,
+    NOT a percentage; rent_delta_pct is a fractional decimal or null
+  - business_thesis is 2-3 sentences (not bulleted, no markdown)
 """
 
 _USER_3C_SCEN = """\
@@ -2562,10 +2643,30 @@ CRITICAL RULES
 5. If only ONE scenario was generated (no alternatives), the
    cross_scenario_recommendation explains why no alternatives exist and
    what conditions would unlock them.
+6. OVERLAY DILIGENCE TRIGGERS — set triggers_review = true automatically
+   when ANY of the following are true for an overlay:
+     - overlay_type = "historic" (preservation review and HTC eligibility
+       must be evaluated; never auto-false on a historic overlay)
+     - overlay_type = "environmental" (Phase I/II implications)
+     - overlay_type = "incentive" AND the incentive materially changes
+       capital stack (e.g. MIH inclusionary requirements, IRA energy
+       credits, opportunity zone). Trivial signage incentives need not
+       trigger review.
+   For all other overlay types, set triggers_review based on whether the
+   overlay is binding on the recommended scenario.
 
 OUTPUT FORMAT
 Return ONLY the JSON below. No preamble, no postamble, no markdown
 fences.
+
+VERIFICATION BEFORE RETURNING:
+  - preferred_scenario_id matches a scenario_id from the input scenarios array
+  - use_flexibility_score is an integer 1-5 (not a string, not a float)
+  - cross_scenario_recommendation is plain prose — no markdown, no headers,
+    no bullet lists
+  - overlay_impact_assessment is an array (empty if no overlays apply)
+  - For every overlay with overlay_type="historic", triggers_review = true
+  - additional_diligence is a list of action-verb-led strings, never null
 """
 
 _USER_3C_HBU = """\
