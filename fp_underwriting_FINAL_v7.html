@@ -218,13 +218,13 @@ textarea.fi{height:auto;padding:10px;resize:vertical;line-height:1.6;font-size:1
 .deal-row{background:var(--white);border:1px solid var(--rule);border-radius:6px;padding:14px 18px;display:flex;align-items:center;gap:16px;transition:border-color .15s}
 .deal-row:hover{border-color:var(--sage-mid)}
 .deal-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.deal-dot.complete{background:var(--green)}.deal-dot.progress{background:var(--amber)}
+.deal-dot.complete{background:var(--green)}.deal-dot.progress{background:var(--amber)}.deal-dot.failed{background:var(--red)}
 .deal-main{flex:1;min-width:0}
 .deal-name{font-size:13px;font-weight:600;color:var(--near-black)}
 .deal-meta{font-size:11px;color:var(--muted);margin-top:2px}
 .deal-irr{font-family:var(--font-display);font-size:18px;font-weight:600;color:var(--near-black);flex-shrink:0}
 .deal-status{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:3px;flex-shrink:0}
-.deal-status.complete{background:var(--green-lt);color:var(--green)}.deal-status.progress{background:var(--amber-lt);color:var(--amber)}
+.deal-status.complete{background:var(--green-lt);color:var(--green)}.deal-status.progress{background:var(--amber-lt);color:var(--amber)}.deal-status.failed{background:var(--red-lt);color:var(--red)}
 .deal-actions{display:flex;gap:6px;flex-shrink:0}
 .deal-btn{font-size:11px;font-weight:600;letter-spacing:.02em;padding:6px 10px;border:1px solid var(--rule-dk);border-radius:4px;background:var(--parch-dk);color:var(--body);cursor:pointer;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .deal-btn:hover{border-color:var(--sage);color:var(--sage);background:var(--sage-lt)}
@@ -1961,23 +1961,36 @@ function _renderDealRows(deals) {
       if (!isNaN(dt)) dateLbl = dt.toLocaleDateString('en-US',
         {year:'numeric', month:'long', day:'numeric'});
     }
-    const statusKey = d.status === 'complete' ? 'complete' : 'progress';
-    const statusLbl = statusKey === 'complete' ? 'Complete' : 'In Progress';
+    let statusKey, statusLbl;
+    if (d.status === 'complete') {
+      statusKey = 'complete'; statusLbl = 'Complete';
+    } else if (d.status === 'failed') {
+      statusKey = 'failed'; statusLbl = 'Failed';
+    } else {
+      statusKey = 'progress'; statusLbl = 'In Progress';
+    }
     const meta = [d.asset_type, _strategyLabel(d.strategy),
                   dateLbl ? 'Analyzed ' + dateLbl : '']
                  .filter(Boolean).join(' · ');
     const id = _escapeHtml(d.deal_id || '');
+    // Download buttons only meaningful on complete deals — disable for
+    // processing / failed records so users don't 404 on a missing PDF.
+    const dlDisabled = (d.status !== 'complete');
+    const dlAttr = dlDisabled ? 'disabled style="opacity:.4;cursor:not-allowed"' : '';
+    const errLine = (d.status === 'failed' && d.error)
+      ? `<div class="deal-meta" style="color:var(--red);margin-top:4px">${_escapeHtml(d.error)}</div>` : '';
     return `<div class="deal-row" data-deal-id="${id}">
       <div class="deal-dot ${statusKey}"></div>
       <div class="deal-main">
         <div class="deal-name">${_escapeHtml(d.deal_name || d.address || 'Untitled')}</div>
         <div class="deal-meta">${_escapeHtml(meta)}</div>
+        ${errLine}
       </div>
       <div class="deal-irr">${_escapeHtml(irr)}</div>
       <div class="deal-status ${statusKey}">${statusLbl}</div>
       <div class="deal-actions">
-        <button type="button" class="deal-btn" onclick="downloadDealFile('${id}','pdf')">PDF</button>
-        <button type="button" class="deal-btn" onclick="downloadDealFile('${id}','excel')">Excel</button>
+        <button type="button" class="deal-btn" ${dlAttr} onclick="${dlDisabled ? '' : `downloadDealFile('${id}','pdf')`}">PDF</button>
+        <button type="button" class="deal-btn" ${dlAttr} onclick="${dlDisabled ? '' : `downloadDealFile('${id}','excel')`}">Excel</button>
         <button type="button" class="deal-btn danger" onclick="deleteDeal('${id}')">Delete</button>
       </div>
     </div>`;
@@ -2502,29 +2515,64 @@ async function submitRun() {
           commercial_rent_roll:  commRows,
     };
 
-    // ── POST to FastAPI ───────────────────────────────────────
-    const resp = await fetch('http://localhost:8000/underwrite', {
+    // ── POST to FastAPI — async submit ────────────────────────
+    // Relative URL so the request goes to the same origin the page was
+    // served from. Hardcoded localhost:8000 here previously meant remote
+    // browsers POSTed to their OWN machine and saw ERR_CONNECTION_REFUSED.
+    const resp = await fetch('/underwrite', {
       method: 'POST',
+      credentials: 'include',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload),
     });
 
-    clearInterval(barTimer);
-
     if (!resp.ok) {
-      let errMsg = 'Pipeline error';
+      let errMsg = 'Submission rejected';
       try { const j = await resp.json(); errMsg = j.detail || errMsg; } catch(e) {}
       throw new Error(errMsg);
     }
 
-    // ── Trigger PDF download ──────────────────────────────────
-    barEl.style.width = '100%';
-    const blob = await resp.blob();
-    const pdfUrl = URL.createObjectURL(blob);
+    // Server returns {deal_id, status: "processing"} immediately.
+    const submitResult = await resp.json();
+    const dealId = submitResult.deal_id;
+    if (!dealId) throw new Error('Server did not return a deal_id');
 
-    // Get Excel URL from response headers
-    const dealId = resp.headers.get('X-Deal-Id') || '';
-    const xlsxUrl = dealId ? `http://localhost:8000/download/excel/${dealId}` : null;
+    // ── Poll for completion ───────────────────────────────────
+    // The pipeline runs server-side for 5-10 minutes. We poll the deal-
+    // archive status endpoint every 5 s until it flips to 'complete' or
+    // 'failed'. Cap total wait at 20 minutes to avoid an infinite spinner.
+    const POLL_INTERVAL_MS = 5000;
+    const POLL_TIMEOUT_MS  = 20 * 60 * 1000;
+    const startTime = Date.now();
+    let dealRecord = null;
+    while (Date.now() - startTime < POLL_TIMEOUT_MS) {
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+      try {
+        const sresp = await fetch(`/api/deals/${dealId}/status`, {credentials: 'include'});
+        if (!sresp.ok) continue;
+        dealRecord = await sresp.json();
+        if (dealRecord.status === 'complete') break;
+        if (dealRecord.status === 'failed') {
+          throw new Error(dealRecord.error || 'Pipeline failed');
+        }
+        // status === 'processing' → keep polling
+      } catch (pollErr) {
+        // Transient network errors during polling are non-fatal — the
+        // pipeline keeps running on the server. Only re-throw if the
+        // poll loop already saw a 'failed' record.
+        if (pollErr.message && pollErr.message.startsWith('Pipeline')) throw pollErr;
+      }
+    }
+    if (!dealRecord || dealRecord.status !== 'complete') {
+      throw new Error('Pipeline timed out after 20 minutes — check the deal archive in a few minutes; the server may still be running.');
+    }
+
+    clearInterval(barTimer);
+    barEl.style.width = '100%';
+
+    // ── Show download links via existing endpoints (relative URLs) ──
+    const pdfUrl  = `/download/pdf/${dealId}`;
+    const xlsxUrl = `/download/excel/${dealId}`;
 
     // ── Update results screen with success state ──────────────
     const address = [_str('f_address'), _str('f_city'), _str('f_state')].filter(Boolean).join(', ');
@@ -2541,18 +2589,18 @@ async function submitRun() {
             </div>
           </div>
           <div style="display:flex;gap:12px;justify-content:center">
-            <a href="${pdfUrl}" download="${dealId}_report.pdf"
+            <a href="${pdfUrl}" download
                style="display:inline-block;padding:12px 28px;background:var(--sage);color:white;
                       border-radius:4px;font-family:var(--font-ui);font-size:13px;font-weight:600;
                       text-decoration:none;letter-spacing:.04em">
               ⬇ Download PDF Report
             </a>
-            ${xlsxUrl ? `<a href="${xlsxUrl}" download="${dealId}_financial_model.xlsx"
+            <a href="${xlsxUrl}" download
                style="display:inline-block;padding:12px 28px;background:var(--earth-mid);color:white;
                       border-radius:4px;font-family:var(--font-ui);font-size:13px;font-weight:600;
                       text-decoration:none;letter-spacing:.04em">
               ⬇ Download Excel Model
-            </a>` : ''}
+            </a>
           </div>
         </div>
       </div>`;

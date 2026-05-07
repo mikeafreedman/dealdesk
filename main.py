@@ -15,6 +15,7 @@ import re
 import sys
 import socket
 import tempfile
+import threading
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -136,6 +137,58 @@ def _record_deal(email: str, deal: DealData, deal_name: str) -> None:
         _write_user(email, user)
     except Exception as exc:
         logger.warning("USER_STORE: failed to record deal for %s: %s", email, exc)
+
+
+def _record_deal_processing(email: str, req: "UnderwriteRequest", deal_id: str) -> None:
+    """Save an in-flight deal record with status='processing' before the
+    pipeline begins. The async submit flow returns immediately with the
+    deal_id; the frontend polls /api/deals/{deal_id}/status, so the record
+    must exist before the poll starts."""
+    try:
+        full_addr = ", ".join(
+            p for p in [req.f_address, req.f_city, req.f_state, req.f_zip] if p
+        )
+        record = {
+            "deal_id":       deal_id,
+            "deal_name":     req.f_deal_name or full_addr or "Untitled",
+            "address":       full_addr,
+            "asset_type":    req.f_asset_type or "",
+            "strategy":      req.f_strategy or "",
+            "purchase_price": req.f_purchase_price or 0,
+            "hold_period":   getattr(req, "a_hold_period", 0) or 0,
+            "lp_irr":        None,
+            "project_irr":   None,
+            "analyzed_date": datetime.now(timezone.utc).isoformat(),
+            "status":        "processing",
+        }
+        user = _read_user(email)
+        deals = user.setdefault("deals", [])
+        deals = [d for d in deals if d.get("deal_id") != deal_id]
+        deals.insert(0, record)
+        user["deals"] = deals
+        _write_user(email, user)
+    except Exception as exc:
+        logger.warning("USER_STORE: failed to save processing record for %s: %s", email, exc)
+
+
+def _record_deal_failed(email: str, deal_id: str, error_msg: str) -> None:
+    """Mark an in-flight deal record as failed with the truncated error."""
+    try:
+        user = _read_user(email)
+        deals = user.setdefault("deals", [])
+        for d in deals:
+            if d.get("deal_id") == deal_id:
+                d["status"] = "failed"
+                # Cap the persisted error message — full traceback is in
+                # server_output.log; UI only needs a short one-liner.
+                err_first_line = (error_msg or "").strip().splitlines()[-1] if error_msg else ""
+                d["error"] = (err_first_line or error_msg or "Pipeline error")[:500]
+                d["analyzed_date"] = datetime.now(timezone.utc).isoformat()
+                break
+        user["deals"] = deals
+        _write_user(email, user)
+    except Exception as exc:
+        logger.warning("USER_STORE: failed to mark deal %s failed: %s", deal_id, exc)
 
 
 # ── FastAPI app ──────────────────────────────────────────────────────────
@@ -815,12 +868,46 @@ async def serve_frontend(request: Request):
     )
 
 
-@app.post("/underwrite")
+@app.post("/underwrite", status_code=202)
 async def underwrite(req: UnderwriteRequest, request: Request):
-    """Run the full underwriting pipeline and return the PDF report."""
+    """Enqueue the underwriting pipeline. Returns 202 immediately with a
+    deal_id; the frontend polls /api/deals/{deal_id}/status for completion
+    and then downloads via /download/pdf/{deal_id} + /download/excel/{deal_id}.
+
+    Why async: the pipeline takes 5-10 minutes synchronously. Cloudflare
+    (and most reverse proxies) close the connection at ~100 seconds, so a
+    synchronous response can never reach a remote user behind a proxy.
+    Splitting submit from result delivery means the pipeline runs on its
+    own schedule and the client polls a sub-second endpoint.
+    """
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    deal_id = str(uuid.uuid4())
+    _record_deal_processing(user, req, deal_id)
+
+    # Sync pipeline running in a background thread — the request handler
+    # returns immediately. Daemon=True so server shutdown doesn't hang on
+    # an in-flight pipeline. The thread name is a debug aid for log
+    # correlation: thread `pipeline-{deal_id_prefix}` shows up in stack
+    # traces and `Get-Process` listings.
+    threading.Thread(
+        target=_run_pipeline_sync,
+        args=(user, req, deal_id),
+        daemon=True,
+        name=f"pipeline-{deal_id[:8]}",
+    ).start()
+
+    logger.info("UNDERWRITE: deal_id=%s queued for user=%s", deal_id, user)
+    return {"deal_id": deal_id, "status": "processing"}
+
+
+def _run_pipeline_sync(user: str, req: UnderwriteRequest, deal_id: str) -> None:
+    """Background worker. Executes the full underwriting pipeline and
+    updates the user's deal-archive entry to 'complete' or 'failed' on
+    finish. Errors are caught and logged here — never propagate (the
+    spawning request has already returned)."""
     try:
         logger.info("Payload f_purchase_price = %s (type: %s)", req.f_purchase_price, type(req.f_purchase_price).__name__)
         logger.info(f"PAYLOAD DEBUG — f_purchase_price: {req.f_purchase_price}, "
@@ -832,6 +919,11 @@ async def underwrite(req: UnderwriteRequest, request: Request):
         OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
         deal = _build_deal(req)
+        # Force the deal_id to match the one returned to the client. _build_deal
+        # generates its own UUID; the async submit flow needs the pre-generated
+        # deal_id so the in-flight processing record + the polled status share
+        # the same key.
+        deal.deal_id = deal_id
 
         # Handle uploaded files — base64 decode to temp files
         om_path = None
@@ -1053,29 +1145,24 @@ async def underwrite(req: UnderwriteRequest, request: Request):
         if deal.deal_id and deal.output_xlsx_path:
             _excel_cache[deal.deal_id] = deal.output_xlsx_path
 
-        # Persist deal summary to the signed-in user's archive
+        # Persist deal summary to the signed-in user's archive — flips the
+        # in-flight 'processing' record to 'complete' (and updates IRR/EM
+        # from the now-populated financial_outputs).
         _record_deal(user, deal, req.f_deal_name)
 
         logger.info("Pipeline finished — PDF: %s | Excel: %s", deal.output_pdf_path, deal.output_xlsx_path)
 
-        # Return PDF as file download
-        if deal.output_pdf_path and Path(deal.output_pdf_path).exists():
-            _pdf_path = Path(deal.output_pdf_path)
-            return FileResponse(
-                path=str(_pdf_path),
-                media_type="application/pdf",
-                filename=_pdf_path.name,
-                headers={"X-Deal-Id": deal.deal_id or "",
-                         "Access-Control-Expose-Headers": "X-Deal-Id"},
-            )
-        else:
-            raise HTTPException(status_code=500, detail="PDF report was not generated")
+        if not (deal.output_pdf_path and Path(deal.output_pdf_path).exists()):
+            # Pipeline ran without raising but didn't produce a PDF. Treat as
+            # failure so the polling client sees an error instead of waiting
+            # forever for files that don't exist.
+            _record_deal_failed(user, deal_id, "PDF report was not generated")
+            logger.error("Pipeline finished but PDF missing — deal_id=%s", deal_id)
 
-    except HTTPException:
-        raise
     except Exception:
-        logger.error("Pipeline error:\n%s", traceback.format_exc())
-        raise HTTPException(status_code=500, detail=traceback.format_exc())
+        err = traceback.format_exc()
+        logger.error("Pipeline error (deal_id=%s):\n%s", deal_id, err)
+        _record_deal_failed(user, deal_id, err)
 
 
 @app.get("/api/me")
@@ -1111,6 +1198,22 @@ async def api_get_deals(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return _read_user(user).get("deals", [])
+
+
+@app.get("/api/deals/{deal_id}/status")
+async def api_deal_status(deal_id: str, request: Request):
+    """Return the deal-archive entry for `deal_id`. The async submit flow
+    creates a 'processing' record before spawning the pipeline; the
+    pipeline writes 'complete' (with IRR/EM) on success or 'failed' (with
+    truncated error) on failure. The frontend polls this endpoint and
+    routes to download links when status flips to 'complete'."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    for d in _read_user(user).get("deals", []):
+        if d.get("deal_id") == deal_id:
+            return d
+    raise HTTPException(status_code=404, detail=f"Deal {deal_id} not found")
 
 
 @app.delete("/api/deals/{deal_id}")
