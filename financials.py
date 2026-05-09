@@ -2914,6 +2914,30 @@ def _compute_full_financials(deal: DealData) -> None:
         fo.gp_irr = wf["gp_irr"]
         fo.lp_equity_multiple = round(wf["lp_em"], 2)
         fo.gp_equity_multiple = round(wf["gp_em"], 2)
+        # Persist per-party totals so excel_builder can override Cash
+        # Waterfall row 38 / 46 to match Python's _equity_multiple input
+        # (rather than letting Excel's tier formulas display a different
+        # total than the EM headline).
+        fo.lp_total_distributions = wf.get("lp_total_dist")
+        fo.gp_total_distributions = wf.get("gp_total_dist")
+
+        # ── Fix 5: sanity warning on implausibly high project IRR ─────
+        # 30% project IRR is the upper edge of plausible value-add /
+        # opportunistic returns. Anything above is almost always driven
+        # by mis-aligned rent assumptions, an under-priced renovation
+        # budget, or a tier mismatch (renovation_tier='new_construction'
+        # paired with $25/SF hard cost). Log a clear pointer at the
+        # source — reviewers chasing inflated returns can grep for this
+        # tag.
+        if fo.project_irr is not None and fo.project_irr > 0.30:
+            logger.warning(
+                "SANITY CHECK: project_irr=%.1f%% exceeds 30%% — verify "
+                "(a) renovation_tier matches hard_cost_psf, (b) scenario "
+                "rent_delta_pct is supportable on the proposed budget, "
+                "(c) waterfall tier 5/6 promote splits aren't compounding "
+                "with high IRR. See SANITY CHECK guidance.",
+                fo.project_irr * 100,
+            )
 
         # ── Sensitivity Matrix ────────────────────────────────────────
         # Find first stabilized year (NOI > 0) for value-add deals
@@ -3136,6 +3160,32 @@ def _apply_scenario_deltas_to_assumptions(
     # DevelopmentScenario mean "scenario did not specify" and should not stomp
     # the baseline assumptions.
     if scenario.unit_count:
+        # Fix 4: scale unit-driven OpEx by the unit_count ratio. Without
+        # this, a scenario that overrides 20 units → 6 units inherits the
+        # base 20-unit OpEx defaults verbatim (water, electric, repairs,
+        # turnover, etc.), producing identical Year-1 expense / NOI across
+        # scenarios with different physical configurations. Items keyed by
+        # property (RE taxes, insurance, license/inspections, professional
+        # fees) are NOT scaled here — those depend on assessed value, GBA
+        # × TIV rate, and per-deal flat amounts respectively, none of
+        # which scale with unit count.
+        _base_units = base.num_units or 0
+        if _base_units > 0 and scenario.unit_count != _base_units:
+            _scale = scenario.unit_count / _base_units
+            _unit_driven_opex = (
+                "water_sewer", "electric", "gas", "trash",
+                "repairs", "cleaning", "turnover", "advertising",
+                "exterminator", "landscape_snow",
+            )
+            for _attr in _unit_driven_opex:
+                _v = getattr(snapshot, _attr, None)
+                if isinstance(_v, (int, float)) and _v:
+                    setattr(snapshot, _attr, round(_v * _scale, 2))
+            logger.info(
+                "SCENARIO OPEX SCALE: unit_count %s → %s (×%.3f) — scaled %d "
+                "unit-driven OpEx lines on snapshot",
+                _base_units, scenario.unit_count, _scale, len(_unit_driven_opex),
+            )
         snapshot.num_units = scenario.unit_count
     if scenario.building_sf:
         snapshot.gba_sf = scenario.building_sf

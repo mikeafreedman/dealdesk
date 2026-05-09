@@ -2515,6 +2515,27 @@ CRITICAL RULES — PADDING IS PROHIBITED
    These delta fields drive the financial fan-out in Session 4. A
    non-anchored absolute number will produce wrong NOI / IRR.
 
+10. RENT-DELTA / BUDGET CONSISTENCY — your scenario's rent_delta_pct
+    must be supportable on the renovation budget you propose. Industry
+    rule-of-thumb hard-cost / SF brackets the achievable rent uplift:
+      hard_cost_psf <  $25/SF (cosmetic refresh, paint, fixtures):
+        max rent_delta_pct = +0.05 (5% premium ceiling).
+      $25-50/SF (light renovation: kitchens, baths, lighting):
+        max rent_delta_pct = +0.10.
+      $50-100/SF (medium rehab: MEP refresh + interior finishes):
+        max rent_delta_pct = +0.18.
+      $100-150/SF (heavy rehab: full unit gut + mechanicals):
+        max rent_delta_pct = +0.30.
+      $150+/SF (new-construction-equivalent quality):
+        rent_delta_pct unrestricted; price to comparable new product.
+    Compute scenario hard_cost_psf as
+      (baseline_const_hard + construction_budget_delta_usd) / building_sf.
+    A rent_delta_pct above the bracketed ceiling for the scenario's
+    budget is the dominant cause of inflated returns and will be
+    flagged in review. If the underlying market supports a higher
+    premium than the budget bracket allows, raise the budget — do not
+    over-promise rents on a thin renovation.
+
 OUTPUT FORMAT
 Return ONLY a JSON object with a single key `scenarios` whose value is
 the array of scenario objects (shape shown in the user message). No

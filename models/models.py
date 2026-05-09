@@ -666,6 +666,12 @@ class FinancialOutputs(BaseModel):
     lp_equity_multiple:      Optional[float] = None
     gp_equity_multiple:      Optional[float] = None
     project_equity_multiple: Optional[float] = None
+    # Per-party total distributions (sum of LP/GP cash flows over the hold).
+    # Surfaced so excel_builder can override Cash Waterfall row 38 / 46 with
+    # the same numbers Python's _equity_multiple uses, keeping the displayed
+    # totals consistent with the displayed EM.
+    lp_total_distributions:  Optional[float] = None
+    gp_total_distributions:  Optional[float] = None
     cash_on_cash_yr1:        Optional[float] = None
     gross_sale_price:        Optional[float] = None
     net_sale_proceeds:       Optional[float] = None

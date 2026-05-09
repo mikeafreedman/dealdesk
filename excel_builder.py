@@ -214,6 +214,36 @@ def _do_populate_excel(deal: DealData, output_path: Path) -> Path:
                 logger.info("WATERFALL %s (%s): wrote Python value %s (overriding Excel formula)",
                             _cell, _label, f"{_val:.6f}")
 
+        # Fix 3: also override C38/C39 (LP) and C46/C47 (GP) so the
+        # displayed Total LP/GP Distributions tie to Python's tiered
+        # waterfall totals — same numbers feeding the EM headline. Without
+        # this, Excel's per-year tier formulas can produce a different
+        # total than what _equity_multiple uses, making the displayed EM
+        # look mislabeled (Cash Waterfall says $1.96M LP dist, EM says
+        # 2.67x — the math only ties if total is read as $1.43M).
+        a = deal.assumptions
+        eq_gap = (fo.total_uses or 0.0) - (fo.initial_loan_amount or 0.0)
+        lp_eq_amt = round(eq_gap * (a.lp_equity_pct or 0), 2)
+        gp_eq_amt = round(eq_gap * (a.gp_equity_pct or 0), 2)
+        _cw_total_overrides = [
+            ("C38", fo.lp_total_distributions, "LP Total Distributions"),
+            ("C46", fo.gp_total_distributions, "GP Total Distributions"),
+        ]
+        for _cell, _val, _label in _cw_total_overrides:
+            if _val is None:
+                continue
+            ws_cw[_cell] = round(float(_val), 2)
+            logger.info("WATERFALL %s (%s): wrote Python value $%s (matches EM headline)",
+                        _cell, _label, f"{_val:,.2f}")
+        if fo.lp_total_distributions is not None:
+            ws_cw["C39"] = round(float(fo.lp_total_distributions) - lp_eq_amt, 2)
+            logger.info("WATERFALL C39 (LP Profit): wrote $%s",
+                        f"{(fo.lp_total_distributions - lp_eq_amt):,.2f}")
+        if fo.gp_total_distributions is not None:
+            ws_cw["C47"] = round(float(fo.gp_total_distributions) - gp_eq_amt, 2)
+            logger.info("WATERFALL C47 (GP Profit): wrote $%s",
+                        f"{(fo.gp_total_distributions - gp_eq_amt):,.2f}")
+
     # Cash Waterfall Refi proceeds rows (24/25/26) are intentionally left
     # as template formulas so the workbook stays fully dynamic: changing a
     # Refi N year, active flag, LTV, or appraised value on Assumptions

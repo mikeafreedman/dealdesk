@@ -772,6 +772,46 @@ def _synthesize_rent_roll(deal: DealData) -> None:
     # Comp-sourced rents already reflect post-renovation market quality.
     from models.models import RENOVATION_TIER_MULTIPLIERS
     _tier = (getattr(deal.assumptions, "renovation_tier", None) or "light_cosmetic")
+
+    # Fix 1: reconcile renovation_tier with hard-cost-per-SF. The tier
+    # drives a 0.90× / 1.00× / 1.15× multiplier on FMR; pairing it with a
+    # budget that can't deliver that quality (e.g. tier='new_construction'
+    # at $25/SF hard cost) is the leading source of inflated returns. The
+    # scaling rules below reflect industry rule-of-thumb $/SF brackets:
+    #   light_cosmetic    < $40/SF     (paint, fixtures, hardware)
+    #   heavy_rehab       $40-150/SF   (kitchens, baths, MEP)
+    #   new_construction  > $150/SF    (gut + structural / ground-up)
+    # Only DOWNGRADE — pricier-than-tier budgets aren't dangerous (rents
+    # stay conservative). Auto-correcting and logging avoids the silent
+    # inflation seen on the 967-73 N. 9th run.
+    _gba_for_tier = (getattr(deal.assumptions, "gba_sf", None)
+                     or (deal.parcel_data.building_sf if deal.parcel_data else None)
+                     or 0)
+    _hard_cost = (getattr(deal.assumptions, "const_hard", 0) or 0)
+    if _gba_for_tier > 100 and _hard_cost > 0:
+        _hard_psf = _hard_cost / _gba_for_tier
+        _correct_tier = (
+            "new_construction" if _hard_psf >= 150
+            else "heavy_rehab"   if _hard_psf >= 40
+            else "light_cosmetic"
+        )
+        # Tier ordering by aggressiveness (low → high)
+        _tier_rank = {"light_cosmetic": 0, "heavy_rehab": 1, "new_construction": 2}
+        if _tier_rank.get(_correct_tier, 0) < _tier_rank.get(_tier, 0):
+            logger.warning(
+                "RENOVATION TIER GUARDRAIL: tier=%s with hard_cost_psf=$%.2f "
+                "(GBA=%s SF, hard_cost=$%s) — budget too thin to deliver %s "
+                "rents; downgrading to %s. Override by raising the hard-cost "
+                "budget if the higher tier is intentional.",
+                _tier, _hard_psf, f"{_gba_for_tier:,.0f}",
+                f"{_hard_cost:,.0f}", _tier, _correct_tier,
+            )
+            _tier = _correct_tier
+            try:
+                deal.assumptions.renovation_tier = _tier
+            except Exception:
+                pass
+
     _tier_mult = RENOVATION_TIER_MULTIPLIERS.get(_tier, 1.0)
 
     # From extracted rent comps (if any)
